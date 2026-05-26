@@ -8,11 +8,12 @@ import { deleteChecklistItem, saveChecklistItem } from "../services/database/che
 import { emptyReview, saveLiveNote, saveReview, saveSalesCategory } from "../services/database/eventExtrasRepository";
 import { emptyFinance, saveFinance } from "../services/database/financeRepository";
 import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
+import { deletePriceOption } from "../services/database/priceOptionRepository";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
 import { departureTime, estimateDriveMinutes } from "../services/travel/travelService";
 import { getEventWeather, type WeatherSummary } from "../services/weather/weatherService";
-import type { Event, EventChecklistItem, EventFinance, EventStatus, PaymentRecord, Worker } from "../types/models";
+import type { Event, EventChecklistItem, EventDayWorker, EventFinance, EventPriceOption, EventStatus, PaymentRecord, PricingType, SplitMode, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
@@ -20,6 +21,7 @@ import { calculateEventProfit, checklistProgress } from "../utils/financeMath";
 import { generateInstagramCaption } from "../utils/instagramCaption";
 import { id as createId, nowIso } from "../utils/normalize";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
+import { availabilitySummaryByWorker, effectiveConfirmedWorkerIds, normalizeDayWorkerRows, workersForDay } from "../utils/availability";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -38,11 +40,37 @@ function Accordion({ title, summary, icon, children }: { title: string; summary:
   );
 }
 
-function WorkerModal({ event, workers, onClose, onSave }: { event: Event; workers: Worker[]; onClose: () => void; onSave: (ids: string[]) => void }) {
-  const [selected, setSelected] = useState<string[]>(event.confirmedWorkerIds || []);
+function WorkerModal({ event, workers, onClose, onSave }: { event: Event; workers: Worker[]; onClose: () => void; onSave: (rows: EventDayWorker[]) => void }) {
+  const days = eventDays(event);
+  const initialRows = event.eventDayWorkers?.length
+    ? event.eventDayWorkers
+    : (event.confirmedWorkerIds || []).flatMap((workerId) => days.map((day) => ({
+      id: createId("day_worker"),
+      eventId: event.id,
+      eventDayId: day.id,
+      workerId,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    })));
+  const [selected, setSelected] = useState(() => new Set(initialRows.map((row) => `${row.workerId}:${row.eventDayId}`)));
 
-  function toggle(workerId: string) {
-    setSelected((current) => current.includes(workerId) ? current.filter((id) => id !== workerId) : [...current, workerId]);
+  function toggle(workerId: string, dayId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      const key = `${workerId}:${dayId}`;
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function save() {
+    const timestamp = nowIso();
+    const rows = Array.from(selected).map((key) => {
+      const [workerId, eventDayId] = key.split(":");
+      return { id: createId("day_worker"), eventId: event.id, eventDayId, workerId, createdAt: timestamp, updatedAt: timestamp };
+    });
+    onSave(normalizeDayWorkerRows(event.id, rows));
   }
 
   return (
@@ -55,19 +83,28 @@ function WorkerModal({ event, workers, onClose, onSave }: { event: Event; worker
           </div>
           <button onClick={onClose} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="mt-5 space-y-3">
           {workers.filter((worker) => worker.active).map((worker) => {
-            const active = selected.includes(worker.id);
             return (
-              <button key={worker.id} onClick={() => toggle(worker.id)} className={`rounded-full px-4 py-2 text-sm font-bold transition ${active ? "bg-ink text-white shadow-soft dark:bg-coral" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}`}>
-                {worker.name}
-              </button>
+              <div key={worker.id} className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/70">
+                <p className="text-sm font-black text-ink dark:text-white">{worker.name}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {days.map((day) => {
+                    const active = selected.has(`${worker.id}:${day.id}`);
+                    return (
+                      <button key={day.id} onClick={() => toggle(worker.id, day.id)} className={`rounded-full px-3 py-2 text-xs font-bold transition ${active ? "bg-ink text-white shadow-soft dark:bg-coral" : "bg-white text-slate-600 dark:bg-slate-800 dark:text-slate-200"}`}>
+                        {new Date(`${day.date.slice(0, 10)}T12:00:00`).toLocaleDateString([], { weekday: "short" })}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
         </div>
         <div className="mt-6 grid grid-cols-2 gap-3">
           <button onClick={onClose} className="min-h-12 rounded-xl bg-slate-100 font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
-          <button onClick={() => onSave(selected)} className="min-h-12 rounded-xl bg-coral font-black text-white">Save Availability</button>
+          <button onClick={save} className="min-h-12 rounded-xl bg-coral font-black text-white">Save Availability</button>
         </div>
       </section>
     </div>
@@ -75,7 +112,8 @@ function WorkerModal({ event, workers, onClose, onSave }: { event: Event; worker
 }
 
 function PaymentModal({ event, workers, payment, onClose, onSave }: { event: Event; workers: Worker[]; payment?: PaymentRecord; onClose: () => void; onSave: (payment: PaymentRecord) => void }) {
-  const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
+  const confirmedIds = new Set(effectiveConfirmedWorkerIds(event));
+  const confirmed = workers.filter((worker) => confirmedIds.has(worker.id));
   const fallbackWorkerId = confirmed[0]?.id || workers[0]?.id || "";
   const [workerId, setWorkerId] = useState(payment?.workerId || fallbackWorkerId);
   const [amountPaid, setAmountPaid] = useState(String(payment?.amountPaid || ""));
@@ -109,7 +147,7 @@ function PaymentModal({ event, workers, payment, onClose, onSave }: { event: Eve
         <div className="mt-5 space-y-3">
           <select value={workerId} onChange={(e) => setWorkerId(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
             {confirmed.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
-            {workers.filter((worker) => !(event.confirmedWorkerIds || []).includes(worker.id)).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} (not confirmed)</option>)}
+            {workers.filter((worker) => !confirmedIds.has(worker.id)).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} (not confirmed)</option>)}
           </select>
           <input type="number" min={0} step="0.01" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} placeholder="Amount paid" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
           <input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
@@ -159,13 +197,15 @@ export function EventDetailPage() {
     ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function saveWorkers(workerIds: string[]) {
+  async function saveWorkers(dayWorkerRows: EventDayWorker[]) {
     if (!event) return;
     setErrorMessage("");
+    const workerIds = Array.from(new Set(dayWorkerRows.map((row) => row.workerId)));
     console.log("selectedWorkerIds", workerIds);
+    console.log("selectedDayWorkerRows", dayWorkerRows);
     console.log("eventId", event.id);
     console.log("saving availability");
-    const updated = { ...event, confirmedWorkerIds: workerIds, updatedAt: new Date().toISOString() };
+    const updated = { ...event, confirmedWorkerIds: workerIds, eventDayWorkers: dayWorkerRows, updatedAt: new Date().toISOString() };
     try {
       await savePlannerEvent(updated);
       const refreshed = await getPlannerEvent(event.id);
@@ -175,6 +215,30 @@ export function EventDetailPage() {
       const message = error instanceof Error ? error.message : JSON.stringify(error);
       console.error("Supabase error:", message);
       setErrorMessage(message);
+    }
+  }
+
+  async function removeAvailability(workerId: string, dayId?: string) {
+    if (!event) return;
+    const nextRows = (event.eventDayWorkers || []).filter((row) => !(row.workerId === workerId && (!dayId || row.eventDayId === dayId)));
+    const nextWorkerIds = Array.from(new Set(nextRows.map((row) => row.workerId)));
+    const updated = { ...event, eventDayWorkers: nextRows, confirmedWorkerIds: nextWorkerIds, updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not remove availability.");
+    }
+  }
+
+  async function clearAvailability() {
+    if (!event) return;
+    const updated = { ...event, eventDayWorkers: [], confirmedWorkerIds: [], updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not clear availability.");
     }
   }
 
@@ -331,29 +395,86 @@ export function EventDetailPage() {
     navigate(`/events/${newId}/edit`);
   }
 
+  async function savePriceOptions(options: EventPriceOption[]) {
+    if (!event) return;
+    const normalized = options.map((option, index) => ({ ...option, isSelected: option.isSelected && options.findIndex((item) => item.isSelected) === index, updatedAt: nowIso() }));
+    const updated = { ...event, priceOptions: normalized, eventCost: normalized.find((option) => option.isSelected)?.price ?? event.eventCost, updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save price options.");
+    }
+  }
+
+  async function addPriceOption() {
+    if (!event) return;
+    const timestamp = nowIso();
+    const option: EventPriceOption = {
+      id: createId("price"),
+      eventId: event.id,
+      label: "New Price Option",
+      price: 0,
+      pricingType: "flat",
+      isSelected: !(event.priceOptions || []).some((item) => item.isSelected),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    await savePriceOptions([...(event.priceOptions || []), option]);
+  }
+
+  async function updatePriceOption(optionId: string, patch: Partial<EventPriceOption>) {
+    if (!event) return;
+    const options = (event.priceOptions || []).map((option) => option.id === optionId ? { ...option, ...patch, updatedAt: nowIso() } : option);
+    await savePriceOptions(options);
+  }
+
+  async function selectPriceOption(optionId: string) {
+    if (!event) return;
+    const options = (event.priceOptions || []).map((option) => ({ ...option, isSelected: option.id === optionId, updatedAt: nowIso() }));
+    await savePriceOptions(options);
+  }
+
+  async function removePriceOption(optionId: string) {
+    if (!event) return;
+    try {
+      await deletePriceOption(optionId);
+      const options = (event.priceOptions || []).filter((option) => option.id !== optionId);
+      const normalized = options.some((option) => option.isSelected) || !options.length ? options : options.map((option, index) => ({ ...option, isSelected: index === 0 }));
+      const updated = { ...event, priceOptions: normalized, updatedAt: nowIso() };
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not delete price option.");
+    }
+  }
+
   if (!event) return <div className="text-sm text-slate-500 dark:text-slate-400">Loading event...</div>;
 
-  const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
+  const effectiveWorkerIds = effectiveConfirmedWorkerIds(event);
+  const confirmed = workers.filter((worker) => effectiveWorkerIds.includes(worker.id));
   const destination = event.address || [event.venueName, event.city, event.state].filter(Boolean).join(", ");
   const paymentSummary = calculatePaymentSummary(event, workers);
   const checklist = checklistProgress(event);
   const finance = event.finance || emptyFinance(event.id);
   const profit = calculateEventProfit(event, finance);
-  const confirmedIds = new Set(event.confirmedWorkerIds || []);
+  const confirmedIds = new Set(effectiveWorkerIds);
   const driveMinutes = estimateDriveMinutes(event.distanceMiles);
   const leaveBy = departureTime(event.startDate, event.setupTime, driveMinutes);
   const totalCategorySales = (event.salesCategories || []).reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const unconfirmedPaymentWarnings = (event.paymentRecords || []).filter((record) => !confirmedIds.has(record.workerId)).map((record) => workers.find((worker) => worker.id === record.workerId)?.name || "Someone");
-  const workerSummary = confirmed.length ? confirmed.map((worker) => worker.name).join(", ") : "Nobody confirmed yet";
+  const availabilityByWorker = availabilitySummaryByWorker(event, workers);
+  const workerSummary = availabilityByWorker.length ? availabilityByWorker.map((item) => item.text).join(" / ") : "Nobody confirmed yet";
   const scheduleSummary = eventDays(event).map((day) => formatEventDay(day)).join(" / ");
   const boothSummary = event.boothNumber || event.floorSection || event.setupTime || "Not set";
   const notesSummary = event.packingNotes ? "Packing notes added" : "No notes yet";
   const reviewAverage = event.review ? [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).reduce((sum, value) => sum + Number(value), 0) / Math.max(1, [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).length) : 0;
+  const selectedPrice = paymentSummary.selectedPriceOption;
 
   return (
-    <div className="space-y-4">
-      <header className="overflow-hidden rounded-3xl bg-ink text-white shadow-soft dark:bg-slate-900">
+    <div className="space-y-4 lg:mx-auto lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-5 lg:space-y-0">
+      <header className="overflow-hidden rounded-3xl bg-ink text-white shadow-soft lg:col-start-1 dark:bg-slate-900">
         <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[4/5] max-h-[72vh] rounded-none" />
         <div className="space-y-3 p-4">
           <div className="flex flex-wrap gap-2">
@@ -371,8 +492,8 @@ export function EventDetailPage() {
         </div>
       </header>
 
-      <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
-        <div className="flex gap-2 overflow-x-auto pb-1">
+      <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur lg:top-6 lg:col-start-2 lg:row-span-2 lg:mx-0 lg:rounded-2xl lg:border lg:bg-white/90 lg:p-3 lg:shadow-soft dark:border-slate-800 dark:bg-slate-950/95 lg:dark:bg-slate-900">
+        <div className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-2 lg:overflow-visible lg:pb-0">
           <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
           {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
@@ -382,9 +503,9 @@ export function EventDetailPage() {
         </div>
       </nav>
 
-      {errorMessage ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
+      {errorMessage ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700 lg:col-span-2 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft lg:col-start-1 dark:bg-slate-900 dark:text-slate-300">
         <h2 className="font-black text-ink dark:text-white">Schedule</h2>
         <div className="space-y-1">{eventDays(event).map((day) => <p key={day.id}>{formatEventDay(day)}</p>)}</div>
         <div className="grid gap-1 pt-2">
@@ -393,16 +514,54 @@ export function EventDetailPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
         <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Users size={18} /> Confirmed Workers</h2>
-        <p className={`mt-2 text-sm ${confirmed.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{workerSummary}</p>
-        <button onClick={() => setShowWorkers(true)} className="mt-4 min-h-11 w-full rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
+        <div className="mt-3 space-y-3">
+          {eventDays(event).map((day) => {
+            const dayWorkers = workersForDay(event, day.id, workers);
+            return (
+              <div key={day.id} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+                <p className="text-sm font-black text-ink dark:text-white">{formatEventDay(day)}</p>
+                {dayWorkers.length ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {dayWorkers.map((worker) => (
+                      <span key={worker.id} className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                        {worker.name}
+                        <button onClick={() => removeAvailability(worker.id, day.id)} className="rounded-full text-slate-400 hover:text-rose-600"><X size={13} /></button>
+                      </span>
+                    ))}
+                  </div>
+                ) : <p className="mt-2 text-sm text-slate-400 dark:text-slate-500">Nobody confirmed for this day.</p>}
+              </div>
+            );
+          })}
+        </div>
+        {availabilityByWorker.length ? (
+          <div className="mt-3 rounded-xl bg-orange-50 p-3 text-xs font-bold text-orange-800 dark:bg-orange-950/30 dark:text-orange-200">
+            {availabilityByWorker.map((item) => <p key={item.workerId}>{item.text}</p>)}
+          </div>
+        ) : null}
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button onClick={() => setShowWorkers(true)} className="min-h-11 rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
+          <button onClick={clearAvailability} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Clear all</button>
+        </div>
       </section>
 
-      <section ref={paymentRef} className="scroll-mt-20 space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section ref={paymentRef} className="scroll-mt-20 space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><DollarSign size={18} /> Payment Split</h2>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-ink px-3 text-xs font-bold text-white dark:bg-coral"><Plus size={14} /> Add</button>
+        </div>
+        <div className="rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">
+          <p className="font-bold text-ink dark:text-white">Selected price: {selectedPrice ? `${selectedPrice.label} | ${formatMoney(selectedPrice.price)}` : `Manual event cost | ${formatMoney(event.eventCost || 0)}`}</p>
+          <label className="mt-2 block text-xs font-bold text-slate-500 dark:text-slate-400">
+            Split mode
+            <select value={event.splitMode || "equal"} onChange={(e) => savePlannerEvent({ ...event, splitMode: e.target.value as SplitMode, updatedAt: nowIso() }).then(() => load())} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <option value="equal">Equal per confirmed worker</option>
+              <option value="weighted_by_days">Weighted by days worked</option>
+            </select>
+          </label>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{event.splitMode === "weighted_by_days" ? "Weighted split uses each worker's day count." : "Advanced day-based split available by switching to weighted mode."}</p>
         </div>
         {paymentSummary.confirmedWorkerCount === 0 ? (
           <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">Add confirmed workers to calculate split.</p>
@@ -450,7 +609,7 @@ export function EventDetailPage() {
         ) : null}
       </section>
 
-      <section ref={captionRef} className="scroll-mt-20 space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section ref={captionRef} className="scroll-mt-20 space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-black text-ink dark:text-white">Instagram Caption</h2>
           <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>
@@ -459,7 +618,40 @@ export function EventDetailPage() {
         <button onClick={() => navigator.clipboard.writeText(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
       </section>
 
-      <div className="space-y-3">
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-2 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-black text-ink dark:text-white">Price Options</h2>
+          <button onClick={addPriceOption} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-ink px-3 text-xs font-bold text-white dark:bg-coral"><Plus size={14} /> Add</button>
+        </div>
+        {(event.priceOptions || []).length ? (
+          <div className="space-y-3">
+            {(event.priceOptions || []).map((option) => (
+              <div key={option.id} className={`space-y-2 rounded-2xl border p-3 ${option.isSelected ? "border-coral bg-orange-50 dark:bg-orange-950/20" : "border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/70"}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <input value={option.label} onChange={(e) => updatePriceOption(option.id, { label: e.target.value })} className="w-full bg-transparent text-sm font-black text-ink outline-none dark:text-white" />
+                    <input value={option.description || ""} onChange={(e) => updatePriceOption(option.id, { description: e.target.value })} placeholder="Description" className="mt-1 w-full bg-transparent text-xs text-slate-500 outline-none dark:text-slate-400" />
+                  </div>
+                  <button onClick={() => removePriceOption(option.id)} className="rounded-lg p-2 text-rose-700 dark:text-rose-300"><Trash2 size={15} /></button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" min={0} step="0.01" value={option.price || ""} onChange={(e) => updatePriceOption(option.id, { price: Number(e.target.value || 0) })} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+                  <select value={option.pricingType} onChange={(e) => updatePriceOption(option.id, { pricingType: e.target.value as PricingType })} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+                    <option value="flat">Flat</option>
+                    <option value="per_day">Per day</option>
+                    <option value="package">Package</option>
+                  </select>
+                </div>
+                <button onClick={() => selectPriceOption(option.id)} className={`min-h-10 w-full rounded-xl text-sm font-bold ${option.isSelected ? "bg-coral text-white" : "bg-white text-ink dark:bg-slate-800 dark:text-white"}`}>
+                  {option.isSelected ? `Selected | ${formatMoney(option.price)}` : "Select option"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">No price options yet. Payment split uses the manual event cost.</p>}
+      </section>
+
+      <div className="space-y-3 lg:col-start-2">
         <Accordion title="Inventory & Packing Notes" summary={notesSummary} icon={<ImagePlus size={18} />}>
           <textarea value={event.packingNotes || ""} onChange={(e) => savePlannerEvent({ ...event, packingNotes: e.target.value, updatedAt: nowIso() }).then(() => load())} placeholder="Bring slabs, binders, tablecloth..." className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
         </Accordion>
@@ -572,7 +764,7 @@ export function EventDetailPage() {
         </Accordion>
       </div>
 
-      <section className="grid grid-cols-2 gap-2">
+      <section className="grid grid-cols-2 gap-2 lg:col-start-2">
         {event.registrationUrl ? <a href={event.registrationUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CalendarCheck size={16} /> Register</a> : null}
         {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><ExternalLink size={16} /> Source</a> : null}
         <button onClick={remove} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={16} /> Delete Event</button>

@@ -47,16 +47,17 @@ export function AnalyticsPage() {
   }, [events, workers]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
       <header>
         <p className="text-sm font-bold text-coral">Business</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Analytics</h1>
       </header>
-      <section className="grid grid-cols-3 gap-2">
+      <section className="grid grid-cols-3 gap-2 lg:gap-4">
         <div className="rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Sales</p><p className="font-black">{formatMoney(stats.totalSales)}</p></div>
         <div className="rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Expenses</p><p className="font-black">{formatMoney(stats.totalExpenses)}</p></div>
         <div className="rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Profit</p><p className={`font-black ${stats.monthlyProfit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(stats.monthlyProfit)}</p></div>
       </section>
+      <div className="grid gap-4 lg:grid-cols-3">
       {[["Best Locations", stats.bestLocations], ["Best Months", stats.bestMonths], ["Worker Attendance", stats.workerCounts]].map(([title, rows]) => (
         <section key={title as string} className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
           <h2 className="font-black text-ink dark:text-white">{title as string}</h2>
@@ -70,6 +71,7 @@ export function AnalyticsPage() {
           </div>
         </section>
       ))}
+      </div>
     </div>
   );
 }

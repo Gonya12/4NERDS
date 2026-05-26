@@ -11,7 +11,7 @@ const items = [
 
 export function BottomNav() {
   return (
-    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-2 pt-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
+    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-2 pt-2 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-950/95">
       <div className="mx-auto grid max-w-md grid-cols-5">
         {items.map(({ to, label, icon: Icon }) => (
           <NavLink

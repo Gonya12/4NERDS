@@ -1,4 +1,4 @@
-import { BarChart3, Bell, Download, Images, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { BarChart3, Bell, Download, Images, Plus, RefreshCw, Trash2, Upload, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
@@ -15,6 +15,20 @@ export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [newWorker, setNewWorker] = useState("");
   const [locations, setLocations] = useState<Location[]>([]);
+  const [editingLocation, setEditingLocation] = useState<Location | "new" | null>(null);
+  const [locationDraft, setLocationDraft] = useState({
+    name: "",
+    venueName: "",
+    address: "",
+    city: "",
+    state: "",
+    zip: "",
+    instagramHandle: "",
+    notes: ""
+  });
+  const [locationMessage, setLocationMessage] = useState("");
+  const [locationError, setLocationError] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
   const [syncStatus, setSyncStatus] = useState(getSupabaseStatus());
   const [syncMessage, setSyncMessage] = useState("");
   const [notificationMessage, setNotificationMessage] = useState("");
@@ -41,10 +55,75 @@ export function SettingsPage() {
     await load();
   }
 
-  async function addLocationRow() {
-    const timestamp = nowIso();
-    await saveLocation({ id: crypto.randomUUID(), name: "New Location", createdAt: timestamp, updatedAt: timestamp });
-    await load();
+  function openLocationForm(location?: Location) {
+    setLocationMessage("");
+    setLocationError("");
+    setEditingLocation(location || "new");
+    setLocationDraft({
+      name: location?.name || "",
+      venueName: location?.venueName || "",
+      address: location?.address || "",
+      city: location?.city || "",
+      state: location?.state || "",
+      zip: location?.zip || "",
+      instagramHandle: location?.instagramHandle || "",
+      notes: location?.notes || ""
+    });
+  }
+
+  function closeLocationForm() {
+    setEditingLocation(null);
+    setLocationError("");
+    setSavingLocation(false);
+  }
+
+  async function saveLocationDraft() {
+    setLocationError("");
+    setLocationMessage("");
+    const name = locationDraft.name.trim();
+    if (!name) {
+      setLocationError("Location name is required.");
+      return;
+    }
+
+    const normalizedName = name.toLowerCase();
+    const normalizedAddress = locationDraft.address.trim().toLowerCase();
+    const currentId = editingLocation && editingLocation !== "new" ? editingLocation.id : "";
+    const duplicate = locations.find((location) => {
+      if (location.id === currentId) return false;
+      const sameName = location.name.trim().toLowerCase() === normalizedName;
+      const sameAddress = normalizedAddress && (location.address || "").trim().toLowerCase() === normalizedAddress;
+      return sameName || Boolean(sameAddress);
+    });
+    if (duplicate) {
+      setLocationError("A location with the same name or address already exists.");
+      return;
+    }
+
+    setSavingLocation(true);
+    try {
+      const timestamp = nowIso();
+      await saveLocation({
+        id: currentId || crypto.randomUUID(),
+        name,
+        venueName: locationDraft.venueName.trim() || undefined,
+        address: locationDraft.address.trim() || undefined,
+        city: locationDraft.city.trim() || undefined,
+        state: locationDraft.state.trim() || undefined,
+        zip: locationDraft.zip.trim() || undefined,
+        instagramHandle: locationDraft.instagramHandle.trim() || undefined,
+        notes: locationDraft.notes.trim() || undefined,
+        createdAt: editingLocation && editingLocation !== "new" ? editingLocation.createdAt : timestamp,
+        updatedAt: timestamp
+      });
+      await load();
+      setLocationMessage("Location saved");
+      setEditingLocation(null);
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "Could not save location.");
+    } finally {
+      setSavingLocation(false);
+    }
   }
 
   async function testConnection() {
@@ -114,7 +193,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-6xl">
       <header>
         <p className="text-sm font-bold text-coral">Settings</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">4 Nerds Planner</h1>
@@ -158,6 +237,22 @@ export function SettingsPage() {
           <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
             <p className="text-xs font-bold text-slate-500">Last sync time</p>
             <p className="font-black text-ink dark:text-white">{syncStatus.lastSyncTime ? new Date(syncStatus.lastSyncTime).toLocaleString() : "Never"}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Last sync duration</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.lastSyncDurationMs ? `${syncStatus.lastSyncDurationMs}ms` : "Not measured"}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Events loaded</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.lastEventsLoaded}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Queries made</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.lastQueryCount}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Cache status</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.cacheStatus}</p>
           </div>
         </div>
         {(syncStatus.error || syncMessage) && (
@@ -241,26 +336,61 @@ export function SettingsPage() {
             <p className="text-sm font-bold text-coral">Common Locations</p>
             <h2 className="font-black text-ink dark:text-white">Saved Places</h2>
           </div>
-          <button onClick={addLocationRow} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral"><Plus size={15} /> Add</button>
+          <button onClick={() => openLocationForm()} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral"><Plus size={15} /> Add</button>
         </div>
-        <div className="space-y-3">
+        {locationMessage ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{locationMessage}</p> : null}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {locations.map((location) => (
-            <div key={location.id} className="space-y-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
-              <input value={location.name} onChange={async (e) => { await saveLocation({ ...location, name: e.target.value }); await load(); }} placeholder="Name" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-              <input value={location.venueName || ""} onChange={async (e) => { await saveLocation({ ...location, venueName: e.target.value }); await load(); }} placeholder="Venue name" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-              <input value={location.address || ""} onChange={async (e) => { await saveLocation({ ...location, address: e.target.value }); await load(); }} placeholder="Address" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-              <div className="grid grid-cols-3 gap-2">
-                <input value={location.city || ""} onChange={async (e) => { await saveLocation({ ...location, city: e.target.value }); await load(); }} placeholder="City" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-                <input value={location.state || ""} onChange={async (e) => { await saveLocation({ ...location, state: e.target.value }); await load(); }} placeholder="State" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-                <input value={location.zip || ""} onChange={async (e) => { await saveLocation({ ...location, zip: e.target.value }); await load(); }} placeholder="ZIP" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+            <div key={location.id} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-black text-ink dark:text-white">{location.name}</p>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{[location.venueName, location.address, location.city, location.state].filter(Boolean).join(" | ") || "Venue/address not set"}</p>
+                  {location.instagramHandle ? <p className="mt-1 text-xs font-bold text-coral">{location.instagramHandle}</p> : null}
+                </div>
+                <button onClick={() => openLocationForm(location)} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white">Edit</button>
               </div>
-              <input value={location.instagramHandle || ""} onChange={async (e) => { await saveLocation({ ...location, instagramHandle: e.target.value }); await load(); }} placeholder="Instagram @handle" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-              <button onClick={async () => { await deleteLocation(location.id); await load(); }} className="inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700"><Trash2 size={15} /> Delete Location</button>
+              <button onClick={async () => { await deleteLocation(location.id); await load(); }} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={15} /> Delete Location</button>
             </div>
           ))}
           {locations.length === 0 ? <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">No common locations saved yet.</p> : null}
         </div>
       </section>
+
+      {editingLocation ? (
+        <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm">
+          <section className="mx-auto max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-coral">Common Location</p>
+                <h2 className="text-2xl font-black text-ink dark:text-white">{editingLocation === "new" ? "Add Location" : "Edit Location"}</h2>
+              </div>
+              <button onClick={closeLocationForm} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={16} /></button>
+            </div>
+            {locationError ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{locationError}</p> : null}
+            <div className="mt-4 space-y-3">
+              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400">
+                Location nickname *
+                <input value={locationDraft.name} onChange={(e) => setLocationDraft({ ...locationDraft, name: e.target.value })} placeholder="Woodbridge Card Show" className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              </label>
+              <input value={locationDraft.venueName} onChange={(e) => setLocationDraft({ ...locationDraft, venueName: e.target.value })} placeholder="Venue name" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <input value={locationDraft.address} onChange={(e) => setLocationDraft({ ...locationDraft, address: e.target.value })} placeholder="Address" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <div className="grid grid-cols-3 gap-2">
+                <input value={locationDraft.city} onChange={(e) => setLocationDraft({ ...locationDraft, city: e.target.value })} placeholder="City" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+                <input value={locationDraft.state} onChange={(e) => setLocationDraft({ ...locationDraft, state: e.target.value })} placeholder="State" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+                <input value={locationDraft.zip} onChange={(e) => setLocationDraft({ ...locationDraft, zip: e.target.value })} placeholder="ZIP" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              </div>
+              <input value={locationDraft.instagramHandle} onChange={(e) => setLocationDraft({ ...locationDraft, instagramHandle: e.target.value })} placeholder="Instagram @handle" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <textarea value={locationDraft.notes} onChange={(e) => setLocationDraft({ ...locationDraft, notes: e.target.value })} placeholder="Notes" className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">Venue and address are optional, but adding them makes event creation faster.</p>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button onClick={closeLocationForm} disabled={savingLocation} className="min-h-12 rounded-xl bg-slate-100 font-bold text-slate-700 disabled:opacity-60 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
+              <button onClick={saveLocationDraft} disabled={savingLocation} className="min-h-12 rounded-xl bg-coral font-black text-white disabled:opacity-60">{savingLocation ? "Saving..." : "Save Location"}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <section className="grid grid-cols-2 gap-2">
         <button onClick={downloadBackup} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Download size={16} /> Export JSON</button>

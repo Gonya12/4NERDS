@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { BottomNav } from "./components/BottomNav";
+import { DesktopSidebar } from "./components/DesktopSidebar";
 import { CalendarPage } from "./pages/CalendarPage";
 import { EventDetailPage } from "./pages/EventDetailPage";
 import { EventFormPage } from "./pages/EventFormPage";
@@ -55,7 +56,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-paper text-ink transition-colors dark:bg-slate-950 dark:text-slate-100">
-      <main className="mx-auto max-w-md px-4 pb-28 pt-6">
+      <DesktopSidebar />
+      <main className="mx-auto max-w-md px-4 pb-28 pt-6 sm:max-w-2xl md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 xl:px-10">
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />

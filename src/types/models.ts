@@ -6,6 +6,8 @@ export type AttendanceStatus = "interested" | "maybe" | "not_going" | "none";
 export type EventClassification = "event_high_confidence" | "event_needs_review" | "possible_but_low_confidence" | "not_event";
 export type TeamDecision = "interested" | "maybe" | "not_going";
 export type EventStatus = "interested" | "registered" | "paid" | "preparing" | "completed" | "skipped";
+export type SplitMode = "equal" | "weighted_by_days";
+export type PricingType = "flat" | "per_day" | "package";
 
 export interface Organizer {
   id: string;
@@ -48,6 +50,9 @@ export interface Event {
   startTime?: string;
   endTime?: string;
   eventDays?: EventDay[];
+  eventDayWorkers?: EventDayWorker[];
+  priceOptions?: EventPriceOption[];
+  splitMode?: SplitMode;
   imageUrl?: string;
   imagePath?: string;
   locationId?: string;
@@ -85,6 +90,28 @@ export interface EventDay {
   startTime?: string;
   endTime?: string;
   note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventDayWorker {
+  id: string;
+  eventId: string;
+  eventDayId: string;
+  workerId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventPriceOption {
+  id: string;
+  eventId: string;
+  label: string;
+  price: number;
+  pricingType: PricingType;
+  appliesToDayIds?: string[];
+  description?: string;
+  isSelected: boolean;
   createdAt: string;
   updatedAt: string;
 }

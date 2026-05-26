@@ -20,6 +20,7 @@ export function PastEventsPage() {
   const navigate = useNavigate();
   const [events, setEvents] = useState<Event[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
     async function load() {
@@ -53,14 +54,14 @@ export function PastEventsPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
       <header>
         <p className="text-sm font-bold text-coral">Insights</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Past Events</h1>
       </header>
       {pastEvents.length === 0 ? <EmptyState title="No past events yet." /> : null}
-      <div className="space-y-3">
-        {pastEvents.map((event) => {
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {pastEvents.slice(0, visibleCount).map((event) => {
           const profit = calculateEventProfit(event, event.finance);
           const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
           return (
@@ -78,6 +79,9 @@ export function PastEventsPage() {
           );
         })}
       </div>
+      {pastEvents.length > visibleCount ? (
+        <button onClick={() => setVisibleCount((count) => count + 20)} className="min-h-11 w-full rounded-xl bg-white text-sm font-bold text-ink shadow-soft dark:bg-slate-900 dark:text-white">Load 20 more</button>
+      ) : null}
     </div>
   );
 }

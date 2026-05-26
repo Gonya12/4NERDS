@@ -13,11 +13,19 @@ export const supabase = isSupabaseConfigured
 let lastSupabaseError = "";
 let lastSyncTime = "";
 let lastConnected = false;
+let lastSyncDurationMs = 0;
+let lastEventsLoaded = 0;
+let lastQueryCount = 0;
+let cacheStatus = "Not checked";
 
-export function setSupabaseStatus(status: { error?: string; connected?: boolean; synced?: boolean }) {
+export function setSupabaseStatus(status: { error?: string; connected?: boolean; synced?: boolean; durationMs?: number; eventsLoaded?: number; queryCount?: number; cacheStatus?: string }) {
   if (status.error !== undefined) lastSupabaseError = status.error;
   if (status.connected !== undefined) lastConnected = status.connected;
   if (status.synced) lastSyncTime = new Date().toISOString();
+  if (status.durationMs !== undefined) lastSyncDurationMs = status.durationMs;
+  if (status.eventsLoaded !== undefined) lastEventsLoaded = status.eventsLoaded;
+  if (status.queryCount !== undefined) lastQueryCount = status.queryCount;
+  if (status.cacheStatus !== undefined) cacheStatus = status.cacheStatus;
 }
 
 export function getSupabaseStatus() {
@@ -26,6 +34,10 @@ export function getSupabaseStatus() {
     connected: lastConnected,
     error: lastSupabaseError,
     lastSyncTime,
+    lastSyncDurationMs,
+    lastEventsLoaded,
+    lastQueryCount,
+    cacheStatus,
     mode: isSupabaseConfigured ? "Team Sync" : "Local Mode",
     appMode: isSupabaseConfigured ? "Team Sync Mode" : "Manual Local Mode",
     urlDetected: Boolean(supabaseUrl),

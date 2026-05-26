@@ -53,6 +53,7 @@ create table if not exists public.events (
   parking_notes text,
   floor_section text,
   entry_instructions text,
+  split_mode text not null default 'equal' check (split_mode in ('equal', 'weighted_by_days')),
   event_cost numeric(10, 2) not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -76,6 +77,29 @@ create table if not exists public.event_workers (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(event_id, worker_id)
+);
+
+create table if not exists public.event_day_workers (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  event_day_id uuid not null references public.event_days(id) on delete cascade,
+  worker_id uuid not null references public.workers(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(event_day_id, worker_id)
+);
+
+create table if not exists public.event_price_options (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  label text not null,
+  price numeric(10, 2) not null default 0,
+  pricing_type text not null default 'flat' check (pricing_type in ('flat', 'per_day', 'package')),
+  applies_to_day_ids uuid[],
+  description text,
+  is_selected boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.payment_records (
@@ -156,8 +180,11 @@ alter table public.events add column if not exists setup_time text;
 alter table public.events add column if not exists parking_notes text;
 alter table public.events add column if not exists floor_section text;
 alter table public.events add column if not exists entry_instructions text;
+alter table public.events add column if not exists split_mode text not null default 'equal';
 alter table public.events add column if not exists updated_at timestamptz not null default now();
 alter table public.event_workers add column if not exists updated_at timestamptz not null default now();
+alter table public.event_day_workers add column if not exists updated_at timestamptz not null default now();
+alter table public.event_price_options add column if not exists updated_at timestamptz not null default now();
 alter table public.payment_records add column if not exists updated_at timestamptz not null default now();
 alter table public.payment_records add column if not exists paid_at timestamptz;
 alter table public.payment_records alter column paid_at type timestamptz using paid_at::timestamptz;
@@ -181,6 +208,8 @@ on conflict (name) do nothing;
 alter table public.workers replica identity full;
 alter table public.events replica identity full;
 alter table public.event_workers replica identity full;
+alter table public.event_day_workers replica identity full;
+alter table public.event_price_options replica identity full;
 alter table public.payment_records replica identity full;
 alter table public.locations replica identity full;
 alter table public.event_days replica identity full;
@@ -193,6 +222,8 @@ alter table public.event_reviews replica identity full;
 alter table public.workers enable row level security;
 alter table public.events enable row level security;
 alter table public.event_workers enable row level security;
+alter table public.event_day_workers enable row level security;
+alter table public.event_price_options enable row level security;
 alter table public.payment_records enable row level security;
 alter table public.locations enable row level security;
 alter table public.event_days enable row level security;
@@ -208,6 +239,10 @@ drop policy if exists "private MVP anon read events" on public.events;
 drop policy if exists "private MVP anon write events" on public.events;
 drop policy if exists "private MVP anon read event workers" on public.event_workers;
 drop policy if exists "private MVP anon write event workers" on public.event_workers;
+drop policy if exists "private MVP anon read event day workers" on public.event_day_workers;
+drop policy if exists "private MVP anon write event day workers" on public.event_day_workers;
+drop policy if exists "private MVP anon read price options" on public.event_price_options;
+drop policy if exists "private MVP anon write price options" on public.event_price_options;
 drop policy if exists "private MVP anon read payment records" on public.payment_records;
 drop policy if exists "private MVP anon write payment records" on public.payment_records;
 drop policy if exists "private MVP anon read locations" on public.locations;
@@ -231,6 +266,10 @@ create policy "private MVP anon read events" on public.events for select to anon
 create policy "private MVP anon write events" on public.events for all to anon using (true) with check (true);
 create policy "private MVP anon read event workers" on public.event_workers for select to anon using (true);
 create policy "private MVP anon write event workers" on public.event_workers for all to anon using (true) with check (true);
+create policy "private MVP anon read event day workers" on public.event_day_workers for select to anon using (true);
+create policy "private MVP anon write event day workers" on public.event_day_workers for all to anon using (true) with check (true);
+create policy "private MVP anon read price options" on public.event_price_options for select to anon using (true);
+create policy "private MVP anon write price options" on public.event_price_options for all to anon using (true) with check (true);
 create policy "private MVP anon read payment records" on public.payment_records for select to anon using (true);
 create policy "private MVP anon write payment records" on public.payment_records for all to anon using (true) with check (true);
 create policy "private MVP anon read locations" on public.locations for select to anon using (true);
@@ -273,6 +312,18 @@ end $$;
 do $$
 begin
   alter publication supabase_realtime add table public.event_workers;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.event_day_workers;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.event_price_options;
 exception when duplicate_object then null;
 end $$;
 
@@ -323,3 +374,17 @@ begin
   alter publication supabase_realtime add table public.event_reviews;
 exception when duplicate_object then null;
 end $$;
+
+create index if not exists idx_events_start_date on public.events(start_date);
+create index if not exists idx_events_status_start_date on public.events(status, start_date);
+create index if not exists idx_event_days_event_id on public.event_days(event_id);
+create index if not exists idx_event_days_date on public.event_days(date);
+create index if not exists idx_event_day_workers_event_id on public.event_day_workers(event_id);
+create index if not exists idx_event_day_workers_day_id on public.event_day_workers(event_day_id);
+create index if not exists idx_payment_records_event_id on public.payment_records(event_id);
+create index if not exists idx_event_price_options_event_id on public.event_price_options(event_id);
+create index if not exists idx_event_checklist_items_event_id on public.event_checklist_items(event_id);
+create index if not exists idx_event_live_notes_event_id on public.event_live_notes(event_id);
+create index if not exists idx_event_finances_event_id on public.event_finances(event_id);
+create index if not exists idx_event_sales_categories_event_id on public.event_sales_categories(event_id);
+create index if not exists idx_event_reviews_event_id on public.event_reviews(event_id);

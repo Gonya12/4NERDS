@@ -20,7 +20,7 @@ export function FlyerGalleryPage() {
     .sort((a, b) => b.startDate.localeCompare(a.startDate)), [events, query]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
       <header>
         <p className="text-sm font-bold text-coral">Archive</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Past Flyers</h1>
@@ -29,7 +29,7 @@ export function FlyerGalleryPage() {
         <Search size={17} className="text-slate-400" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search year, location, event" className="min-w-0 flex-1 border-0 bg-transparent px-0" />
       </label>
-      <section className="grid grid-cols-2 gap-3">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         {filtered.map((event) => (
           <Link key={event.id} to={`/events/${event.id}`} className="rounded-2xl bg-white/90 p-2 shadow-soft dark:bg-slate-900">
             <EventImageFrame imageUrl={event.imageUrl} initials={event.name.slice(0, 2)} className="aspect-[4/5]" />

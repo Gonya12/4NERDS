@@ -1,4 +1,4 @@
-import type { Event, EventDay, EventStatus, RegistrationStatus } from "../../types/models";
+import type { Event, EventDay, EventStatus, RegistrationStatus, SplitMode } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
 import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
@@ -6,6 +6,10 @@ import { deletePaymentRecord, listPaymentRecords, savePaymentRecord } from "./pa
 import { getFinance } from "./financeRepository";
 import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from "./checklistRepository";
 import { getReview, listLiveNotes, seedSalesCategories } from "./eventExtrasRepository";
+import { listEventDayWorkers, replaceEventDayWorkers } from "./availabilityRepository";
+import { listPriceOptions, replacePriceOptions } from "./priceOptionRepository";
+
+const homeCacheKey = "4nerds_home_events_cache_v1";
 
 type EventRow = {
   id: string;
@@ -28,6 +32,7 @@ type EventRow = {
   location_instagram_handle?: string | null;
   organizer_instagram_handle?: string | null;
   status?: EventStatus | null;
+  split_mode?: SplitMode | null;
   packing_notes?: string | null;
   booth_number?: string | null;
   setup_time?: string | null;
@@ -55,6 +60,10 @@ type EventDayRow = {
   updated_at: string;
 };
 
+type EventDayWorkerRow = { id: string; event_id: string; event_day_id: string; worker_id: string; created_at: string; updated_at: string };
+type PriceOptionRow = { id: string; event_id: string; label: string; price: number; pricing_type: "flat" | "per_day" | "package"; applies_to_day_ids?: string[] | null; description?: string | null; is_selected: boolean; created_at: string; updated_at: string };
+type PaymentRow = { id: string; event_id: string; worker_id: string; amount_paid: number; paid_at?: string | null; note?: string | null; created_at: string; updated_at: string };
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function assertUuid(value: string, field: string) {
@@ -70,6 +79,38 @@ function fromDayRow(row: EventDayRow): EventDay {
     date: row.date,
     startTime: row.start_time || undefined,
     endTime: row.end_time || undefined,
+    note: row.note || undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function fromDayWorkerRow(row: EventDayWorkerRow) {
+  return { id: row.id, eventId: row.event_id, eventDayId: row.event_day_id, workerId: row.worker_id, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function fromPriceOptionRow(row: PriceOptionRow) {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    label: row.label,
+    price: Number(row.price || 0),
+    pricingType: row.pricing_type || "flat",
+    appliesToDayIds: row.applies_to_day_ids || undefined,
+    description: row.description || undefined,
+    isSelected: Boolean(row.is_selected),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function fromPaymentRow(row: PaymentRow) {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    workerId: row.worker_id,
+    amountPaid: Number(row.amount_paid || 0),
+    paidAt: row.paid_at || undefined,
     note: row.note || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -124,6 +165,7 @@ function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [
     locationInstagramHandle: row.location_instagram_handle || undefined,
     organizerInstagramHandle: row.organizer_instagram_handle || undefined,
     status: row.status || "interested",
+    splitMode: row.split_mode || "equal",
     packingNotes: row.packing_notes || undefined,
     boothNumber: row.booth_number || undefined,
     setupTime: row.setup_time || undefined,
@@ -170,6 +212,7 @@ function toRow(event: Event): EventRow {
     location_instagram_handle: event.locationInstagramHandle || null,
     organizer_instagram_handle: event.organizerInstagramHandle || null,
     status: event.status || "interested",
+    split_mode: event.splitMode || "equal",
     packing_notes: event.packingNotes || null,
     booth_number: event.boothNumber || null,
     setup_time: event.setupTime || null,
@@ -224,6 +267,8 @@ export async function listEvents() {
       eventCost: event.eventCost || 0,
       paymentRecords: event.paymentRecords || [],
       eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+      eventDayWorkers: event.eventDayWorkers || [],
+      priceOptions: event.priceOptions || [],
       checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
       status: event.status || "interested"
     }));
@@ -250,10 +295,136 @@ export async function listEvents() {
     event.liveNotes = await listLiveNotes(eventRow.id);
     event.salesCategories = await seedSalesCategories(eventRow.id);
     event.review = await getReview(eventRow.id);
+    event.eventDayWorkers = await listEventDayWorkers(eventRow.id);
+    event.priceOptions = await listPriceOptions(eventRow.id);
     return event;
   }));
   console.log(`Loaded ${events.length} events from Supabase`);
   setSupabaseStatus({ connected: true, error: "", synced: true });
+  return events;
+}
+
+export function getCachedHomeEvents() {
+  try {
+    const raw = localStorage.getItem(homeCacheKey);
+    if (!raw) {
+      setSupabaseStatus({ cacheStatus: "Home cache empty" });
+      return [] as Event[];
+    }
+    const parsed = JSON.parse(raw) as Event[];
+    setSupabaseStatus({ cacheStatus: `Loaded ${parsed.length} cached home events` });
+    return parsed;
+  } catch {
+    setSupabaseStatus({ cacheStatus: "Home cache unreadable" });
+    return [] as Event[];
+  }
+}
+
+function cacheHomeEvents(events: Event[]) {
+  try {
+    localStorage.setItem(homeCacheKey, JSON.stringify(events));
+    setSupabaseStatus({ cacheStatus: `Cached ${events.length} home events` });
+  } catch {
+    setSupabaseStatus({ cacheStatus: "Home cache write failed" });
+  }
+}
+
+export async function listHomeEvents(limit = 10) {
+  const startedAt = performance.now();
+  let queryCount = 0;
+
+  if (!isSupabaseConfigured || !supabase) {
+    const events = (await db.events.orderBy("startDate").toArray())
+      .filter((event) => (event.status !== "completed" && event.status !== "skipped"))
+      .sort((a, b) => a.startDate.localeCompare(b.startDate))
+      .slice(0, limit)
+      .map((event) => ({
+        ...event,
+        confirmedWorkerIds: event.confirmedWorkerIds || [],
+        eventCost: event.eventCost || 0,
+        paymentRecords: event.paymentRecords || [],
+        eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+        eventDayWorkers: event.eventDayWorkers || [],
+        priceOptions: event.priceOptions || [],
+        status: event.status || "interested"
+      }));
+    cacheHomeEvents(events);
+    setSupabaseStatus({ durationMs: Math.round(performance.now() - startedAt), eventsLoaded: events.length, queryCount: 1, cacheStatus: "Local home cache updated" });
+    return events;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("events")
+    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,split_mode,event_cost,created_at,updated_at")
+    .gte("start_date", today)
+    .neq("status", "completed")
+    .neq("status", "skipped")
+    .order("start_date")
+    .limit(limit);
+  queryCount += 1;
+  if (error) {
+    setSupabaseStatus({ connected: false, error: error.message, durationMs: Math.round(performance.now() - startedAt), queryCount });
+    throw error;
+  }
+
+  const rows = (data || []).filter((row) => (row as EventRow).name && (row as EventRow).start_date) as EventRow[];
+  const ids = rows.map((row) => row.id);
+  if (!ids.length) {
+    cacheHomeEvents([]);
+    setSupabaseStatus({ connected: true, error: "", synced: true, durationMs: Math.round(performance.now() - startedAt), eventsLoaded: 0, queryCount });
+    return [] as Event[];
+  }
+
+  const [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult] = await Promise.all([
+    supabase.from("event_days").select("*").in("event_id", ids).order("date"),
+    supabase.from("event_workers").select("event_id, worker_id").in("event_id", ids),
+    supabase.from("event_day_workers").select("*").in("event_id", ids),
+    supabase.from("event_price_options").select("*").in("event_id", ids),
+    supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids)
+  ]);
+  queryCount += 5;
+  const relatedError = [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult].find((result) => result.error)?.error;
+  if (relatedError) {
+    setSupabaseStatus({ connected: false, error: relatedError.message, durationMs: Math.round(performance.now() - startedAt), queryCount });
+    throw relatedError;
+  }
+
+  const daysByEvent = new Map<string, EventDay[]>();
+  (daysResult.data || []).forEach((row) => {
+    const day = fromDayRow(row as EventDayRow);
+    daysByEvent.set(day.eventId, [...(daysByEvent.get(day.eventId) || []), day]);
+  });
+  const workersByEvent = new Map<string, string[]>();
+  (workersResult.data || []).forEach((row) => {
+    const typed = row as EventWorkerRow;
+    workersByEvent.set(typed.event_id, [...(workersByEvent.get(typed.event_id) || []), typed.worker_id]);
+  });
+  const dayWorkersByEvent = new Map<string, ReturnType<typeof fromDayWorkerRow>[]>();
+  (dayWorkersResult.data || []).forEach((row) => {
+    const item = fromDayWorkerRow(row as EventDayWorkerRow);
+    dayWorkersByEvent.set(item.eventId, [...(dayWorkersByEvent.get(item.eventId) || []), item]);
+  });
+  const pricesByEvent = new Map<string, ReturnType<typeof fromPriceOptionRow>[]>();
+  (pricesResult.data || []).forEach((row) => {
+    const item = fromPriceOptionRow(row as PriceOptionRow);
+    pricesByEvent.set(item.eventId, [...(pricesByEvent.get(item.eventId) || []), item]);
+  });
+  const paymentsByEvent = new Map<string, ReturnType<typeof fromPaymentRow>[]>();
+  (paymentsResult.data || []).forEach((row) => {
+    const item = fromPaymentRow(row as PaymentRow);
+    paymentsByEvent.set(item.eventId, [...(paymentsByEvent.get(item.eventId) || []), item]);
+  });
+
+  const events = rows.map((row) => fromRow(row, workersByEvent.get(row.id) || [], paymentsByEvent.get(row.id) || [], daysByEvent.get(row.id) || []))
+    .map((event) => ({
+      ...event,
+      eventDayWorkers: dayWorkersByEvent.get(event.id) || [],
+      priceOptions: pricesByEvent.get(event.id) || []
+    }));
+
+  cacheHomeEvents(events);
+  setSupabaseStatus({ connected: true, error: "", synced: true, durationMs: Math.round(performance.now() - startedAt), eventsLoaded: events.length, queryCount });
   return events;
 }
 
@@ -266,6 +437,8 @@ export async function getEvent(eventId: string) {
       eventCost: event.eventCost || 0,
       paymentRecords: event.paymentRecords || [],
       eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+      eventDayWorkers: event.eventDayWorkers || [],
+      priceOptions: event.priceOptions || [],
       checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
       status: event.status || "interested"
     } : undefined;
@@ -297,6 +470,8 @@ export async function getEvent(eventId: string) {
   event.liveNotes = await listLiveNotes(eventId);
   event.salesCategories = await seedSalesCategories(eventId);
   event.review = await getReview(eventId);
+  event.eventDayWorkers = await listEventDayWorkers(eventId);
+  event.priceOptions = await listPriceOptions(eventId);
   return event;
 }
 
@@ -307,8 +482,11 @@ export async function saveEvent(event: Event) {
     eventCost: Number(event.eventCost || 0),
     paymentRecords: event.paymentRecords || [],
     eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+    eventDayWorkers: event.eventDayWorkers || [],
+    priceOptions: event.priceOptions || [],
     checklistItems: event.checklistItems || [],
     status: event.status || "interested",
+    splitMode: event.splitMode || "equal",
     updatedAt: nowIso()
   };
 
@@ -392,6 +570,8 @@ export async function saveEvent(event: Event) {
     .filter((record) => !savedPaymentIds.has(record.id))
     .map((record) => deletePaymentRecord(record.id)));
   await Promise.all(savedEvent.paymentRecords.map(savePaymentRecord));
+  await replaceEventDayWorkers(savedEvent.id, savedEvent.eventDayWorkers || []);
+  await replacePriceOptions(savedEvent.id, savedEvent.priceOptions || []);
   if (!savedEvent.checklistItems.length) await seedChecklistIfEmpty(savedEvent.id);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   console.log("Saved event to Supabase");
@@ -405,6 +585,8 @@ export async function deleteEvent(eventId: string) {
 
   const tables = [
     supabase.from("payment_records").delete().eq("event_id", eventId),
+    supabase.from("event_day_workers").delete().eq("event_id", eventId),
+    supabase.from("event_price_options").delete().eq("event_id", eventId),
     supabase.from("event_days").delete().eq("event_id", eventId),
     supabase.from("event_workers").delete().eq("event_id", eventId),
     supabase.from("events").delete().eq("id", eventId)
@@ -428,6 +610,8 @@ export async function clearEventsAndResetWorkers() {
 
   const results = await Promise.all([
     supabase.from("payment_records").delete().not("id", "is", null),
+    supabase.from("event_day_workers").delete().not("id", "is", null),
+    supabase.from("event_price_options").delete().not("id", "is", null),
     supabase.from("event_workers").delete().not("id", "is", null),
     supabase.from("events").delete().not("id", "is", null)
   ]);

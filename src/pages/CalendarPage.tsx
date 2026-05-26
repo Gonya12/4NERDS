@@ -25,7 +25,7 @@ export function CalendarPage() {
   }, {}), [events]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
       <header>
         <p className="text-sm font-bold text-coral">Planner</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Events</h1>
@@ -34,7 +34,7 @@ export function CalendarPage() {
       {Object.entries(groups).map(([key, dayEvents]) => (
         <section key={key}>
           <h2 className="mb-3 text-sm font-black uppercase text-slate-500 dark:text-slate-400">{dayHeading(dayEvents[0].startDate)}</h2>
-          <div className="space-y-3">{dayEvents.map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{dayEvents.map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
         </section>
       ))}
     </div>

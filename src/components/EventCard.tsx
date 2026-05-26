@@ -5,16 +5,19 @@ import { eventTimingStatus } from "../utils/eventStatus";
 import { shortScheduleSummary } from "../utils/eventSchedule";
 import { checklistProgress } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
+import { availabilitySummaryByWorker } from "../utils/availability";
 import { EventImageFrame } from "./EventImageFrame";
 import { StatusChip } from "./StatusChip";
+import { memo } from "react";
 
 function workerNames(event: Event, workers: Worker[]) {
   const ids = new Set(event.confirmedWorkerIds || []);
   return workers.filter((worker) => ids.has(worker.id)).map((worker) => worker.name);
 }
 
-export function EventCard({ event, workers = [] }: { event: Event; workers?: Worker[] }) {
+function EventCardBase({ event, workers = [] }: { event: Event; workers?: Worker[] }) {
   const names = workerNames(event, workers);
+  const availability = availabilitySummaryByWorker(event, workers);
   const timing = eventTimingStatus(event.startDate);
   const payment = calculatePaymentSummary(event, workers);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
@@ -47,12 +50,14 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
       </div>
       <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">
         <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><Users size={16} /> Confirmed</p>
-        <p className={`mt-1 ${names.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>
+        <div className={`mt-1 space-y-1 ${availability.length || names.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>
+          {availability.length ? availability.slice(0, 3).map((item) => <p key={item.workerId}>{item.text}</p>) : <p>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>}
+        </div>
         {checklist.total ? <p className="mt-2 text-xs font-bold text-slate-500 dark:text-slate-400">{checklist.completed}/{checklist.total} tasks completed</p> : null}
         {event.packingNotes ? <p className="mt-1 text-xs font-bold text-coral">Packing notes added</p> : null}
       </div>
       <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
-        <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> Event cost: {formatMoney(payment.totalCost)}</p>
+        <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> {payment.selectedPriceOption ? payment.selectedPriceOption.label : "Event cost"}: {formatMoney(payment.totalCost)}</p>
         <p className="mt-1 text-slate-700 dark:text-slate-300">Paid: {formatMoney(payment.totalPaid)} / {formatMoney(payment.totalCost)}</p>
         <p className={`mt-1 text-xs font-bold ${payment.totalRemaining > 0 ? "text-amber-700" : "text-emerald-700"}`}>{paymentStatus}</p>
         {payment.perWorkerSummary.slice(0, 2).map((worker) => (
@@ -64,3 +69,5 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
     </Link>
   );
 }
+
+export const EventCard = memo(EventCardBase);

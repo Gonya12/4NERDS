@@ -1,33 +1,76 @@
-import { CalendarCheck, Plus, Users } from "lucide-react";
+import { CalendarCheck, CalendarDays, CheckCircle2, DollarSign, Plus, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { EventCard } from "../components/EventCard";
 import { InstallPrompt } from "../components/InstallPrompt";
-import { listPlannerEvents, listWorkers } from "../services/planner/plannerRepository";
+import { getCachedPlannerHomeEvents, listPlannerHomeEvents, listWorkers } from "../services/planner/plannerRepository";
 import type { Event, Worker } from "../types/models";
+import { effectiveConfirmedWorkerIds } from "../utils/availability";
 import { eventTimingStatus } from "../utils/eventStatus";
+import { eventDays } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
 import { formatMoney } from "../utils/paymentMath";
 
 export function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
 
   async function load() {
-    const [allEvents, allWorkers] = await Promise.all([listPlannerEvents(), listWorkers()]);
-    setEvents(allEvents);
-    setWorkers(allWorkers);
+    setSyncing(true);
+    setSyncMessage("Syncing...");
+    try {
+      const [allEvents, allWorkers] = await Promise.all([listPlannerHomeEvents(10), listWorkers()]);
+      setEvents(allEvents);
+      setWorkers(allWorkers);
+      setSyncMessage("");
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : "Sync failed.");
+    } finally {
+      setLoading(false);
+      setSyncing(false);
+    }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const cached = getCachedPlannerHomeEvents();
+    if (cached.length) {
+      setEvents(cached);
+      setLoading(false);
+    }
+    void listWorkers().then(setWorkers);
+    void load();
+  }, []);
 
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = upcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const confirmedCount = upcoming.filter((event) => (event.confirmedWorkerIds || []).length > 0).length;
   const now = new Date();
-  const projectedCosts = upcoming.reduce((sum, event) => sum + Number(event.eventCost || 0), 0);
+  const projectedCosts = upcoming.reduce((sum, event) => sum + Number((event.priceOptions || []).find((option) => option.isSelected)?.price ?? event.eventCost ?? 0), 0);
+  const upcomingEventDays = upcoming.flatMap((event) => eventDays(event).map((day) => ({ event, day }))).filter(({ day }) => new Date(`${day.date.slice(0, 10)}T23:59:59`).getTime() >= Date.now());
+  const plannedDayKeys = new Set(upcomingEventDays.map(({ event, day }) => `${event.id}:${day.id}:${day.date.slice(0, 10)}`));
+  const confirmedDayKeys = new Set(upcomingEventDays.filter(({ event, day }) => {
+    const dayWorkers = event.eventDayWorkers || [];
+    if (dayWorkers.length) return dayWorkers.some((item) => item.eventDayId === day.id);
+    return (event.confirmedWorkerIds || []).length > 0;
+  }).map(({ event, day }) => `${event.id}:${day.id}:${day.date.slice(0, 10)}`));
+  const workersScheduled = new Set(upcoming.flatMap((event) => effectiveConfirmedWorkerIds(event))).size;
+
+  const skeletonCards = (
+    <div className="space-y-3">
+      {[1, 2, 3].map((item) => (
+        <div key={item} className="animate-pulse rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <div className="aspect-[4/5] rounded-2xl bg-slate-200 dark:bg-slate-800" />
+          <div className="mt-4 h-5 w-2/3 rounded bg-slate-200 dark:bg-slate-800" />
+          <div className="mt-2 h-4 w-1/2 rounded bg-slate-200 dark:bg-slate-800" />
+        </div>
+      ))}
+    </div>
+  );
   const monthlyProfit = completedEvents
     .filter((event) => {
       const date = new Date(event.startDate);
@@ -38,7 +81,7 @@ export function HomePage() {
   const checklistPercent = checklistItems.length ? Math.round((checklistItems.filter((item) => item.completed).length / checklistItems.length) * 100) : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 lg:mx-auto lg:max-w-7xl">
       <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
         <p className="text-sm font-bold text-orange-300">4 Nerds</p>
         <h1 className="mt-1 text-3xl font-black tracking-tight">Event Planner</h1>
@@ -46,8 +89,40 @@ export function HomePage() {
       </header>
 
       <InstallPrompt />
+      <div className="flex items-center justify-between gap-3">
+        {syncing || syncMessage ? <p className="text-xs font-bold text-slate-500 dark:text-slate-400">{syncMessage || "Syncing..."}</p> : <p className="text-xs font-bold text-slate-400 dark:text-slate-500">Showing latest saved schedule</p>}
+        <button onClick={load} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync Now</button>
+      </div>
 
-      <section className="grid grid-cols-3 gap-3">
+      <section className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 lg:mx-0 lg:grid lg:grid-cols-5 lg:overflow-visible lg:px-0">
+        <div className="min-w-32 rounded-2xl bg-sky-50 p-4 shadow-soft dark:bg-sky-950/30">
+          <CalendarDays className="text-sky-600 dark:text-sky-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Planned</p>
+        </div>
+        <div className="min-w-32 rounded-2xl bg-emerald-50 p-4 shadow-soft dark:bg-emerald-950/30">
+          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Confirmed</p>
+        </div>
+        <div className="min-w-32 rounded-2xl bg-violet-50 p-4 shadow-soft dark:bg-violet-950/30">
+          <CalendarCheck className="text-violet-600 dark:text-violet-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{upcoming.length}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Events</p>
+        </div>
+        <div className="min-w-40 rounded-2xl bg-orange-50 p-4 shadow-soft dark:bg-orange-950/30">
+          <DollarSign className="text-orange-600 dark:text-orange-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Cost</p>
+        </div>
+        <div className="min-w-36 rounded-2xl bg-slate-50 p-4 shadow-soft dark:bg-slate-900">
+          <Users className="text-slate-600 dark:text-slate-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{workersScheduled}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Workers Scheduled</p>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-3 gap-3 lg:grid-cols-6">
         <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
           <CalendarCheck className="text-coral" size={20} />
           <p className="mt-3 text-2xl font-black text-ink dark:text-white">{upcoming.length}</p>
@@ -64,7 +139,7 @@ export function HomePage() {
         </Link>
       </section>
 
-      <section className="grid grid-cols-2 gap-3">
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
           <p className="text-xs text-slate-500 dark:text-slate-400">Projected costs</p>
           <p className="mt-2 text-xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
@@ -88,12 +163,12 @@ export function HomePage() {
           <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Events</h2>
           <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
         </div>
-        {upcoming.length === 0 ? (
+        {loading ? skeletonCards : upcoming.length === 0 ? (
           <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
         ) : (
-          <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2">
+          <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
             {upcoming.slice(0, 5).map((event) => (
-              <div key={event.id} className="w-[82%] shrink-0 snap-start">
+              <div key={event.id} className="w-[82%] shrink-0 snap-start lg:w-auto">
                 <EventCard event={event} workers={workers} />
               </div>
             ))}
@@ -113,10 +188,10 @@ export function HomePage() {
           <h2 className="text-xl font-black text-ink dark:text-white">Upcoming Events</h2>
           <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
         </div>
-        {upcoming.length === 0 ? (
+        {loading ? skeletonCards : upcoming.length === 0 ? (
           <EmptyState title="No events yet. Add your first vendor event." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
         ) : (
-          <div className="space-y-3">{upcoming.slice(0, 6).map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{upcoming.slice(0, 6).map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
         )}
       </section>
     </div>

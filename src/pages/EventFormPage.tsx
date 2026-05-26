@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { EventImageUploader } from "../components/EventImageUploader";
 import { listLocations } from "../services/database/locationRepository";
 import { getPlannerEvent, savePlannerEvent } from "../services/planner/plannerRepository";
-import type { Event, EventDay, Location, RegistrationStatus } from "../types/models";
+import type { Event, EventDay, EventPriceOption, Location, PricingType, RegistrationStatus } from "../types/models";
 import { id, nowIso } from "../utils/normalize";
 
 const statuses: RegistrationStatus[] = ["open", "closed", "unknown", "sold_out", "waitlist"];
@@ -40,6 +40,7 @@ export function EventFormPage() {
     notes: ""
   });
   const [eventDays, setEventDays] = useState<EventDay[]>([]);
+  const [priceOptions, setPriceOptions] = useState<EventPriceOption[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
 
   function blankDay(date = form.date): EventDay {
@@ -88,6 +89,7 @@ export function EventFormPage() {
         createdAt: event.createdAt,
         updatedAt: event.updatedAt
       }]);
+      setPriceOptions(event.priceOptions || []);
     }
     void load();
   }, [eventId]);
@@ -107,6 +109,28 @@ export function EventFormPage() {
       state: location?.state || form.state,
       locationInstagramHandle: location?.instagramHandle || form.locationInstagramHandle
     });
+  }
+
+  function addPriceOption() {
+    const timestamp = nowIso();
+    setPriceOptions([...priceOptions, {
+      id: id("price"),
+      eventId: draftEventId,
+      label: "New Price Option",
+      price: 0,
+      pricingType: "flat",
+      isSelected: !priceOptions.some((option) => option.isSelected),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }]);
+  }
+
+  function updatePriceOption(optionId: string, patch: Partial<EventPriceOption>) {
+    setPriceOptions(priceOptions.map((option) => option.id === optionId ? { ...option, ...patch, updatedAt: nowIso() } : option));
+  }
+
+  function selectPriceOption(optionId: string) {
+    setPriceOptions(priceOptions.map((option) => ({ ...option, isSelected: option.id === optionId, updatedAt: nowIso() })));
   }
 
   async function save() {
@@ -147,6 +171,9 @@ export function EventFormPage() {
       notGoing: false,
       confirmedWorkerIds: existing?.confirmedWorkerIds || [],
       eventDays: eventDays.map((day) => ({ ...day, eventId: existing?.id || "", updatedAt: timestamp })),
+      eventDayWorkers: existing?.eventDayWorkers || [],
+      priceOptions: priceOptions.map((option) => ({ ...option, eventId: existing?.id || draftEventId, isSelected: option.isSelected })),
+      splitMode: existing?.splitMode || "equal",
       eventCost: Number(form.eventCost || 0),
       paymentRecords: existing?.paymentRecords || [],
       reminderEnabled: false,
@@ -157,17 +184,18 @@ export function EventFormPage() {
       updatedAt: timestamp
     };
     event.eventDays = eventDays.map((day) => ({ ...day, eventId: event.id, updatedAt: timestamp }));
+    event.priceOptions = priceOptions.map((option) => ({ ...option, eventId: event.id, updatedAt: timestamp }));
     await savePlannerEvent(event);
     navigate(`/events/${event.id}`);
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 lg:mx-auto lg:max-w-6xl">
       <header>
         <p className="text-sm font-bold text-coral">Manual Event Mode</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">{eventId && eventId !== "new" ? "Edit Event" : "Add Event"}</h1>
       </header>
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0 dark:bg-slate-900">
         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Event name" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <select value={form.locationId} onChange={(e) => selectLocation(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3">
           <option value="">Use common location</option>
@@ -187,7 +215,7 @@ export function EventFormPage() {
           <input value={form.locationInstagramHandle} onChange={(e) => setForm({ ...form, locationInstagramHandle: e.target.value })} placeholder="Location @handle" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
           <input value={form.organizerInstagramHandle} onChange={(e) => setForm({ ...form, organizerInstagramHandle: e.target.value })} placeholder="Organizer @handle" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         </div>
-        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/70">
+        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 lg:col-span-2 dark:bg-slate-950/70">
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-black text-ink dark:text-white">Event Days</h2>
             <button onClick={() => setEventDays([...eventDays, blankDay(eventDays[eventDays.length - 1]?.date || form.date)])} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral" type="button"><Plus size={14} /> Add Day</button>
@@ -211,9 +239,36 @@ export function EventFormPage() {
           {statuses.map((status) => <option key={status} value={status}>{status.replace("_", " ")}</option>)}
         </select>
         <input type="number" min={0} step="0.01" value={form.eventCost} onChange={(e) => setForm({ ...form, eventCost: e.target.value })} placeholder="Event/table cost" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
+        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 lg:col-span-2 dark:bg-slate-950/70">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-black text-ink dark:text-white">Price Options</h2>
+            <button onClick={addPriceOption} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral" type="button"><Plus size={14} /> Add Option</button>
+          </div>
+          {priceOptions.map((option) => (
+            <div key={option.id} className={`space-y-2 rounded-xl border p-3 ${option.isSelected ? "border-coral bg-orange-50 dark:bg-orange-950/20" : "border-slate-100 bg-white dark:border-slate-800 dark:bg-slate-900"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <input value={option.label} onChange={(e) => updatePriceOption(option.id, { label: e.target.value })} placeholder="Option label" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <button type="button" onClick={() => setPriceOptions(priceOptions.filter((item) => item.id !== option.id))} className="rounded-lg p-2 text-rose-700"><Trash2 size={15} /></button>
+              </div>
+              <input value={option.description || ""} onChange={(e) => updatePriceOption(option.id, { description: e.target.value })} placeholder="Description" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="number" min={0} step="0.01" value={option.price || ""} onChange={(e) => updatePriceOption(option.id, { price: Number(e.target.value || 0) })} placeholder="Price" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <select value={option.pricingType} onChange={(e) => updatePriceOption(option.id, { pricingType: e.target.value as PricingType })} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
+                  <option value="flat">Flat</option>
+                  <option value="per_day">Per day</option>
+                  <option value="package">Package</option>
+                </select>
+              </div>
+              <button type="button" onClick={() => selectPriceOption(option.id)} className={`min-h-10 w-full rounded-xl text-sm font-bold ${option.isSelected ? "bg-coral text-white" : "bg-slate-100 text-ink dark:bg-slate-800 dark:text-white"}`}>
+                {option.isSelected ? "Selected" : "Select option"}
+              </button>
+            </div>
+          ))}
+          {priceOptions.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">No package pricing yet. The app will use the event/table cost above.</p> : null}
+        </section>
         <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Notes" className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3" />
         <textarea value={form.packingNotes} onChange={(e) => setForm({ ...form, packingNotes: e.target.value })} placeholder="Inventory & packing notes" className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3" />
-        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/70">
+        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 lg:col-span-2 dark:bg-slate-950/70">
           <h2 className="font-black text-ink dark:text-white">Booth & Setup</h2>
           <div className="grid grid-cols-2 gap-2">
             <input value={form.boothNumber} onChange={(e) => setForm({ ...form, boothNumber: e.target.value })} placeholder="Booth/table #" className="rounded-xl border border-slate-200 px-3 py-3" />
@@ -223,7 +278,7 @@ export function EventFormPage() {
           <textarea value={form.parkingNotes} onChange={(e) => setForm({ ...form, parkingNotes: e.target.value })} placeholder="Parking notes" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
           <textarea value={form.entryInstructions} onChange={(e) => setForm({ ...form, entryInstructions: e.target.value })} placeholder="Entry instructions" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
         </section>
-        <button onClick={save} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white transition active:scale-[0.99] dark:bg-coral"><Save size={18} /> Save Event</button>
+        <button onClick={save} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white transition active:scale-[0.99] lg:col-span-2 dark:bg-coral"><Save size={18} /> Save Event</button>
       </section>
     </div>
   );

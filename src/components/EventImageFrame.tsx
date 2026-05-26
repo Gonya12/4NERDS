@@ -28,9 +28,9 @@ export function EventImageFrame({
       >
         {imageUrl ? (
           <>
-            <img src={imageUrl} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-xl" />
+            <img src={imageUrl} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-xl" />
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/35 via-transparent to-slate-950/15" />
-            <img src={imageUrl} alt="" className="relative z-10 h-full w-full object-contain p-2" />
+            <img src={imageUrl} alt="" loading="lazy" decoding="async" className="relative z-10 h-full w-full object-contain p-2" />
           </>
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-coral via-amber-400 to-emerald-400 text-4xl font-black text-white/90">
@@ -43,7 +43,7 @@ export function EventImageFrame({
           <button onClick={() => setOpen(false)} className="absolute right-4 top-4 rounded-full bg-white/10 p-3 text-white backdrop-blur">
             <X size={22} />
           </button>
-          <img src={imageUrl} alt="" className="max-h-[96vh] max-w-full object-contain" />
+          <img src={imageUrl} alt="" loading="lazy" decoding="async" className="max-h-[96vh] max-w-full object-contain" />
         </div>
       ) : null}
     </>
