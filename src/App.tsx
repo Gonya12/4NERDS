@@ -1,0 +1,69 @@
+import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Route, Routes } from "react-router-dom";
+import { BottomNav } from "./components/BottomNav";
+import { CalendarPage } from "./pages/CalendarPage";
+import { EventDetailPage } from "./pages/EventDetailPage";
+import { EventFormPage } from "./pages/EventFormPage";
+import { HomePage } from "./pages/HomePage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
+
+function Onboarding({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-end bg-slate-950/30 p-4">
+      <section className="mx-auto w-full max-w-md rounded-lg bg-white p-5 shadow-soft">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-coral">Welcome to 4 Nerds</p>
+            <h2 className="mt-1 text-xl font-black text-ink">Plan events in three steps.</h2>
+          </div>
+          <button onClick={onClose} className="rounded-lg bg-slate-100 p-2"><X size={18} /></button>
+        </div>
+        <ol className="mt-4 space-y-3 text-sm text-slate-600">
+          <li><strong>1. Add vendor events.</strong></li>
+          <li><strong>2. Open an event.</strong></li>
+          <li><strong>3. Confirm who can work it.</strong></li>
+        </ol>
+        <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-lg bg-ink font-bold text-white">Start Tracking</button>
+      </section>
+    </div>
+  );
+}
+
+export default function App() {
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    async function boot() {
+      await removeDemoData();
+      await seedWorkers();
+      const settings = await getSettings();
+      setShowOnboarding(!settings.onboardingComplete);
+    }
+    void boot();
+  }, []);
+
+  async function closeOnboarding() {
+    const settings = await getSettings();
+    await db.settings.put({ ...settings, onboardingComplete: true, updatedAt: new Date().toISOString() });
+    setShowOnboarding(false);
+  }
+
+  return (
+    <div className="min-h-screen bg-paper">
+      <main className="mx-auto max-w-md px-4 pb-28 pt-6">
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/events" element={<CalendarPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/events/new" element={<EventFormPage />} />
+          <Route path="/events/:id" element={<EventDetailPage />} />
+          <Route path="/events/:id/edit" element={<EventFormPage />} />
+        </Routes>
+      </main>
+      <BottomNav />
+      {showOnboarding ? <Onboarding onClose={closeOnboarding} /> : null}
+    </div>
+  );
+}
