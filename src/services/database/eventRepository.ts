@@ -179,6 +179,11 @@ export async function saveEvent(event: Event) {
     throw deleteWorkerError;
   }
 
+  console.log("saving availability", {
+    eventId: savedEvent.id,
+    selectedWorkerIds: savedEvent.confirmedWorkerIds
+  });
+
   if (savedEvent.confirmedWorkerIds.length) {
     const timestamp = nowIso();
     const rows = savedEvent.confirmedWorkerIds.map((workerId) => ({
@@ -187,12 +192,18 @@ export async function saveEvent(event: Event) {
       created_at: timestamp,
       updated_at: timestamp
     }));
-    const { error: insertWorkerError } = await supabase.from("event_workers").upsert(rows);
+    const { data: insertedWorkers, error: insertWorkerError } = await supabase
+      .from("event_workers")
+      .insert(rows)
+      .select("event_id, worker_id");
+    console.log("Supabase insert result", insertedWorkers);
     if (insertWorkerError) {
       setSupabaseStatus({ connected: false, error: insertWorkerError.message });
       console.error("Supabase error:", insertWorkerError.message);
       throw insertWorkerError;
     }
+  } else {
+    console.log("Supabase insert result", []);
   }
 
   const existingPayments = await listPaymentRecords(savedEvent.id);

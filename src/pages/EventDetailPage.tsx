@@ -129,6 +129,7 @@ export function EventDetailPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [showWorkers, setShowWorkers] = useState(false);
   const [editingPayment, setEditingPayment] = useState<PaymentRecord | "new" | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   async function load() {
     if (!id) return;
@@ -140,10 +141,21 @@ export function EventDetailPage() {
 
   async function saveWorkers(workerIds: string[]) {
     if (!event) return;
+    setErrorMessage("");
+    console.log("selectedWorkerIds", workerIds);
+    console.log("eventId", event.id);
+    console.log("saving availability");
     const updated = { ...event, confirmedWorkerIds: workerIds, updatedAt: new Date().toISOString() };
-    await savePlannerEvent(updated);
-    setEvent(updated);
-    setShowWorkers(false);
+    try {
+      await savePlannerEvent(updated);
+      const refreshed = await getPlannerEvent(event.id);
+      setEvent(refreshed || updated);
+      setShowWorkers(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save availability.";
+      console.error("Supabase error:", message);
+      setErrorMessage(message);
+    }
   }
 
   async function savePayment(payment: PaymentRecord) {
@@ -197,6 +209,7 @@ export function EventDetailPage() {
       <section className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Users size={18} /> Confirmed Workers</h2>
         <p className={`mt-2 text-sm ${confirmed.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{confirmed.length ? confirmed.map((worker) => worker.name).join(", ") : "Nobody confirmed yet"}</p>
+        {errorMessage ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
         <button onClick={() => setShowWorkers(true)} className="mt-4 min-h-12 w-full rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
       </section>
 
