@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatusChip } from "../components/StatusChip";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
+import { getSupabaseStatus } from "../utils/supabase";
 import type { Event, PaymentRecord, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
@@ -130,6 +131,7 @@ export function EventDetailPage() {
   const [showWorkers, setShowWorkers] = useState(false);
   const [editingPayment, setEditingPayment] = useState<PaymentRecord | "new" | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [lastSelectedWorkerIds, setLastSelectedWorkerIds] = useState<string[]>([]);
 
   async function load() {
     if (!id) return;
@@ -142,6 +144,7 @@ export function EventDetailPage() {
   async function saveWorkers(workerIds: string[]) {
     if (!event) return;
     setErrorMessage("");
+    setLastSelectedWorkerIds(workerIds);
     console.log("selectedWorkerIds", workerIds);
     console.log("eventId", event.id);
     console.log("saving availability");
@@ -152,7 +155,11 @@ export function EventDetailPage() {
       setEvent(refreshed || updated);
       setShowWorkers(false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save availability.";
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === "object" && error && "message" in error
+          ? String((error as { message: unknown }).message)
+          : JSON.stringify(error);
       console.error("Supabase error:", message);
       setErrorMessage(message);
     }
@@ -189,6 +196,7 @@ export function EventDetailPage() {
   const destination = event.address || [event.venueName, event.city, event.state].filter(Boolean).join(", ");
   const paymentSummary = calculatePaymentSummary(event, workers);
   const confirmedIds = new Set(event.confirmedWorkerIds || []);
+  const syncStatus = getSupabaseStatus();
   const unconfirmedPaymentWarnings = (event.paymentRecords || [])
     .filter((record) => !confirmedIds.has(record.workerId))
     .map((record) => workers.find((worker) => worker.id === record.workerId)?.name || "Someone");
@@ -211,6 +219,13 @@ export function EventDetailPage() {
         <p className={`mt-2 text-sm ${confirmed.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{confirmed.length ? confirmed.map((worker) => worker.name).join(", ") : "Nobody confirmed yet"}</p>
         {errorMessage ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
         <button onClick={() => setShowWorkers(true)} className="mt-4 min-h-12 w-full rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
+      </section>
+
+      <section className="space-y-2 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <h2 className="text-sm font-black text-ink dark:text-white">Availability Debug</h2>
+        <p><strong>Current event ID:</strong> {event.id}</p>
+        <p><strong>Current selected worker IDs:</strong> {lastSelectedWorkerIds.length ? lastSelectedWorkerIds.join(", ") : "None selected this session"}</p>
+        <p><strong>Current Supabase mode:</strong> {syncStatus.mode}</p>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">

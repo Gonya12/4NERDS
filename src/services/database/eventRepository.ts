@@ -29,6 +29,14 @@ type EventWorkerRow = {
   worker_id: string;
 };
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function assertUuid(value: string, field: string) {
+  if (!uuidPattern.test(value)) {
+    throw new Error(`${field} is not a valid UUID: ${value}`);
+  }
+}
+
 function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [] as Event["paymentRecords"]): Event {
   return {
     id: row.id,
@@ -172,7 +180,15 @@ export async function saveEvent(event: Event) {
     throw error;
   }
 
-  const { error: deleteWorkerError } = await supabase.from("event_workers").delete().eq("event_id", savedEvent.id);
+  assertUuid(savedEvent.id, "event_id");
+  savedEvent.confirmedWorkerIds.forEach((workerId) => assertUuid(workerId, "worker_id"));
+
+  console.log("selected worker IDs", savedEvent.confirmedWorkerIds);
+  console.log("selected event ID", savedEvent.id);
+
+  const deleteResponse = await supabase.from("event_workers").delete().eq("event_id", savedEvent.id);
+  console.log("Supabase event_workers delete response", deleteResponse);
+  const deleteWorkerError = deleteResponse.error;
   if (deleteWorkerError) {
     setSupabaseStatus({ connected: false, error: deleteWorkerError.message });
     console.error("Supabase error:", deleteWorkerError.message);
@@ -192,17 +208,21 @@ export async function saveEvent(event: Event) {
       created_at: timestamp,
       updated_at: timestamp
     }));
-    const { data: insertedWorkers, error: insertWorkerError } = await supabase
+    console.log("payload being inserted", rows);
+    const insertResponse = await supabase
       .from("event_workers")
       .insert(rows)
       .select("event_id, worker_id");
-    console.log("Supabase insert result", insertedWorkers);
+    console.log("Supabase response", insertResponse);
+    console.log("Supabase insert result", insertResponse.data);
+    const insertWorkerError = insertResponse.error;
     if (insertWorkerError) {
       setSupabaseStatus({ connected: false, error: insertWorkerError.message });
       console.error("Supabase error:", insertWorkerError.message);
       throw insertWorkerError;
     }
   } else {
+    console.log("payload being inserted", []);
     console.log("Supabase insert result", []);
   }
 

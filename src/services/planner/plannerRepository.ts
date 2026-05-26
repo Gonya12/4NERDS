@@ -1,6 +1,6 @@
 import type { Event, Worker } from "../../types/models";
 import { clearEventsAndResetWorkers, deleteEvent, getEvent, listEvents, saveEvent } from "../database/eventRepository";
-import { addWorker as addDatabaseWorker, deleteWorker as deleteDatabaseWorker, listWorkers as listDatabaseWorkers, saveWorker as saveDatabaseWorker } from "../database/workerRepository";
+import { addWorker as addDatabaseWorker, deleteWorker as deleteDatabaseWorker, listWorkers as listDatabaseWorkers, saveWorker as saveDatabaseWorker, seedSupabaseWorkers } from "../database/workerRepository";
 
 export async function listPlannerEvents() {
   return listEvents();
@@ -40,4 +40,8 @@ export async function deleteWorker(workerId: string) {
 
 export async function clearPlannerData() {
   return clearEventsAndResetWorkers();
+}
+
+export async function seedTeamWorkers() {
+  return seedSupabaseWorkers();
 }

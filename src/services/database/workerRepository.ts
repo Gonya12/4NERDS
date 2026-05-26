@@ -33,28 +33,35 @@ function toRow(worker: Worker): WorkerRow {
   };
 }
 
-async function seedSupabaseWorkersIfEmpty() {
+export async function seedSupabaseWorkers() {
   if (!supabase) return;
-  const { count, error } = await supabase.from("workers").select("id", { count: "exact", head: true });
+  const { data, error } = await supabase.from("workers").select("id, name");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
-  if ((count || 0) > 0) return;
+
+  const existingNames = new Set((data || []).map((worker) => String((worker as { name: string }).name).toLowerCase()));
+  const missingNames = defaultWorkerNames.filter((name) => !existingNames.has(name.toLowerCase()));
+  if (!missingNames.length) return;
+
   const timestamp = nowIso();
-  const rows = defaultWorkerNames.map((name) => ({
+  const rows = missingNames.map((name) => ({
     name,
     active: true,
     created_at: timestamp,
     updated_at: timestamp
   }));
-  const { error: insertError } = await supabase.from("workers").upsert(rows);
+  console.log("Seed workers payload", rows);
+  const { data: inserted, error: insertError } = await supabase.from("workers").insert(rows).select("id, name");
+  console.log("Seed workers response", inserted);
   if (insertError) {
     setSupabaseStatus({ connected: false, error: insertError.message });
     console.error("Supabase error:", insertError.message);
     throw insertError;
   }
+  setSupabaseStatus({ connected: true, error: "", synced: true });
 }
 
 export async function listWorkers() {
@@ -65,7 +72,7 @@ export async function listWorkers() {
   }
 
   console.log("Using Supabase mode");
-  await seedSupabaseWorkersIfEmpty();
+  await seedSupabaseWorkers();
   const { data, error } = await supabase.from("workers").select("*").order("name");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });

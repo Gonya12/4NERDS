@@ -1,6 +1,6 @@
 import { Download, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker } from "../services/planner/plannerRepository";
+import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
 import { exportBackup, importBackup } from "../services/storage/backupService";
 import { getSupabaseStatus, testSupabaseConnection } from "../utils/supabase";
 import { useTheme } from "../services/theme/ThemeProvider";
@@ -52,6 +52,24 @@ export function SettingsPage() {
     } catch (error) {
       setSyncStatus(getSupabaseStatus());
       setSyncMessage(error instanceof Error ? error.message : "Sync failed.");
+    }
+  }
+
+  async function seedWorkersNow() {
+    setSyncMessage("Seeding workers...");
+    try {
+      await seedTeamWorkers();
+      await load();
+      setSyncStatus(getSupabaseStatus());
+      setSyncMessage("Workers seeded or already present.");
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === "object" && error && "message" in error
+          ? String((error as { message: unknown }).message)
+          : JSON.stringify(error);
+      setSyncStatus(getSupabaseStatus());
+      setSyncMessage(message);
     }
   }
 
@@ -127,6 +145,7 @@ export function SettingsPage() {
         <div className="grid grid-cols-2 gap-2">
           <button onClick={testConnection} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-ink text-sm font-bold text-white"><Wifi size={16} /> Test Connection</button>
           <button onClick={syncNow} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-coral text-sm font-bold text-white"><RefreshCw size={16} /> Sync Now</button>
+          <button onClick={seedWorkersNow} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Plus size={16} /> Seed Workers</button>
         </div>
       </section>
 
