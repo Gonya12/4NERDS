@@ -4,10 +4,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatusChip } from "../components/StatusChip";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
+import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
 import { getSupabaseStatus } from "../utils/supabase";
 import type { Event, PaymentRecord, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
+import { eventDays, formatEventDay } from "../utils/eventSchedule";
+import { generateInstagramCaption } from "../utils/instagramCaption";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { id, nowIso } from "../utils/normalize";
 
@@ -132,6 +135,7 @@ export function EventDetailPage() {
   const [editingPayment, setEditingPayment] = useState<PaymentRecord | "new" | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [lastSelectedWorkerIds, setLastSelectedWorkerIds] = useState<string[]>([]);
+  const [caption, setCaption] = useState("");
 
   async function load() {
     if (!id) return;
@@ -172,16 +176,38 @@ export function EventDetailPage() {
       ? records.map((record) => record.id === payment.id ? payment : record)
       : [...records, payment];
     const updated = { ...event, paymentRecords: updatedRecords, updatedAt: nowIso() };
-    await savePlannerEvent(updated);
-    setEvent(updated);
-    setEditingPayment(null);
+    try {
+      await savePaymentRecord(payment);
+      const refreshed = await getPlannerEvent(event.id);
+      setEvent(refreshed || updated);
+      setEditingPayment(null);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === "object" && error && "message" in error
+          ? String((error as { message: unknown }).message)
+          : JSON.stringify(error);
+      console.error("Supabase error:", message);
+      setErrorMessage(message);
+    }
   }
 
   async function deletePayment(paymentId: string) {
     if (!event) return;
     const updated = { ...event, paymentRecords: (event.paymentRecords || []).filter((record) => record.id !== paymentId), updatedAt: nowIso() };
-    await savePlannerEvent(updated);
-    setEvent(updated);
+    try {
+      await deletePaymentRecord(paymentId);
+      const refreshed = await getPlannerEvent(event.id);
+      setEvent(refreshed || updated);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === "object" && error && "message" in error
+          ? String((error as { message: unknown }).message)
+          : JSON.stringify(error);
+      console.error("Supabase error:", message);
+      setErrorMessage(message);
+    }
   }
 
   async function remove() {
@@ -204,6 +230,9 @@ export function EventDetailPage() {
   return (
     <div className="space-y-5">
       <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
+        <div className="mb-4 aspect-[16/9] overflow-hidden rounded-2xl bg-gradient-to-br from-coral via-amber-400 to-emerald-400">
+          {event.imageUrl ? <img src={event.imageUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-5xl font-black text-white/90">4N</div>}
+        </div>
         <p className="text-sm font-bold text-orange-300">{eventTimingStatus(event.startDate)}</p>
         <h1 className="mt-1 text-3xl font-black leading-tight">{event.name}</h1>
         <p className="mt-2 text-sm text-slate-300">{displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>
@@ -229,11 +258,26 @@ export function EventDetailPage() {
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <div>
+          <strong className="text-ink dark:text-white">Schedule:</strong>
+          <div className="mt-2 space-y-1">
+            {eventDays(event).map((day) => <p key={day.id}>{formatEventDay(day)}</p>)}
+          </div>
+        </div>
         <p><strong>Venue:</strong> {event.venueName || "Not set"}</p>
         <p><strong>Address:</strong> {[event.address, event.city, event.state].filter(Boolean).join(", ") || "Not set"}</p>
         <p><strong>Vendor registration:</strong> {event.registrationUrl || "Not set"}</p>
         <p><strong>Source:</strong> {event.sourceUrl || "Not set"}</p>
         <p><strong>Notes:</strong> {event.notes || "None"}</p>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-black text-ink dark:text-white">Instagram Caption</h2>
+          <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>
+        </div>
+        <textarea value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Generate a caption to edit and copy." className="min-h-36 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm" />
+        <button onClick={() => navigator.clipboard.writeText(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
       </section>
 
       <section className="space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">

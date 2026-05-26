@@ -32,7 +32,7 @@ function toRow(record: PaymentRecord): PaymentRow {
     event_id: record.eventId,
     worker_id: record.workerId,
     amount_paid: Number(record.amountPaid || 0),
-    paid_at: record.paidAt ? record.paidAt.slice(0, 10) : null,
+    paid_at: record.paidAt || null,
     note: record.note || null,
     created_at: record.createdAt,
     updated_at: record.updatedAt
@@ -55,8 +55,22 @@ export async function listPaymentRecords(eventId: string) {
 }
 
 export async function savePaymentRecord(record: PaymentRecord) {
-  if (!isSupabaseConfigured || !supabase) return;
-  const { error } = await supabase.from("payment_records").upsert(toRow(record));
+  if (!isSupabaseConfigured || !supabase) {
+    const event = await db.events.get(record.eventId);
+    if (!event) return;
+    const existing = event.paymentRecords || [];
+    await db.events.put({
+      ...event,
+      paymentRecords: existing.some((payment) => payment.id === record.id)
+        ? existing.map((payment) => payment.id === record.id ? record : payment)
+        : [...existing, record],
+      updatedAt: new Date().toISOString()
+    });
+    return;
+  }
+  console.log("saving payment payload", toRow(record));
+  const { data, error } = await supabase.from("payment_records").upsert(toRow(record)).select("*");
+  console.log("Supabase payment response", { data, error });
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);

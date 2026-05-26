@@ -46,6 +46,12 @@ export interface Event {
   notGoing: boolean;
   startTime?: string;
   endTime?: string;
+  eventDays?: EventDay[];
+  imageUrl?: string;
+  imagePath?: string;
+  locationId?: string;
+  locationInstagramHandle?: string;
+  organizerInstagramHandle?: string;
   confirmedWorkerIds?: string[];
   eventCost?: number;
   paymentRecords?: PaymentRecord[];
@@ -55,6 +61,17 @@ export interface Event {
   lastRegistrationStatus?: RegistrationStatus;
   lastNotifiedRegistrationStatus?: RegistrationStatus;
   notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventDay {
+  id: string;
+  eventId: string;
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  note?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,6 +91,20 @@ export interface Worker {
   id: string;
   name: string;
   active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Location {
+  id: string;
+  name: string;
+  venueName?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  instagramHandle?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }

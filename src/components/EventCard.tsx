@@ -1,8 +1,8 @@
 import { CalendarDays, DollarSign, MapPin, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { Event, Worker } from "../types/models";
-import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
+import { shortScheduleSummary } from "../utils/eventSchedule";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { StatusChip } from "./StatusChip";
 
@@ -15,6 +15,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
   const names = workerNames(event, workers);
   const timing = eventTimingStatus(event.startDate);
   const payment = calculatePaymentSummary(event, workers);
+  const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const paymentStatus = payment.confirmedWorkerCount === 0
     ? "Split unavailable until workers are confirmed"
     : payment.totalPaid === 0
@@ -27,6 +28,13 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
 
   return (
     <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900/90">
+      <div className="mb-4 aspect-[16/9] overflow-hidden rounded-2xl bg-gradient-to-br from-coral via-amber-400 to-emerald-400">
+        {event.imageUrl ? (
+          <img src={event.imageUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-4xl font-black text-white/90">{initials || "4N"}</div>
+        )}
+      </div>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
@@ -37,7 +45,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
         </div>
       </div>
       <div className="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
-        <p className="flex items-center gap-2"><CalendarDays size={16} /> {displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>
+        <p className="flex items-center gap-2"><CalendarDays size={16} /> {shortScheduleSummary(event)}</p>
         <p className="flex items-center gap-2"><MapPin size={16} /> {[event.venueName, event.address, event.city, event.state].filter(Boolean).join(" · ") || "Location not set"}</p>
       </div>
       <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">

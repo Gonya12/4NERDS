@@ -1,5 +1,5 @@
 import Dexie, { type Table } from "dexie";
-import type { AppSettings, Event, EventDecision, GeocodeCache, Organizer, ParsedEventCandidate, ScrapeLog, Source, Worker } from "../../types/models";
+import type { AppSettings, Event, EventDecision, GeocodeCache, Location, Organizer, ParsedEventCandidate, ScrapeLog, Source, Worker } from "../../types/models";
 import { nowIso } from "../../utils/normalize";
 
 class FourNerdsDb extends Dexie {
@@ -12,6 +12,7 @@ class FourNerdsDb extends Dexie {
   scrapeLogs!: Table<ScrapeLog, string>;
   eventDecisions!: Table<EventDecision, string>;
   workers!: Table<Worker, string>;
+  locations!: Table<Location, string>;
 
   constructor() {
     super("fourNerdsEventTracker");
@@ -70,7 +71,20 @@ class FourNerdsDb extends Dexie {
       geocodes: "address",
       scrapeLogs: "id, sourceId, classification, createdAt",
       eventDecisions: "id, eventId, userName, decision",
-      workers: "id, name, active"
+      workers: "id, name, active",
+      locations: "id, name"
+    });
+    this.version(7).stores({
+      events: "id, startDate, registrationStatus",
+      organizers: "id, name",
+      sources: "id, type, enabled, organizerId",
+      candidates: "id, reviewStatus, sourceId, createdAt, classification",
+      settings: "id",
+      geocodes: "address",
+      scrapeLogs: "id, sourceId, classification, createdAt",
+      eventDecisions: "id, eventId, userName, decision",
+      workers: "id, name, active",
+      locations: "id, name"
     });
   }
 }

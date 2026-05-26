@@ -2,15 +2,17 @@ import { Download, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
 import { exportBackup, importBackup } from "../services/storage/backupService";
+import { deleteLocation, listLocations, saveLocation } from "../services/database/locationRepository";
 import { getSupabaseStatus, testSupabaseConnection } from "../utils/supabase";
 import { useTheme } from "../services/theme/ThemeProvider";
 import type { ThemePreference } from "../services/theme/themeService";
-import type { Worker } from "../types/models";
+import type { Location, Worker } from "../types/models";
 import { nowIso } from "../utils/normalize";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [newWorker, setNewWorker] = useState("");
+  const [locations, setLocations] = useState<Location[]>([]);
   const [syncStatus, setSyncStatus] = useState(getSupabaseStatus());
   const [syncMessage, setSyncMessage] = useState("");
   const { theme, setTheme } = useTheme();
@@ -19,6 +21,7 @@ export function SettingsPage() {
   async function load() {
     try {
       setWorkers(await listWorkers());
+      setLocations(await listLocations());
       setSyncStatus(getSupabaseStatus());
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : "Unable to load sync data.");
@@ -32,6 +35,12 @@ export function SettingsPage() {
     if (!newWorker.trim()) return;
     await addWorker(newWorker);
     setNewWorker("");
+    await load();
+  }
+
+  async function addLocationRow() {
+    const timestamp = nowIso();
+    await saveLocation({ id: crypto.randomUUID(), name: "New Location", createdAt: timestamp, updatedAt: timestamp });
     await load();
   }
 
@@ -188,6 +197,33 @@ export function SettingsPage() {
               <button onClick={async () => { await deleteWorker(worker.id); await load(); }} className="rounded-lg p-2 text-rose-700"><Trash2 size={16} /></button>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-coral">Common Locations</p>
+            <h2 className="font-black text-ink dark:text-white">Saved Places</h2>
+          </div>
+          <button onClick={addLocationRow} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral"><Plus size={15} /> Add</button>
+        </div>
+        <div className="space-y-3">
+          {locations.map((location) => (
+            <div key={location.id} className="space-y-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+              <input value={location.name} onChange={async (e) => { await saveLocation({ ...location, name: e.target.value }); await load(); }} placeholder="Name" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <input value={location.venueName || ""} onChange={async (e) => { await saveLocation({ ...location, venueName: e.target.value }); await load(); }} placeholder="Venue name" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <input value={location.address || ""} onChange={async (e) => { await saveLocation({ ...location, address: e.target.value }); await load(); }} placeholder="Address" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <div className="grid grid-cols-3 gap-2">
+                <input value={location.city || ""} onChange={async (e) => { await saveLocation({ ...location, city: e.target.value }); await load(); }} placeholder="City" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <input value={location.state || ""} onChange={async (e) => { await saveLocation({ ...location, state: e.target.value }); await load(); }} placeholder="State" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                <input value={location.zip || ""} onChange={async (e) => { await saveLocation({ ...location, zip: e.target.value }); await load(); }} placeholder="ZIP" className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+              <input value={location.instagramHandle || ""} onChange={async (e) => { await saveLocation({ ...location, instagramHandle: e.target.value }); await load(); }} placeholder="Instagram @handle" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <button onClick={async () => { await deleteLocation(location.id); await load(); }} className="inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700"><Trash2 size={15} /> Delete Location</button>
+            </div>
+          ))}
+          {locations.length === 0 ? <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">No common locations saved yet.</p> : null}
         </div>
       </section>
 

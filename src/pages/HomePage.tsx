@@ -51,6 +51,24 @@ export function HomePage() {
         </Link>
       </section>
 
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Events</h2>
+          <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
+        </div>
+        {upcoming.length === 0 ? (
+          <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
+        ) : (
+          <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2">
+            {upcoming.slice(0, 5).map((event) => (
+              <div key={event.id} className="w-[82%] shrink-0 snap-start">
+                <EventCard event={event} workers={workers} />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {highlighted.length > 0 ? (
         <section className="rounded-2xl border border-orange-100 bg-orange-50 p-4 dark:border-orange-900/60 dark:bg-orange-950/25">
           <h2 className="font-black text-ink dark:text-white">Coming Up Soon</h2>
