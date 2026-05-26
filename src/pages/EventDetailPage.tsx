@@ -308,7 +308,7 @@ export function EventDetailPage() {
   return (
     <div className="space-y-5">
       <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
-        <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/3] sm:aspect-[16/10]" />
+        <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/5] max-h-[80vh]" />
         <p className="text-sm font-bold text-orange-300">{eventTimingStatus(event.startDate)}</p>
         <h1 className="mt-1 text-3xl font-black leading-tight">{event.name}</h1>
         <p className="mt-2 text-sm text-slate-300">{displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>

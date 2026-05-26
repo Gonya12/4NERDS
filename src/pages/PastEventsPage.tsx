@@ -66,7 +66,7 @@ export function PastEventsPage() {
           return (
             <article key={event.id} className="overflow-hidden rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
               <Link to={`/events/${event.id}`} className="block">
-                <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[16/9]" />
+                <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[4/5] max-h-[620px]" />
                 <h2 className="mt-3 text-lg font-black text-ink dark:text-white">{event.name}</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">{dateRangeSummary(event)} · {event.venueName || event.city || "Location not set"}</p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Worked by: {names(event, workers)}</p>

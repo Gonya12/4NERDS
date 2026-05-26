@@ -31,7 +31,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
 
   return (
     <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900/90">
-      <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[16/9]" />
+      <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/5] max-h-[620px]" />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
