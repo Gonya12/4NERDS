@@ -142,14 +142,14 @@ export async function removeDemoData() {
   ]);
 }
 
-const defaultWorkers = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Worker 1", "Worker 2", "Worker 3"];
+const defaultWorkers = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Slave 1", "Slave 2", "Slave 3"];
 
 export async function seedWorkers() {
   const existing = await db.workers.count();
   if (existing > 0) return;
   const timestamp = nowIso();
   await db.workers.bulkAdd(defaultWorkers.map((name) => ({
-    id: `worker_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+    id: crypto.randomUUID(),
     name,
     active: true,
     createdAt: timestamp,

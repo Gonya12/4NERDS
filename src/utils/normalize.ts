@@ -1,5 +1,6 @@
 export function id(prefix = "id") {
-  return `${prefix}_${crypto.randomUUID()}`;
+  void prefix;
+  return crypto.randomUUID();
 }
 
 export function nowIso() {

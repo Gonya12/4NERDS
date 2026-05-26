@@ -1,9 +1,9 @@
 import type { Worker } from "../../types/models";
-import { id, nowIso } from "../../utils/normalize";
+import { nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
 import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
 
-const defaultWorkerNames = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Worker 1", "Worker 2", "Worker 3"];
+const defaultWorkerNames = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Slave 1", "Slave 2", "Slave 3"];
 
 type WorkerRow = {
   id: string;
@@ -12,10 +12,6 @@ type WorkerRow = {
   created_at: string;
   updated_at: string;
 };
-
-function defaultWorkerId(name: string) {
-  return `worker_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
-}
 
 function fromRow(row: WorkerRow): Worker {
   return {
@@ -48,7 +44,6 @@ async function seedSupabaseWorkersIfEmpty() {
   if ((count || 0) > 0) return;
   const timestamp = nowIso();
   const rows = defaultWorkerNames.map((name) => ({
-    id: defaultWorkerId(name),
     name,
     active: true,
     created_at: timestamp,
@@ -99,13 +94,29 @@ export async function saveWorker(worker: Worker) {
 
 export async function addWorker(name: string) {
   const timestamp = nowIso();
-  await saveWorker({
-    id: id("worker"),
+  if (!isSupabaseConfigured || !supabase) {
+    await db.workers.add({
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      active: true,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    return;
+  }
+
+  const { error } = await supabase.from("workers").insert({
     name: name.trim(),
     active: true,
-    createdAt: timestamp,
-    updatedAt: timestamp
+    created_at: timestamp,
+    updated_at: timestamp
   });
+  if (error) {
+    setSupabaseStatus({ connected: false, error: error.message });
+    console.error("Supabase error:", error.message);
+    throw error;
+  }
+  setSupabaseStatus({ connected: true, error: "", synced: true });
 }
 
 export async function deleteWorker(workerId: string) {

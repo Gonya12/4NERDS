@@ -1,13 +1,15 @@
+create extension if not exists pgcrypto;
+
 create table if not exists public.workers (
-  id text primary key,
-  name text not null,
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
   active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 create table if not exists public.events (
-  id text primary key,
+  id uuid primary key default gen_random_uuid(),
   name text not null,
   start_date date not null,
   end_date date,
@@ -26,56 +28,36 @@ create table if not exists public.events (
   updated_at timestamptz not null default now()
 );
 
--- Compatibility with the older JSON demo schema, if it already exists.
-alter table public.events add column if not exists name text;
-alter table public.events add column if not exists start_date date;
-alter table public.events add column if not exists end_date date;
-alter table public.events add column if not exists start_time text;
-alter table public.events add column if not exists end_time text;
-alter table public.events add column if not exists venue_name text;
-alter table public.events add column if not exists address text;
-alter table public.events add column if not exists city text;
-alter table public.events add column if not exists state text;
-alter table public.events add column if not exists registration_status text not null default 'unknown';
-alter table public.events add column if not exists registration_url text;
-alter table public.events add column if not exists source_url text;
-alter table public.events add column if not exists notes text;
-alter table public.events add column if not exists event_cost numeric(10, 2) not null default 0;
-alter table public.events add column if not exists created_at timestamptz not null default now();
-alter table public.events add column if not exists updated_at timestamptz not null default now();
-
-do $$
-begin
-  if exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'events'
-      and column_name = 'payload'
-  ) then
-    alter table public.events alter column payload drop not null;
-  end if;
-end $$;
-
 create table if not exists public.event_workers (
-  id text primary key,
-  event_id text not null references public.events(id) on delete cascade,
-  worker_id text not null references public.workers(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  worker_id uuid not null references public.workers(id) on delete cascade,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(event_id, worker_id)
 );
 
 create table if not exists public.payment_records (
-  id text primary key,
-  event_id text not null references public.events(id) on delete cascade,
-  worker_id text not null references public.workers(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  worker_id uuid not null references public.workers(id) on delete cascade,
   amount_paid numeric(10, 2) not null default 0,
   paid_at date,
   note text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+insert into public.workers (name, active)
+values
+  ('Gonzalo', true),
+  ('Thiago', true),
+  ('Ivan', true),
+  ('Nahuel', true),
+  ('Slave 1', true),
+  ('Slave 2', true),
+  ('Slave 3', true)
+on conflict (name) do nothing;
 
 alter table public.workers replica identity full;
 alter table public.events replica identity full;

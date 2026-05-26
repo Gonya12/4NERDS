@@ -182,7 +182,6 @@ export async function saveEvent(event: Event) {
   if (savedEvent.confirmedWorkerIds.length) {
     const timestamp = nowIso();
     const rows = savedEvent.confirmedWorkerIds.map((workerId) => ({
-      id: `${savedEvent.id}_${workerId}`,
       event_id: savedEvent.id,
       worker_id: workerId,
       created_at: timestamp,
@@ -235,9 +234,9 @@ export async function clearEventsAndResetWorkers() {
   }
 
   const results = await Promise.all([
-    supabase.from("payment_records").delete().neq("id", ""),
-    supabase.from("event_workers").delete().neq("id", ""),
-    supabase.from("events").delete().neq("id", "")
+    supabase.from("payment_records").delete().not("id", "is", null),
+    supabase.from("event_workers").delete().not("id", "is", null),
+    supabase.from("events").delete().not("id", "is", null)
   ]);
   const error = results.find((result) => result.error)?.error;
   if (error) {
