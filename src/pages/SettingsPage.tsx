@@ -1,9 +1,11 @@
-import { Download, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { BarChart3, Bell, Download, Images, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
 import { exportBackup, importBackup } from "../services/storage/backupService";
 import { deleteLocation, listLocations, saveLocation } from "../services/database/locationRepository";
 import { getSupabaseStatus, testSupabaseConnection } from "../utils/supabase";
+import { scheduleSmartEventNotifications } from "../services/notifications/smartNotificationService";
 import { useTheme } from "../services/theme/ThemeProvider";
 import type { ThemePreference } from "../services/theme/themeService";
 import type { Location, Worker } from "../types/models";
@@ -15,6 +17,7 @@ export function SettingsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [syncStatus, setSyncStatus] = useState(getSupabaseStatus());
   const [syncMessage, setSyncMessage] = useState("");
+  const [notificationMessage, setNotificationMessage] = useState("");
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +64,17 @@ export function SettingsPage() {
     } catch (error) {
       setSyncStatus(getSupabaseStatus());
       setSyncMessage(error instanceof Error ? error.message : "Sync failed.");
+    }
+  }
+
+  async function scheduleSmartReminders() {
+    setNotificationMessage("Scheduling reminders...");
+    try {
+      const events = await listPlannerEvents();
+      const count = await scheduleSmartEventNotifications(events);
+      setNotificationMessage(count ? `Scheduled ${count} smart reminders.` : "No future reminders needed right now.");
+    } catch (error) {
+      setNotificationMessage(error instanceof Error ? error.message : "Could not schedule reminders.");
     }
   }
 
@@ -174,6 +188,27 @@ export function SettingsPage() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div>
+          <p className="text-sm font-bold text-coral">Tools</p>
+          <h2 className="font-black text-ink dark:text-white">Planner Utilities</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Link to="/analytics" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><BarChart3 size={16} /> Analytics</Link>
+          <Link to="/flyers" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Images size={16} /> Flyers</Link>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div>
+          <p className="text-sm font-bold text-coral">Smart Notifications</p>
+          <h2 className="font-black text-ink dark:text-white">Local Reminders</h2>
+        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Schedules local reminders for events tomorrow, events in 3 days, incomplete setup, payments, and staffing.</p>
+        {notificationMessage ? <p className="rounded-xl bg-slate-50 p-3 text-sm font-bold text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">{notificationMessage}</p> : null}
+        <button onClick={scheduleSmartReminders} className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><Bell size={16} /> Schedule Smart Reminders</button>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">

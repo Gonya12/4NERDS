@@ -29,6 +29,12 @@ export function EventFormPage() {
     locationId: "",
     locationInstagramHandle: "",
     organizerInstagramHandle: "",
+    packingNotes: "",
+    boothNumber: "",
+    setupTime: "",
+    parkingNotes: "",
+    floorSection: "",
+    entryInstructions: "",
     registrationStatus: "unknown" as RegistrationStatus,
     eventCost: "",
     notes: ""
@@ -63,6 +69,12 @@ export function EventFormPage() {
         locationId: event.locationId || "",
         locationInstagramHandle: event.locationInstagramHandle || "",
         organizerInstagramHandle: event.organizerInstagramHandle || "",
+        packingNotes: event.packingNotes || "",
+        boothNumber: event.boothNumber || "",
+        setupTime: event.setupTime || "",
+        parkingNotes: event.parkingNotes || "",
+        floorSection: event.floorSection || "",
+        entryInstructions: event.entryInstructions || "",
         registrationStatus: event.registrationStatus,
         eventCost: String(event.eventCost || ""),
         notes: event.notes || ""
@@ -121,6 +133,12 @@ export function EventFormPage() {
       locationId: form.locationId || undefined,
       locationInstagramHandle: form.locationInstagramHandle,
       organizerInstagramHandle: form.organizerInstagramHandle,
+      packingNotes: form.packingNotes,
+      boothNumber: form.boothNumber,
+      setupTime: form.setupTime,
+      parkingNotes: form.parkingNotes,
+      floorSection: form.floorSection,
+      entryInstructions: form.entryInstructions,
       sourceType: "manual",
       confidence: "high",
       needsReview: false,
@@ -194,6 +212,17 @@ export function EventFormPage() {
         </select>
         <input type="number" min={0} step="0.01" value={form.eventCost} onChange={(e) => setForm({ ...form, eventCost: e.target.value })} placeholder="Event/table cost" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Notes" className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3" />
+        <textarea value={form.packingNotes} onChange={(e) => setForm({ ...form, packingNotes: e.target.value })} placeholder="Inventory & packing notes" className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3" />
+        <section className="space-y-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/70">
+          <h2 className="font-black text-ink dark:text-white">Booth & Setup</h2>
+          <div className="grid grid-cols-2 gap-2">
+            <input value={form.boothNumber} onChange={(e) => setForm({ ...form, boothNumber: e.target.value })} placeholder="Booth/table #" className="rounded-xl border border-slate-200 px-3 py-3" />
+            <input value={form.setupTime} onChange={(e) => setForm({ ...form, setupTime: e.target.value })} placeholder="Setup time" className="rounded-xl border border-slate-200 px-3 py-3" />
+          </div>
+          <input value={form.floorSection} onChange={(e) => setForm({ ...form, floorSection: e.target.value })} placeholder="Floor section" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
+          <textarea value={form.parkingNotes} onChange={(e) => setForm({ ...form, parkingNotes: e.target.value })} placeholder="Parking notes" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
+          <textarea value={form.entryInstructions} onChange={(e) => setForm({ ...form, entryInstructions: e.target.value })} placeholder="Entry instructions" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
+        </section>
         <button onClick={save} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white transition active:scale-[0.99] dark:bg-coral"><Save size={18} /> Save Event</button>
       </section>
     </div>

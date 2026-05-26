@@ -49,6 +49,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
         <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><Users size={16} /> Confirmed</p>
         <p className={`mt-1 ${names.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>
         {checklist.total ? <p className="mt-2 text-xs font-bold text-slate-500 dark:text-slate-400">{checklist.completed}/{checklist.total} tasks completed</p> : null}
+        {event.packingNotes ? <p className="mt-1 text-xs font-bold text-coral">Packing notes added</p> : null}
       </div>
       <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
         <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> Event cost: {formatMoney(payment.totalCost)}</p>

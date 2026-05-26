@@ -1,4 +1,4 @@
-import { CalendarCheck, CheckCircle2, DollarSign, Edit, ExternalLink, Map, Plus, Trash2, Users, X } from "lucide-react";
+import { CalendarCheck, CheckCircle2, CopyPlus, DollarSign, Edit, ExternalLink, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EventImageUploader } from "../components/EventImageUploader";
@@ -9,6 +9,9 @@ import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } fr
 import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
 import { deleteChecklistItem, saveChecklistItem } from "../services/database/checklistRepository";
 import { emptyFinance, saveFinance } from "../services/database/financeRepository";
+import { emptyReview, saveLiveNote, saveReview, saveSalesCategory } from "../services/database/eventExtrasRepository";
+import { getEventWeather, type WeatherSummary } from "../services/weather/weatherService";
+import { departureTime, estimateDriveMinutes } from "../services/travel/travelService";
 import { getSupabaseStatus } from "../utils/supabase";
 import type { Event, EventChecklistItem, EventFinance, EventStatus, PaymentRecord, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
@@ -143,6 +146,9 @@ export function EventDetailPage() {
   const [lastSelectedWorkerIds, setLastSelectedWorkerIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
   const [newChecklistLabel, setNewChecklistLabel] = useState("");
+  const [liveNoteText, setLiveNoteText] = useState("");
+  const [weather, setWeather] = useState<WeatherSummary>();
+  const [qrUrl, setQrUrl] = useState("");
 
   async function load() {
     if (!id) return;
@@ -151,6 +157,12 @@ export function EventDetailPage() {
   }
 
   useEffect(() => { void load(); }, [id]);
+
+  useEffect(() => {
+    if (!event) return;
+    const address = [event.address, event.city, event.state].filter(Boolean).join(", ");
+    void getEventWeather(address, event.startDate).then(setWeather).catch(() => setWeather(undefined));
+  }, [event?.id, event?.address, event?.startDate]);
 
   async function saveWorkers(workerIds: string[]) {
     if (!event) return;
@@ -290,6 +302,64 @@ export function EventDetailPage() {
     }
   }
 
+  async function addLiveNote() {
+    if (!event || !liveNoteText.trim()) return;
+    const timestamp = nowIso();
+    try {
+      await saveLiveNote({ id: createId("note"), eventId: event.id, content: liveNoteText.trim(), createdAt: timestamp, updatedAt: timestamp });
+      setLiveNoteText("");
+      setEvent(await getPlannerEvent(event.id) || event);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save live note.");
+    }
+  }
+
+  async function updateSalesCategory(categoryId: string, amount: number) {
+    if (!event) return;
+    const item = (event.salesCategories || []).find((sale) => sale.id === categoryId);
+    if (!item) return;
+    try {
+      await saveSalesCategory({ ...item, amount, updatedAt: nowIso() });
+      setEvent(await getPlannerEvent(event.id) || event);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save category sale.");
+    }
+  }
+
+  async function updateReview(patch: Partial<NonNullable<Event["review"]>>) {
+    if (!event) return;
+    try {
+      const review = { ...(event.review || emptyReview(event.id)), ...patch, eventId: event.id };
+      await saveReview(review);
+      setEvent(await getPlannerEvent(event.id) || { ...event, review });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save review.");
+    }
+  }
+
+  async function duplicateEvent() {
+    if (!event) return;
+    const timestamp = nowIso();
+    const newId = createId("event");
+    const copy = {
+      ...event,
+      id: newId,
+      name: `${event.name} Copy`,
+      status: "interested" as const,
+      paymentRecords: [],
+      finance: undefined,
+      review: undefined,
+      liveNotes: [],
+      confirmedWorkerIds: event.confirmedWorkerIds || [],
+      eventDays: (event.eventDays || []).map((day) => ({ ...day, id: createId("day"), eventId: newId, createdAt: timestamp, updatedAt: timestamp })),
+      checklistItems: (event.checklistItems || []).map((item) => ({ ...item, id: createId("checklist"), eventId: newId, completed: false, createdAt: timestamp, updatedAt: timestamp })),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    await savePlannerEvent(copy);
+    navigate(`/events/${newId}/edit`);
+  }
+
   if (!event) return <div className="text-sm text-slate-500 dark:text-slate-400">Loading event...</div>;
 
   const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
@@ -300,6 +370,9 @@ export function EventDetailPage() {
   const profit = calculateEventProfit(event, finance);
   const confirmedIds = new Set(event.confirmedWorkerIds || []);
   const syncStatus = getSupabaseStatus();
+  const driveMinutes = estimateDriveMinutes(event.distanceMiles);
+  const leaveBy = departureTime(event.startDate, event.setupTime, driveMinutes);
+  const totalCategorySales = (event.salesCategories || []).reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const unconfirmedPaymentWarnings = (event.paymentRecords || [])
     .filter((record) => !confirmedIds.has(record.workerId))
@@ -354,6 +427,44 @@ export function EventDetailPage() {
         <p><strong>Notes:</strong> {event.notes || "None"}</p>
       </section>
 
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <h2 className="font-black text-ink dark:text-white">Inventory & Packing Notes</h2>
+        <textarea value={event.packingNotes || ""} onChange={(e) => savePlannerEvent({ ...event, packingNotes: e.target.value, updatedAt: nowIso() }).then(() => load())} placeholder="Bring slabs, binders, tablecloth..." className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3" />
+      </section>
+
+      <section className="space-y-2 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <h2 className="font-black text-ink dark:text-white">Booth & Setup</h2>
+        <p><strong>Booth:</strong> {event.boothNumber || "Not set"}</p>
+        <p><strong>Setup:</strong> {event.setupTime || "Not set"}</p>
+        <p><strong>Section:</strong> {event.floorSection || "Not set"}</p>
+        <p><strong>Parking:</strong> {event.parkingNotes || "Not set"}</p>
+        <p><strong>Entry:</strong> {event.entryInstructions || "Not set"}</p>
+      </section>
+
+      <section className="grid grid-cols-2 gap-3">
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <h2 className="font-black text-ink dark:text-white">Weather</h2>
+          <p className="mt-2 text-lg font-black">{weather ? `${weather.icon} ${weather.label}` : "Unavailable"}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{weather?.rainChance !== undefined ? `${weather.rainChance}% rain chance` : "Forecast appears when available."}</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <h2 className="font-black text-ink dark:text-white">Travel</h2>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{driveMinutes ? `${driveMinutes} min estimate` : "Open maps for ETA"}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{leaveBy ? `Leave by ${leaveBy}` : "Set setup time for leave-by."}</p>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><MessageSquare size={18} /> Live Team Notes</h2>
+        <div className="space-y-2">
+          {(event.liveNotes || []).slice(0, 5).map((note) => <p key={note.id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 dark:bg-slate-950/70 dark:text-slate-300">{note.content}</p>)}
+        </div>
+        <div className="flex gap-2">
+          <input value={liveNoteText} onChange={(e) => setLiveNoteText(e.target.value)} placeholder="Add a live note" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3" />
+          <button onClick={addLiveNote} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
+        </div>
+      </section>
+
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <div className="flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><CheckCircle2 size={18} /> Preparation Checklist</h2>
@@ -393,6 +504,34 @@ export function EventDetailPage() {
           <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Expenses</p><p className="font-black">{formatMoney(profit.totalExpenses)}</p></div>
           <div className={`rounded-xl p-3 ${profit.netProfit >= 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"}`}><p>Profit</p><p className="font-black">{formatMoney(profit.netProfit)}</p></div>
         </div>
+        <div className="space-y-2">
+          <h3 className="text-sm font-black text-ink dark:text-white">Sales by Category</h3>
+          {(event.salesCategories || []).map((sale) => (
+            <div key={sale.id} className="grid grid-cols-[1fr_120px] items-center gap-2">
+              <span className="text-sm text-slate-600 dark:text-slate-300">{sale.category}</span>
+              <input type="number" min={0} step="0.01" value={sale.amount || ""} onChange={(e) => updateSalesCategory(sale.id, Number(e.target.value || 0))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+          ))}
+          <p className="rounded-xl bg-slate-50 p-3 text-sm font-bold text-ink dark:bg-slate-950/70 dark:text-white">Category total: {formatMoney(totalCategorySales)}</p>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Star size={18} /> Event Review</h2>
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            ["overallRating", "Overall"],
+            ["trafficRating", "Traffic"],
+            ["organizerRating", "Organizer"],
+            ["profitRating", "Profit"]
+          ].map(([key, label]) => (
+            <label key={key} className="text-xs font-bold text-slate-500 dark:text-slate-400">
+              {label}
+              <input type="number" min={0} max={5} step={0.5} value={Number((event.review as any)?.[key] || "")} onChange={(e) => updateReview({ [key]: Number(e.target.value || 0) } as any)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+            </label>
+          ))}
+        </div>
+        <textarea value={event.review?.notes || ""} onChange={(e) => updateReview({ notes: e.target.value })} placeholder="Great traffic but expensive tables..." className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3" />
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
@@ -460,8 +599,23 @@ export function EventDetailPage() {
         {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><ExternalLink size={16} /> Source</a> : null}
         {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={16} /> Map</a> : null}
         <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={16} /> Edit</Link>
+        <button onClick={duplicateEvent} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CopyPlus size={16} /> Duplicate</button>
+        <button onClick={() => setQrUrl(window.location.href)} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Event QR</button>
+        {destination ? <button onClick={() => setQrUrl(googleMapsDirectionsLink(destination))} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Map QR</button> : null}
+        {event.registrationUrl ? <button onClick={() => setQrUrl(event.registrationUrl || "")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Pay/Register QR</button> : null}
+        <button onClick={() => setQrUrl("https://www.instagram.com/4nerds")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> 4 Nerds QR</button>
         <button onClick={remove} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700"><Trash2 size={16} /> Delete Event</button>
       </section>
+
+      {qrUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <section className="w-full max-w-xs rounded-3xl bg-white p-5 text-center shadow-2xl dark:bg-slate-900">
+            <button onClick={() => setQrUrl("")} className="ml-auto block rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+            <img alt="QR code" className="mx-auto mt-3 h-56 w-56" src={`https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(qrUrl)}`} />
+            <p className="mt-3 break-all text-sm font-bold text-ink dark:text-white">{qrUrl}</p>
+          </section>
+        </div>
+      ) : null}
 
       {showWorkers ? <WorkerModal event={event} workers={workers} onClose={() => setShowWorkers(false)} onSave={saveWorkers} /> : null}
       {editingPayment ? <PaymentModal event={event} workers={workers} payment={editingPayment === "new" ? undefined : editingPayment} onClose={() => setEditingPayment(null)} onSave={savePayment} /> : null}

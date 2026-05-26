@@ -54,8 +54,17 @@ export interface Event {
   locationInstagramHandle?: string;
   organizerInstagramHandle?: string;
   status?: EventStatus;
+  packingNotes?: string;
+  boothNumber?: string;
+  setupTime?: string;
+  parkingNotes?: string;
+  floorSection?: string;
+  entryInstructions?: string;
   checklistItems?: EventChecklistItem[];
   finance?: EventFinance;
+  liveNotes?: EventLiveNote[];
+  salesCategories?: EventSalesCategory[];
+  review?: EventReview;
   confirmedWorkerIds?: string[];
   eventCost?: number;
   paymentRecords?: PaymentRecord[];
@@ -109,6 +118,38 @@ export interface EventFinance {
   foodCost: number;
   miscCost: number;
   profitNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventLiveNote {
+  id: string;
+  eventId: string;
+  workerId?: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SalesCategory = "Pokemon" | "One Piece" | "Slabs" | "Accessories" | "Sealed" | "Other";
+
+export interface EventSalesCategory {
+  id: string;
+  eventId: string;
+  category: SalesCategory;
+  amount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventReview {
+  id: string;
+  eventId: string;
+  overallRating: number;
+  trafficRating: number;
+  organizerRating: number;
+  profitRating: number;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }

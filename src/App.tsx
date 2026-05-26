@@ -5,7 +5,9 @@ import { BottomNav } from "./components/BottomNav";
 import { CalendarPage } from "./pages/CalendarPage";
 import { EventDetailPage } from "./pages/EventDetailPage";
 import { EventFormPage } from "./pages/EventFormPage";
+import { FlyerGalleryPage } from "./pages/FlyerGalleryPage";
 import { HomePage } from "./pages/HomePage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { PastEventsPage } from "./pages/PastEventsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
@@ -58,6 +60,8 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />
           <Route path="/past" element={<PastEventsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/flyers" element={<FlyerGalleryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/events/new" element={<EventFormPage />} />
           <Route path="/events/:id" element={<EventDetailPage />} />

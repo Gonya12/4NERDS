@@ -5,6 +5,7 @@ import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/s
 import { deletePaymentRecord, listPaymentRecords, savePaymentRecord } from "./paymentRepository";
 import { getFinance } from "./financeRepository";
 import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from "./checklistRepository";
+import { getReview, listLiveNotes, seedSalesCategories } from "./eventExtrasRepository";
 
 type EventRow = {
   id: string;
@@ -27,6 +28,12 @@ type EventRow = {
   location_instagram_handle?: string | null;
   organizer_instagram_handle?: string | null;
   status?: EventStatus | null;
+  packing_notes?: string | null;
+  booth_number?: string | null;
+  setup_time?: string | null;
+  parking_notes?: string | null;
+  floor_section?: string | null;
+  entry_instructions?: string | null;
   event_cost: number;
   created_at: string;
   updated_at: string;
@@ -117,6 +124,12 @@ function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [
     locationInstagramHandle: row.location_instagram_handle || undefined,
     organizerInstagramHandle: row.organizer_instagram_handle || undefined,
     status: row.status || "interested",
+    packingNotes: row.packing_notes || undefined,
+    boothNumber: row.booth_number || undefined,
+    setupTime: row.setup_time || undefined,
+    parkingNotes: row.parking_notes || undefined,
+    floorSection: row.floor_section || undefined,
+    entryInstructions: row.entry_instructions || undefined,
     eventDays,
     confirmedWorkerIds,
     eventCost: Number(row.event_cost || 0),
@@ -157,6 +170,12 @@ function toRow(event: Event): EventRow {
     location_instagram_handle: event.locationInstagramHandle || null,
     organizer_instagram_handle: event.organizerInstagramHandle || null,
     status: event.status || "interested",
+    packing_notes: event.packingNotes || null,
+    booth_number: event.boothNumber || null,
+    setup_time: event.setupTime || null,
+    parking_notes: event.parkingNotes || null,
+    floor_section: event.floorSection || null,
+    entry_instructions: event.entryInstructions || null,
     event_cost: Number(event.eventCost || 0),
     created_at: event.createdAt,
     updated_at: event.updatedAt
@@ -228,6 +247,9 @@ export async function listEvents() {
     const event = fromRow(eventRow, workersByEvent.get(eventRow.id) || [], await listPaymentRecords(eventRow.id), daysByEvent.get(eventRow.id) || []);
     event.checklistItems = await listChecklistItems(eventRow.id);
     event.finance = await getFinance(eventRow.id);
+    event.liveNotes = await listLiveNotes(eventRow.id);
+    event.salesCategories = await seedSalesCategories(eventRow.id);
+    event.review = await getReview(eventRow.id);
     return event;
   }));
   console.log(`Loaded ${events.length} events from Supabase`);
@@ -272,6 +294,9 @@ export async function getEvent(eventId: string) {
   const event = fromRow(data as EventRow, (eventWorkers || []).map((row) => (row as { worker_id: string }).worker_id), await listPaymentRecords(eventId), (dayRows || []).map((row) => fromDayRow(row as EventDayRow)));
   event.checklistItems = await seedChecklistIfEmpty(eventId);
   event.finance = await getFinance(eventId);
+  event.liveNotes = await listLiveNotes(eventId);
+  event.salesCategories = await seedSalesCategories(eventId);
+  event.review = await getReview(eventId);
   return event;
 }
 
