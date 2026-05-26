@@ -1,38 +1,44 @@
-import { CalendarCheck, CheckCircle2, CopyPlus, DollarSign, Edit, ExternalLink, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CalendarCheck, CheckCircle2, ChevronDown, CopyPlus, DollarSign, Edit, ExternalLink, ImagePlus, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { EventImageUploader } from "../components/EventImageUploader";
 import { EventImageFrame } from "../components/EventImageFrame";
+import { EventImageUploader } from "../components/EventImageUploader";
 import { StatusChip } from "../components/StatusChip";
+import { deleteChecklistItem, saveChecklistItem } from "../services/database/checklistRepository";
+import { emptyReview, saveLiveNote, saveReview, saveSalesCategory } from "../services/database/eventExtrasRepository";
+import { emptyFinance, saveFinance } from "../services/database/financeRepository";
+import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
-import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
-import { deleteChecklistItem, saveChecklistItem } from "../services/database/checklistRepository";
-import { emptyFinance, saveFinance } from "../services/database/financeRepository";
-import { emptyReview, saveLiveNote, saveReview, saveSalesCategory } from "../services/database/eventExtrasRepository";
-import { getEventWeather, type WeatherSummary } from "../services/weather/weatherService";
 import { departureTime, estimateDriveMinutes } from "../services/travel/travelService";
-import { getSupabaseStatus } from "../utils/supabase";
+import { getEventWeather, type WeatherSummary } from "../services/weather/weatherService";
 import type { Event, EventChecklistItem, EventFinance, EventStatus, PaymentRecord, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
-import { generateInstagramCaption } from "../utils/instagramCaption";
-import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { calculateEventProfit, checklistProgress } from "../utils/financeMath";
+import { generateInstagramCaption } from "../utils/instagramCaption";
 import { id as createId, nowIso } from "../utils/normalize";
+import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 
-function WorkerModal({
-  event,
-  workers,
-  onClose,
-  onSave
-}: {
-  event: Event;
-  workers: Worker[];
-  onClose: () => void;
-  onSave: (ids: string[]) => void;
-}) {
+function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="overflow-hidden rounded-2xl bg-white/90 shadow-soft dark:bg-slate-900">
+      <button onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-3 p-4 text-left">
+        <span className="text-coral">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-black text-ink dark:text-white">{title}</span>
+          <span className="mt-0.5 block truncate text-xs font-bold text-slate-500 dark:text-slate-400">{summary}</span>
+        </span>
+        <ChevronDown size={18} className={`shrink-0 text-slate-400 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? <div className="border-t border-slate-100 p-4 pt-3 dark:border-slate-800">{children}</div> : null}
+    </section>
+  );
+}
+
+function WorkerModal({ event, workers, onClose, onSave }: { event: Event; workers: Worker[]; onClose: () => void; onSave: (ids: string[]) => void }) {
   const [selected, setSelected] = useState<string[]>(event.confirmedWorkerIds || []);
 
   function toggle(workerId: string) {
@@ -53,11 +59,7 @@ function WorkerModal({
           {workers.filter((worker) => worker.active).map((worker) => {
             const active = selected.includes(worker.id);
             return (
-              <button
-                key={worker.id}
-                onClick={() => toggle(worker.id)}
-                className={`rounded-full px-4 py-2 text-sm font-bold transition ${active ? "bg-ink text-white shadow-soft dark:bg-coral" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}`}
-              >
+              <button key={worker.id} onClick={() => toggle(worker.id)} className={`rounded-full px-4 py-2 text-sm font-bold transition ${active ? "bg-ink text-white shadow-soft dark:bg-coral" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}`}>
                 {worker.name}
               </button>
             );
@@ -72,21 +74,8 @@ function WorkerModal({
   );
 }
 
-function PaymentModal({
-  event,
-  workers,
-  payment,
-  onClose,
-  onSave
-}: {
-  event: Event;
-  workers: Worker[];
-  payment?: PaymentRecord;
-  onClose: () => void;
-  onSave: (payment: PaymentRecord) => void;
-}) {
+function PaymentModal({ event, workers, payment, onClose, onSave }: { event: Event; workers: Worker[]; payment?: PaymentRecord; onClose: () => void; onSave: (payment: PaymentRecord) => void }) {
   const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
-  const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const fallbackWorkerId = confirmed[0]?.id || workers[0]?.id || "";
   const [workerId, setWorkerId] = useState(payment?.workerId || fallbackWorkerId);
   const [amountPaid, setAmountPaid] = useState(String(payment?.amountPaid || ""));
@@ -118,13 +107,13 @@ function PaymentModal({
           <button onClick={onClose} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
         </div>
         <div className="mt-5 space-y-3">
-          <select value={workerId} onChange={(e) => setWorkerId(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3">
+          <select value={workerId} onChange={(e) => setWorkerId(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
             {confirmed.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
             {workers.filter((worker) => !(event.confirmedWorkerIds || []).includes(worker.id)).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} (not confirmed)</option>)}
           </select>
-          <input type="number" min={0} step="0.01" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} placeholder="Amount paid" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3" />
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} placeholder="Amount paid" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
         </div>
         <div className="mt-6 grid grid-cols-2 gap-3">
           <button onClick={onClose} className="min-h-12 rounded-xl bg-slate-100 font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
@@ -143,12 +132,14 @@ export function EventDetailPage() {
   const [showWorkers, setShowWorkers] = useState(false);
   const [editingPayment, setEditingPayment] = useState<PaymentRecord | "new" | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [lastSelectedWorkerIds, setLastSelectedWorkerIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
   const [newChecklistLabel, setNewChecklistLabel] = useState("");
   const [liveNoteText, setLiveNoteText] = useState("");
   const [weather, setWeather] = useState<WeatherSummary>();
   const [qrUrl, setQrUrl] = useState("");
+  const captionRef = useRef<HTMLElement>(null);
+  const paymentRef = useRef<HTMLElement>(null);
+  const qrRef = useRef<HTMLElement>(null);
 
   async function load() {
     if (!id) return;
@@ -162,12 +153,15 @@ export function EventDetailPage() {
     if (!event) return;
     const address = [event.address, event.city, event.state].filter(Boolean).join(", ");
     void getEventWeather(address, event.startDate).then(setWeather).catch(() => setWeather(undefined));
-  }, [event?.id, event?.address, event?.startDate]);
+  }, [event?.id, event?.address, event?.city, event?.state, event?.startDate]);
+
+  function jump(ref: React.RefObject<HTMLElement | null>) {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function saveWorkers(workerIds: string[]) {
     if (!event) return;
     setErrorMessage("");
-    setLastSelectedWorkerIds(workerIds);
     console.log("selectedWorkerIds", workerIds);
     console.log("eventId", event.id);
     console.log("saving availability");
@@ -178,11 +172,7 @@ export function EventDetailPage() {
       setEvent(refreshed || updated);
       setShowWorkers(false);
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : typeof error === "object" && error && "message" in error
-          ? String((error as { message: unknown }).message)
-          : JSON.stringify(error);
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
       console.error("Supabase error:", message);
       setErrorMessage(message);
     }
@@ -191,9 +181,7 @@ export function EventDetailPage() {
   async function savePayment(payment: PaymentRecord) {
     if (!event) return;
     const records = event.paymentRecords || [];
-    const updatedRecords = records.some((record) => record.id === payment.id)
-      ? records.map((record) => record.id === payment.id ? payment : record)
-      : [...records, payment];
+    const updatedRecords = records.some((record) => record.id === payment.id) ? records.map((record) => record.id === payment.id ? payment : record) : [...records, payment];
     const updated = { ...event, paymentRecords: updatedRecords, updatedAt: nowIso() };
     try {
       await savePaymentRecord(payment);
@@ -201,11 +189,7 @@ export function EventDetailPage() {
       setEvent(refreshed || updated);
       setEditingPayment(null);
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : typeof error === "object" && error && "message" in error
-          ? String((error as { message: unknown }).message)
-          : JSON.stringify(error);
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
       console.error("Supabase error:", message);
       setErrorMessage(message);
     }
@@ -219,13 +203,7 @@ export function EventDetailPage() {
       const refreshed = await getPlannerEvent(event.id);
       setEvent(refreshed || updated);
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : typeof error === "object" && error && "message" in error
-          ? String((error as { message: unknown }).message)
-          : JSON.stringify(error);
-      console.error("Supabase error:", message);
-      setErrorMessage(message);
+      setErrorMessage(error instanceof Error ? error.message : "Could not delete payment.");
     }
   }
 
@@ -259,14 +237,7 @@ export function EventDetailPage() {
   async function addChecklistItem() {
     if (!event || !newChecklistLabel.trim()) return;
     const timestamp = nowIso();
-    await saveChecklist({
-      id: createId("checklist"),
-      eventId: event.id,
-      label: newChecklistLabel.trim(),
-      completed: false,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    });
+    await saveChecklist({ id: createId("checklist"), eventId: event.id, label: newChecklistLabel.trim(), completed: false, createdAt: timestamp, updatedAt: timestamp });
     setNewChecklistLabel("");
   }
 
@@ -369,184 +340,69 @@ export function EventDetailPage() {
   const finance = event.finance || emptyFinance(event.id);
   const profit = calculateEventProfit(event, finance);
   const confirmedIds = new Set(event.confirmedWorkerIds || []);
-  const syncStatus = getSupabaseStatus();
   const driveMinutes = estimateDriveMinutes(event.distanceMiles);
   const leaveBy = departureTime(event.startDate, event.setupTime, driveMinutes);
   const totalCategorySales = (event.salesCategories || []).reduce((sum, sale) => sum + Number(sale.amount || 0), 0);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  const unconfirmedPaymentWarnings = (event.paymentRecords || [])
-    .filter((record) => !confirmedIds.has(record.workerId))
-    .map((record) => workers.find((worker) => worker.id === record.workerId)?.name || "Someone");
+  const unconfirmedPaymentWarnings = (event.paymentRecords || []).filter((record) => !confirmedIds.has(record.workerId)).map((record) => workers.find((worker) => worker.id === record.workerId)?.name || "Someone");
+  const workerSummary = confirmed.length ? confirmed.map((worker) => worker.name).join(", ") : "Nobody confirmed yet";
+  const scheduleSummary = eventDays(event).map((day) => formatEventDay(day)).join(" / ");
+  const boothSummary = event.boothNumber || event.floorSection || event.setupTime || "Not set";
+  const notesSummary = event.packingNotes ? "Packing notes added" : "No notes yet";
+  const reviewAverage = event.review ? [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).reduce((sum, value) => sum + Number(value), 0) / Math.max(1, [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).length) : 0;
 
   return (
-    <div className="space-y-5">
-      <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
-        <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/5] max-h-[80vh]" />
-        <p className="text-sm font-bold text-orange-300">{eventTimingStatus(event.startDate)}</p>
-        <h1 className="mt-1 text-3xl font-black leading-tight">{event.name}</h1>
-        <p className="mt-2 text-sm text-slate-300">{displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>
+    <div className="space-y-4">
+      <header className="overflow-hidden rounded-3xl bg-ink text-white shadow-soft dark:bg-slate-900">
+        <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[4/5] max-h-[72vh] rounded-none" />
+        <div className="space-y-3 p-4">
+          <div className="flex flex-wrap gap-2">
+            <StatusChip value={event.registrationStatus} />
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white">{eventTimingStatus(event.startDate)}</span>
+            <select value={event.status || "interested"} onChange={(e) => updateEventStatus(e.target.value as EventStatus)} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-bold text-white">
+              {["interested", "registered", "paid", "preparing", "completed", "skipped"].map((status) => <option key={status} value={status} className="text-ink">{status}</option>)}
+            </select>
+          </div>
+          <div>
+            <h1 className="text-3xl font-black leading-tight">{event.name}</h1>
+            <p className="mt-1 text-sm text-slate-300">{displayDate(event.startDate)}{event.startTime ? ` | ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>
+            <p className="mt-2 text-sm font-bold text-orange-200">{workerSummary}</p>
+          </div>
+        </div>
       </header>
 
-      <section className="flex flex-wrap gap-2 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <StatusChip value={event.registrationStatus} />
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{eventTimingStatus(event.startDate)}</span>
-        <select value={event.status || "interested"} onChange={(e) => updateEventStatus(e.target.value as EventStatus)} className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold">
-          {["interested", "registered", "paid", "preparing", "completed", "skipped"].map((status) => <option key={status} value={status}>{status}</option>)}
-        </select>
+      <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
+          {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
+          <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
+          <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
+          <button onClick={() => jump(qrRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={15} /> QR</button>
+          <button onClick={duplicateEvent} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CopyPlus size={15} /> Duplicate</button>
+        </div>
+      </nav>
+
+      {errorMessage ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <h2 className="font-black text-ink dark:text-white">Schedule</h2>
+        <div className="space-y-1">{eventDays(event).map((day) => <p key={day.id}>{formatEventDay(day)}</p>)}</div>
+        <div className="grid gap-1 pt-2">
+          <p><strong>Venue:</strong> {event.venueName || "Not set"}</p>
+          <p><strong>Address:</strong> {[event.address, event.city, event.state].filter(Boolean).join(", ") || "Not set"}</p>
+        </div>
       </section>
 
       <section className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Users size={18} /> Confirmed Workers</h2>
-        <p className={`mt-2 text-sm ${confirmed.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{confirmed.length ? confirmed.map((worker) => worker.name).join(", ") : "Nobody confirmed yet"}</p>
-        {errorMessage ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
-        <button onClick={() => setShowWorkers(true)} className="mt-4 min-h-12 w-full rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
+        <p className={`mt-2 text-sm ${confirmed.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{workerSummary}</p>
+        <button onClick={() => setShowWorkers(true)} className="mt-4 min-h-11 w-full rounded-xl bg-coral font-black text-white transition active:scale-[0.99]">I can work this event</button>
       </section>
 
-      <section className="space-y-2 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 shadow-soft dark:bg-slate-900 dark:text-slate-300">
-        <h2 className="text-sm font-black text-ink dark:text-white">Availability Debug</h2>
-        <p><strong>Current event ID:</strong> {event.id}</p>
-        <p><strong>Current selected worker IDs:</strong> {lastSelectedWorkerIds.length ? lastSelectedWorkerIds.join(", ") : "None selected this session"}</p>
-        <p><strong>Current Supabase mode:</strong> {syncStatus.mode}</p>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
-        <EventImageUploader eventId={event.id} imageUrl={event.imageUrl} onChange={saveEventImage} />
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
-        <div>
-          <strong className="text-ink dark:text-white">Schedule:</strong>
-          <div className="mt-2 space-y-1">
-            {eventDays(event).map((day) => <p key={day.id}>{formatEventDay(day)}</p>)}
-          </div>
-        </div>
-        <p><strong>Venue:</strong> {event.venueName || "Not set"}</p>
-        <p><strong>Address:</strong> {[event.address, event.city, event.state].filter(Boolean).join(", ") || "Not set"}</p>
-        <p><strong>Vendor registration:</strong> {event.registrationUrl || "Not set"}</p>
-        <p><strong>Source:</strong> {event.sourceUrl || "Not set"}</p>
-        <p><strong>Notes:</strong> {event.notes || "None"}</p>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
-        <h2 className="font-black text-ink dark:text-white">Inventory & Packing Notes</h2>
-        <textarea value={event.packingNotes || ""} onChange={(e) => savePlannerEvent({ ...event, packingNotes: e.target.value, updatedAt: nowIso() }).then(() => load())} placeholder="Bring slabs, binders, tablecloth..." className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3" />
-      </section>
-
-      <section className="space-y-2 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
-        <h2 className="font-black text-ink dark:text-white">Booth & Setup</h2>
-        <p><strong>Booth:</strong> {event.boothNumber || "Not set"}</p>
-        <p><strong>Setup:</strong> {event.setupTime || "Not set"}</p>
-        <p><strong>Section:</strong> {event.floorSection || "Not set"}</p>
-        <p><strong>Parking:</strong> {event.parkingNotes || "Not set"}</p>
-        <p><strong>Entry:</strong> {event.entryInstructions || "Not set"}</p>
-      </section>
-
-      <section className="grid grid-cols-2 gap-3">
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-          <h2 className="font-black text-ink dark:text-white">Weather</h2>
-          <p className="mt-2 text-lg font-black">{weather ? `${weather.icon} ${weather.label}` : "Unavailable"}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{weather?.rainChance !== undefined ? `${weather.rainChance}% rain chance` : "Forecast appears when available."}</p>
-        </div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-          <h2 className="font-black text-ink dark:text-white">Travel</h2>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{driveMinutes ? `${driveMinutes} min estimate` : "Open maps for ETA"}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{leaveBy ? `Leave by ${leaveBy}` : "Set setup time for leave-by."}</p>
-        </div>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><MessageSquare size={18} /> Live Team Notes</h2>
-        <div className="space-y-2">
-          {(event.liveNotes || []).slice(0, 5).map((note) => <p key={note.id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 dark:bg-slate-950/70 dark:text-slate-300">{note.content}</p>)}
-        </div>
-        <div className="flex gap-2">
-          <input value={liveNoteText} onChange={(e) => setLiveNoteText(e.target.value)} placeholder="Add a live note" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3" />
-          <button onClick={addLiveNote} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
-        </div>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><CheckCircle2 size={18} /> Preparation Checklist</h2>
-          <span className="text-xs font-black text-slate-500 dark:text-slate-400">{checklist.completed}/{checklist.total}</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-          <div className="h-full rounded-full bg-coral transition-all" style={{ width: `${checklist.percent}%` }} />
-        </div>
-        <div className="space-y-2">
-          {(event.checklistItems || []).map((item) => (
-            <div key={item.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70">
-              <input type="checkbox" checked={item.completed} onChange={(e) => saveChecklist({ ...item, completed: e.target.checked, updatedAt: nowIso() })} />
-              <span className={`min-w-0 flex-1 text-sm ${item.completed ? "text-slate-400 line-through" : "text-slate-700 dark:text-slate-200"}`}>{item.label}</span>
-              <button onClick={() => removeChecklistItem(item.id)} className="rounded-lg p-2 text-rose-700"><Trash2 size={14} /></button>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <input value={newChecklistLabel} onChange={(e) => setNewChecklistLabel(e.target.value)} placeholder="Add custom item" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3" />
-          <button onClick={addChecklistItem} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
-        </div>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><DollarSign size={18} /> Profit Tracker</h2>
-        <div className="grid grid-cols-2 gap-2">
-          <input type="number" min={0} step="0.01" value={finance.totalSales || ""} onChange={(e) => saveFinanceField({ totalSales: Number(e.target.value || 0) })} placeholder="Total sales" className="rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="number" min={0} step="0.01" value={event.eventCost || ""} onChange={(e) => savePlannerEvent({ ...event, eventCost: Number(e.target.value || 0), updatedAt: nowIso() }).then(() => load())} placeholder="Event/table cost" className="rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="number" min={0} step="0.01" value={finance.gasCost || ""} onChange={(e) => saveFinanceField({ gasCost: Number(e.target.value || 0) })} placeholder="Gas" className="rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="number" min={0} step="0.01" value={finance.foodCost || ""} onChange={(e) => saveFinanceField({ foodCost: Number(e.target.value || 0) })} placeholder="Food" className="rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="number" min={0} step="0.01" value={finance.miscCost || ""} onChange={(e) => saveFinanceField({ miscCost: Number(e.target.value || 0) })} placeholder="Misc" className="rounded-xl border border-slate-200 px-3 py-3" />
-          <input type="number" min={0} step="0.01" value={finance.totalExpenses || ""} onChange={(e) => saveFinanceField({ totalExpenses: Number(e.target.value || 0) })} placeholder="Other expenses" className="rounded-xl border border-slate-200 px-3 py-3" />
-        </div>
-        <textarea value={finance.profitNotes || ""} onChange={(e) => saveFinanceField({ profitNotes: e.target.value })} placeholder="Profit notes" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Gross</p><p className="font-black">{formatMoney(profit.totalSales)}</p></div>
-          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Expenses</p><p className="font-black">{formatMoney(profit.totalExpenses)}</p></div>
-          <div className={`rounded-xl p-3 ${profit.netProfit >= 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"}`}><p>Profit</p><p className="font-black">{formatMoney(profit.netProfit)}</p></div>
-        </div>
-        <div className="space-y-2">
-          <h3 className="text-sm font-black text-ink dark:text-white">Sales by Category</h3>
-          {(event.salesCategories || []).map((sale) => (
-            <div key={sale.id} className="grid grid-cols-[1fr_120px] items-center gap-2">
-              <span className="text-sm text-slate-600 dark:text-slate-300">{sale.category}</span>
-              <input type="number" min={0} step="0.01" value={sale.amount || ""} onChange={(e) => updateSalesCategory(sale.id, Number(e.target.value || 0))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-            </div>
-          ))}
-          <p className="rounded-xl bg-slate-50 p-3 text-sm font-bold text-ink dark:bg-slate-950/70 dark:text-white">Category total: {formatMoney(totalCategorySales)}</p>
-        </div>
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Star size={18} /> Event Review</h2>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            ["overallRating", "Overall"],
-            ["trafficRating", "Traffic"],
-            ["organizerRating", "Organizer"],
-            ["profitRating", "Profit"]
-          ].map(([key, label]) => (
-            <label key={key} className="text-xs font-bold text-slate-500 dark:text-slate-400">
-              {label}
-              <input type="number" min={0} max={5} step={0.5} value={Number((event.review as any)?.[key] || "")} onChange={(e) => updateReview({ [key]: Number(e.target.value || 0) } as any)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-            </label>
-          ))}
-        </div>
-        <textarea value={event.review?.notes || ""} onChange={(e) => updateReview({ notes: e.target.value })} placeholder="Great traffic but expensive tables..." className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3" />
-      </section>
-
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="font-black text-ink dark:text-white">Instagram Caption</h2>
-          <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>
-        </div>
-        <textarea value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Generate a caption to edit and copy." className="min-h-36 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm" />
-        <button onClick={() => navigator.clipboard.writeText(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
-      </section>
-
-      <section className="space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section ref={paymentRef} className="scroll-mt-20 space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <div className="flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><DollarSign size={18} /> Payment Split</h2>
-          <button onClick={() => setEditingPayment("new")} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral"><Plus size={14} /> Add Payment</button>
+          <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-ink px-3 text-xs font-bold text-white dark:bg-coral"><Plus size={14} /> Add</button>
         </div>
         {paymentSummary.confirmedWorkerCount === 0 ? (
           <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-950/70 dark:text-slate-400">Add confirmed workers to calculate split.</p>
@@ -555,20 +411,20 @@ export function EventDetailPage() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500 dark:text-slate-400">Total cost</p><p className="font-black text-ink dark:text-white">{formatMoney(paymentSummary.totalCost)}</p></div>
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500 dark:text-slate-400">Equal share</p><p className="font-black text-ink dark:text-white">{formatMoney(paymentSummary.equalSharePerWorker)}</p></div>
-              <div className="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-950/30"><p className="text-slate-500 dark:text-slate-400">Total paid</p><p className="font-black text-emerald-700 dark:text-emerald-300">{formatMoney(paymentSummary.totalPaid)}</p></div>
+              <div className="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-950/30"><p className="text-slate-500 dark:text-slate-400">Paid</p><p className="font-black text-emerald-700 dark:text-emerald-300">{formatMoney(paymentSummary.totalPaid)}</p></div>
               <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30"><p className="text-slate-500 dark:text-slate-400">Remaining</p><p className="font-black text-amber-700 dark:text-amber-300">{formatMoney(Math.max(paymentSummary.totalRemaining, 0))}</p></div>
             </div>
-            {paymentSummary.isOverpaid ? <p className="rounded-xl bg-orange-50 p-3 text-sm font-bold text-orange-700">Event is overpaid by {formatMoney(paymentSummary.overpaidAmount)}.</p> : null}
-            {paymentSummary.internalBalanceNotes.map((note) => <p key={note} className="rounded-xl bg-sky-50 p-3 text-sm font-bold text-sky-800">Internal note: {note}</p>)}
-            {unconfirmedPaymentWarnings.map((name) => <p key={name} className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">{name} has payment records but is no longer confirmed.</p>)}
+            {paymentSummary.isOverpaid ? <p className="rounded-xl bg-orange-50 p-3 text-sm font-bold text-orange-700 dark:bg-orange-950/30 dark:text-orange-200">Event is overpaid by {formatMoney(paymentSummary.overpaidAmount)}.</p> : null}
+            {paymentSummary.internalBalanceNotes.map((note) => <p key={note} className="rounded-xl bg-sky-50 p-3 text-sm font-bold text-sky-800 dark:bg-sky-950/30 dark:text-sky-200">Internal note: {note}</p>)}
+            {unconfirmedPaymentWarnings.map((name) => <p key={name} className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{name} has payment records but is no longer confirmed.</p>)}
             <div className="space-y-2">
               {paymentSummary.perWorkerSummary.map((worker) => (
                 <div key={worker.workerId} className="rounded-xl border border-slate-100 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-black text-ink dark:text-white">{worker.workerName}</p>
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${worker.status === "paid" ? "bg-emerald-100 text-emerald-800" : worker.status === "overpaid" ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{worker.status === "overpaid" ? "Covered extra" : worker.status}</span>
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${worker.status === "paid" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : worker.status === "overpaid" ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200" : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"}`}>{worker.status === "overpaid" ? "Covered extra" : worker.status}</span>
                   </div>
-                  <p className="mt-2 text-slate-600 dark:text-slate-300">Expected {formatMoney(worker.expectedShare)} · Paid {formatMoney(worker.amountPaid)} · {worker.balance > 0 ? `Owes ${formatMoney(worker.balance)}` : worker.balance < 0 ? `Overpaid ${formatMoney(Math.abs(worker.balance))}` : "Paid up"}</p>
+                  <p className="mt-2 text-slate-600 dark:text-slate-300">Expected {formatMoney(worker.expectedShare)} | Paid {formatMoney(worker.amountPaid)} | {worker.balance > 0 ? `Owes ${formatMoney(worker.balance)}` : worker.balance < 0 ? `Overpaid ${formatMoney(Math.abs(worker.balance))}` : "Paid up"}</p>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Covered {worker.percentOfTotalPaid.toFixed(2)}% of total cost</p>
                 </div>
               ))}
@@ -581,12 +437,12 @@ export function EventDetailPage() {
             {(event.paymentRecords || []).map((record) => (
               <div key={record.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">
                 <div>
-                  <p className="font-bold text-ink dark:text-white">{workers.find((worker) => worker.id === record.workerId)?.name || "Unknown"} · {formatMoney(record.amountPaid)}</p>
+                  <p className="font-bold text-ink dark:text-white">{workers.find((worker) => worker.id === record.workerId)?.name || "Unknown"} | {formatMoney(record.amountPaid)}</p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">{record.note || "No note"}</p>
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setEditingPayment(record)} className="rounded-lg bg-white px-3 py-2 text-xs font-bold dark:bg-slate-800 dark:text-white">Edit</button>
-                  <button onClick={() => deletePayment(record.id)} className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">Delete</button>
+                  <button onClick={() => deletePayment(record.id)} className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">Delete</button>
                 </div>
               </div>
             ))}
@@ -594,17 +450,132 @@ export function EventDetailPage() {
         ) : null}
       </section>
 
+      <section ref={captionRef} className="scroll-mt-20 space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-black text-ink dark:text-white">Instagram Caption</h2>
+          <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>
+        </div>
+        <textarea value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Generate a caption to edit and copy." className="min-h-32 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+        <button onClick={() => navigator.clipboard.writeText(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
+      </section>
+
+      <div className="space-y-3">
+        <Accordion title="Inventory & Packing Notes" summary={notesSummary} icon={<ImagePlus size={18} />}>
+          <textarea value={event.packingNotes || ""} onChange={(e) => savePlannerEvent({ ...event, packingNotes: e.target.value, updatedAt: nowIso() }).then(() => load())} placeholder="Bring slabs, binders, tablecloth..." className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+        </Accordion>
+
+        <Accordion title="Booth & Setup" summary={boothSummary} icon={<CalendarCheck size={18} />}>
+          <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
+            <p><strong>Booth:</strong> {event.boothNumber || "Not set"}</p>
+            <p><strong>Setup:</strong> {event.setupTime || "Not set"}</p>
+            <p><strong>Section:</strong> {event.floorSection || "Not set"}</p>
+            <p><strong>Parking:</strong> {event.parkingNotes || "Not set"}</p>
+            <p><strong>Entry:</strong> {event.entryInstructions || "Not set"}</p>
+          </div>
+        </Accordion>
+
+        <Accordion title="Weather" summary={weather ? `${weather.label}, ${weather.rainChance}% rain` : "Unavailable"} icon={<Map size={18} />}>
+          <p className="text-lg font-black text-ink dark:text-white">{weather ? `${weather.icon} ${weather.label}` : "Unavailable"}</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{weather?.rainChance !== undefined ? `${weather.rainChance}% rain chance` : "Forecast appears when available."}</p>
+        </Accordion>
+
+        <Accordion title="Travel" summary={leaveBy ? `Leave by ${leaveBy}` : driveMinutes ? `${driveMinutes} min estimate` : "Open maps for ETA"} icon={<Map size={18} />}>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{driveMinutes ? `${driveMinutes} min estimate` : "Open maps for ETA"}</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{leaveBy ? `Leave by ${leaveBy}` : "Set setup time for a leave-by estimate."}</p>
+        </Accordion>
+
+        <Accordion title="Live Team Notes" summary={(event.liveNotes || []).length ? `${event.liveNotes?.length} notes` : "No notes yet"} icon={<MessageSquare size={18} />}>
+          <div className="space-y-2">
+            {(event.liveNotes || []).slice(0, 5).map((note) => <p key={note.id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 dark:bg-slate-950/70 dark:text-slate-300">{note.content}</p>)}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <input value={liveNoteText} onChange={(e) => setLiveNoteText(e.target.value)} placeholder="Add a live note" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <button onClick={addLiveNote} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
+          </div>
+        </Accordion>
+
+        <Accordion title="Preparation Checklist" summary={`${checklist.completed}/${checklist.total} completed`} icon={<CheckCircle2 size={18} />}>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <div className="h-full rounded-full bg-coral transition-all" style={{ width: `${checklist.percent}%` }} />
+          </div>
+          <div className="mt-3 space-y-2">
+            {(event.checklistItems || []).map((item) => (
+              <div key={item.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70">
+                <input type="checkbox" checked={item.completed} onChange={(e) => saveChecklist({ ...item, completed: e.target.checked, updatedAt: nowIso() })} />
+                <span className={`min-w-0 flex-1 text-sm ${item.completed ? "text-slate-400 line-through" : "text-slate-700 dark:text-slate-200"}`}>{item.label}</span>
+                <button onClick={() => removeChecklistItem(item.id)} className="rounded-lg p-2 text-rose-700 dark:text-rose-300"><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <input value={newChecklistLabel} onChange={(e) => setNewChecklistLabel(e.target.value)} placeholder="Add custom item" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <button onClick={addChecklistItem} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
+          </div>
+        </Accordion>
+
+        <Accordion title="Profit Tracker" summary={formatMoney(profit.netProfit)} icon={<DollarSign size={18} />}>
+          <div className="grid grid-cols-2 gap-2">
+            <input type="number" min={0} step="0.01" value={finance.totalSales || ""} onChange={(e) => saveFinanceField({ totalSales: Number(e.target.value || 0) })} placeholder="Total sales" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <input type="number" min={0} step="0.01" value={event.eventCost || ""} onChange={(e) => savePlannerEvent({ ...event, eventCost: Number(e.target.value || 0), updatedAt: nowIso() }).then(() => load())} placeholder="Event/table cost" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <input type="number" min={0} step="0.01" value={finance.gasCost || ""} onChange={(e) => saveFinanceField({ gasCost: Number(e.target.value || 0) })} placeholder="Gas" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <input type="number" min={0} step="0.01" value={finance.foodCost || ""} onChange={(e) => saveFinanceField({ foodCost: Number(e.target.value || 0) })} placeholder="Food" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <input type="number" min={0} step="0.01" value={finance.miscCost || ""} onChange={(e) => saveFinanceField({ miscCost: Number(e.target.value || 0) })} placeholder="Misc" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <input type="number" min={0} step="0.01" value={finance.totalExpenses || ""} onChange={(e) => saveFinanceField({ totalExpenses: Number(e.target.value || 0) })} placeholder="Other expenses" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          </div>
+          <textarea value={finance.profitNotes || ""} onChange={(e) => saveFinanceField({ profitNotes: e.target.value })} placeholder="Profit notes" className="mt-3 min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Gross</p><p className="font-black">{formatMoney(profit.totalSales)}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Expenses</p><p className="font-black">{formatMoney(profit.totalExpenses)}</p></div>
+            <div className={`rounded-xl p-3 ${profit.netProfit >= 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"}`}><p>Profit</p><p className="font-black">{formatMoney(profit.netProfit)}</p></div>
+          </div>
+        </Accordion>
+
+        <Accordion title="Sales by Category" summary={formatMoney(totalCategorySales)} icon={<DollarSign size={18} />}>
+          <div className="space-y-2">
+            {(event.salesCategories || []).map((sale) => (
+              <div key={sale.id} className="grid grid-cols-[1fr_120px] items-center gap-2">
+                <span className="text-sm text-slate-600 dark:text-slate-300">{sale.category}</span>
+                <input type="number" min={0} step="0.01" value={sale.amount || ""} onChange={(e) => updateSalesCategory(sale.id, Number(e.target.value || 0))} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              </div>
+            ))}
+          </div>
+        </Accordion>
+
+        <Accordion title="Event Review" summary={reviewAverage ? `${reviewAverage.toFixed(1)} stars` : "No rating yet"} icon={<Star size={18} />}>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              ["overallRating", "Overall"],
+              ["trafficRating", "Traffic"],
+              ["organizerRating", "Organizer"],
+              ["profitRating", "Profit"]
+            ].map(([key, label]) => (
+              <label key={key} className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                {label}
+                <input type="number" min={0} max={5} step={0.5} value={Number((event.review as any)?.[key] || "")} onChange={(e) => updateReview({ [key]: Number(e.target.value || 0) } as any)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              </label>
+            ))}
+          </div>
+          <textarea value={event.review?.notes || ""} onChange={(e) => updateReview({ notes: e.target.value })} placeholder="Great traffic but expensive tables..." className="mt-3 min-h-24 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+        </Accordion>
+
+        <Accordion title="Event Image" summary={event.imageUrl ? "Image added" : "No image yet"} icon={<ImagePlus size={18} />}>
+          <EventImageUploader eventId={event.id} imageUrl={event.imageUrl} onChange={saveEventImage} />
+        </Accordion>
+
+        <Accordion title="QR Utilities" summary="Event, map, register, 4 Nerds" icon={<QrCode size={18} />}>
+          <section ref={qrRef} className="scroll-mt-20 grid grid-cols-2 gap-2">
+            <button onClick={() => setQrUrl(window.location.href)} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><QrCode size={16} /> Event QR</button>
+            {destination ? <button onClick={() => setQrUrl(googleMapsDirectionsLink(destination))} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><QrCode size={16} /> Map QR</button> : null}
+            {event.registrationUrl ? <button onClick={() => setQrUrl(event.registrationUrl || "")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><QrCode size={16} /> Register QR</button> : null}
+            <button onClick={() => setQrUrl("https://www.instagram.com/4nerds")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><QrCode size={16} /> 4 Nerds QR</button>
+          </section>
+        </Accordion>
+      </div>
+
       <section className="grid grid-cols-2 gap-2">
         {event.registrationUrl ? <a href={event.registrationUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CalendarCheck size={16} /> Register</a> : null}
         {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><ExternalLink size={16} /> Source</a> : null}
-        {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={16} /> Map</a> : null}
-        <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={16} /> Edit</Link>
-        <button onClick={duplicateEvent} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CopyPlus size={16} /> Duplicate</button>
-        <button onClick={() => setQrUrl(window.location.href)} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Event QR</button>
-        {destination ? <button onClick={() => setQrUrl(googleMapsDirectionsLink(destination))} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Map QR</button> : null}
-        {event.registrationUrl ? <button onClick={() => setQrUrl(event.registrationUrl || "")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> Pay/Register QR</button> : null}
-        <button onClick={() => setQrUrl("https://www.instagram.com/4nerds")} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={16} /> 4 Nerds QR</button>
-        <button onClick={remove} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700"><Trash2 size={16} /> Delete Event</button>
+        <button onClick={remove} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={16} /> Delete Event</button>
       </section>
 
       {qrUrl ? (
