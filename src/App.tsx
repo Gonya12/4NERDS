@@ -6,6 +6,7 @@ import { CalendarPage } from "./pages/CalendarPage";
 import { EventDetailPage } from "./pages/EventDetailPage";
 import { EventFormPage } from "./pages/EventFormPage";
 import { HomePage } from "./pages/HomePage";
+import { PastEventsPage } from "./pages/PastEventsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
 
@@ -56,6 +57,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />
+          <Route path="/past" element={<PastEventsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/events/new" element={<EventFormPage />} />
           <Route path="/events/:id" element={<EventDetailPage />} />

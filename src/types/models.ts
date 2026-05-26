@@ -5,6 +5,7 @@ export type ReviewStatus = "pending" | "saved" | "discarded";
 export type AttendanceStatus = "interested" | "maybe" | "not_going" | "none";
 export type EventClassification = "event_high_confidence" | "event_needs_review" | "possible_but_low_confidence" | "not_event";
 export type TeamDecision = "interested" | "maybe" | "not_going";
+export type EventStatus = "interested" | "registered" | "paid" | "preparing" | "completed" | "skipped";
 
 export interface Organizer {
   id: string;
@@ -52,6 +53,9 @@ export interface Event {
   locationId?: string;
   locationInstagramHandle?: string;
   organizerInstagramHandle?: string;
+  status?: EventStatus;
+  checklistItems?: EventChecklistItem[];
+  finance?: EventFinance;
   confirmedWorkerIds?: string[];
   eventCost?: number;
   paymentRecords?: PaymentRecord[];
@@ -83,6 +87,28 @@ export interface PaymentRecord {
   amountPaid: number;
   paidAt?: string;
   note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventChecklistItem {
+  id: string;
+  eventId: string;
+  label: string;
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventFinance {
+  id: string;
+  eventId: string;
+  totalSales: number;
+  totalExpenses: number;
+  gasCost: number;
+  foodCost: number;
+  miscCost: number;
+  profitNotes?: string;
   createdAt: string;
   updatedAt: string;
 }

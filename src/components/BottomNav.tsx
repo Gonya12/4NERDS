@@ -1,17 +1,18 @@
-import { CalendarDays, Home, PlusCircle, Settings } from "lucide-react";
+import { CalendarDays, History, Home, PlusCircle, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/events", label: "Events", icon: CalendarDays },
   { to: "/events/new", label: "Add Event", icon: PlusCircle },
+  { to: "/past", label: "Past", icon: History },
   { to: "/settings", label: "Settings", icon: Settings }
 ];
 
 export function BottomNav() {
   return (
     <nav className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-2 pt-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
-      <div className="mx-auto grid max-w-md grid-cols-4">
+      <div className="mx-auto grid max-w-md grid-cols-5">
         {items.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}

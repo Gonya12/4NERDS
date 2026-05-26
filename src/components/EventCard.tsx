@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Event, Worker } from "../types/models";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { shortScheduleSummary } from "../utils/eventSchedule";
+import { checklistProgress } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { StatusChip } from "./StatusChip";
 
@@ -16,6 +17,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
   const timing = eventTimingStatus(event.startDate);
   const payment = calculatePaymentSummary(event, workers);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  const checklist = checklistProgress(event);
   const paymentStatus = payment.confirmedWorkerCount === 0
     ? "Split unavailable until workers are confirmed"
     : payment.totalPaid === 0
@@ -51,6 +53,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
       <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">
         <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><Users size={16} /> Confirmed</p>
         <p className={`mt-1 ${names.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>
+        {checklist.total ? <p className="mt-2 text-xs font-bold text-slate-500 dark:text-slate-400">{checklist.completed}/{checklist.total} tasks completed</p> : null}
       </div>
       <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
         <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> Event cost: {formatMoney(payment.totalCost)}</p>

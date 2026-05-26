@@ -109,6 +109,7 @@ export function EventFormPage() {
       city: form.city,
       state: form.state,
       registrationStatus: form.registrationStatus,
+      status: existing?.status || "interested",
       registrationUrl: form.registrationUrl,
       sourceUrl: form.sourceUrl,
       imageUrl: form.imageUrl,

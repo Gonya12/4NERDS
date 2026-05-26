@@ -7,6 +7,8 @@ import { InstallPrompt } from "../components/InstallPrompt";
 import { listPlannerEvents, listWorkers } from "../services/planner/plannerRepository";
 import type { Event, Worker } from "../types/models";
 import { eventTimingStatus } from "../utils/eventStatus";
+import { calculateEventProfit } from "../utils/financeMath";
+import { formatMoney } from "../utils/paymentMath";
 
 export function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -21,8 +23,19 @@ export function HomePage() {
   useEffect(() => { void load(); }, []);
 
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
+  const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = upcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const confirmedCount = upcoming.filter((event) => (event.confirmedWorkerIds || []).length > 0).length;
+  const now = new Date();
+  const projectedCosts = upcoming.reduce((sum, event) => sum + Number(event.eventCost || 0), 0);
+  const monthlyProfit = completedEvents
+    .filter((event) => {
+      const date = new Date(event.startDate);
+      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+    })
+    .reduce((sum, event) => sum + calculateEventProfit(event, event.finance).netProfit, 0);
+  const checklistItems = upcoming.flatMap((event) => event.checklistItems || []);
+  const checklistPercent = checklistItems.length ? Math.round((checklistItems.filter((item) => item.completed).length / checklistItems.length) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -49,6 +62,25 @@ export function HomePage() {
           <Plus size={22} />
           <span className="text-sm font-black">Add Event</span>
         </Link>
+      </section>
+
+      <section className="grid grid-cols-2 gap-3">
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <p className="text-xs text-slate-500 dark:text-slate-400">Projected costs</p>
+          <p className="mt-2 text-xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <p className="text-xs text-slate-500 dark:text-slate-400">Profit this month</p>
+          <p className={`mt-2 text-xl font-black ${monthlyProfit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(monthlyProfit)}</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <p className="text-xs text-slate-500 dark:text-slate-400">Events completed</p>
+          <p className="mt-2 text-xl font-black text-ink dark:text-white">{completedEvents.length}</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+          <p className="text-xs text-slate-500 dark:text-slate-400">Checklist completion</p>
+          <p className="mt-2 text-xl font-black text-ink dark:text-white">{checklistPercent}%</p>
+        </div>
       </section>
 
       <section>

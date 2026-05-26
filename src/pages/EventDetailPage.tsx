@@ -1,18 +1,21 @@
-import { CalendarCheck, DollarSign, Edit, ExternalLink, Map, Plus, Trash2, Users, X } from "lucide-react";
+import { CalendarCheck, CheckCircle2, DollarSign, Edit, ExternalLink, Map, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatusChip } from "../components/StatusChip";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
 import { deletePaymentRecord, savePaymentRecord } from "../services/database/paymentRepository";
+import { deleteChecklistItem, saveChecklistItem } from "../services/database/checklistRepository";
+import { emptyFinance, saveFinance } from "../services/database/financeRepository";
 import { getSupabaseStatus } from "../utils/supabase";
-import type { Event, PaymentRecord, Worker } from "../types/models";
+import type { Event, EventChecklistItem, EventFinance, EventStatus, PaymentRecord, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
 import { generateInstagramCaption } from "../utils/instagramCaption";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
-import { id, nowIso } from "../utils/normalize";
+import { calculateEventProfit, checklistProgress } from "../utils/financeMath";
+import { id as createId, nowIso } from "../utils/normalize";
 
 function WorkerModal({
   event,
@@ -87,7 +90,7 @@ function PaymentModal({
   function save() {
     const timestamp = nowIso();
     onSave({
-      id: payment?.id || id("payment"),
+      id: payment?.id || createId("payment"),
       eventId: event.id,
       workerId,
       amountPaid: Number(amountPaid || 0),
@@ -136,6 +139,7 @@ export function EventDetailPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [lastSelectedWorkerIds, setLastSelectedWorkerIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
+  const [newChecklistLabel, setNewChecklistLabel] = useState("");
 
   async function load() {
     if (!id) return;
@@ -216,11 +220,70 @@ export function EventDetailPage() {
     navigate("/events");
   }
 
+  async function updateEventStatus(status: EventStatus) {
+    if (!event) return;
+    const updated = { ...event, status, updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not update event status.");
+    }
+  }
+
+  async function saveChecklist(item: EventChecklistItem) {
+    if (!event) return;
+    try {
+      await saveChecklistItem(item);
+      setEvent(await getPlannerEvent(event.id) || event);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save checklist item.");
+    }
+  }
+
+  async function addChecklistItem() {
+    if (!event || !newChecklistLabel.trim()) return;
+    const timestamp = nowIso();
+    await saveChecklist({
+      id: createId("checklist"),
+      eventId: event.id,
+      label: newChecklistLabel.trim(),
+      completed: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    setNewChecklistLabel("");
+  }
+
+  async function removeChecklistItem(itemId: string) {
+    if (!event) return;
+    try {
+      await deleteChecklistItem(itemId);
+      setEvent(await getPlannerEvent(event.id) || event);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not delete checklist item.");
+    }
+  }
+
+  async function saveFinanceField(patch: Partial<EventFinance>) {
+    if (!event) return;
+    try {
+      const finance = { ...(event.finance || emptyFinance(event.id)), ...patch, eventId: event.id };
+      await saveFinance(finance);
+      setEvent(await getPlannerEvent(event.id) || { ...event, finance });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save finance.");
+    }
+  }
+
   if (!event) return <div className="text-sm text-slate-500 dark:text-slate-400">Loading event...</div>;
 
   const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
   const destination = event.address || [event.venueName, event.city, event.state].filter(Boolean).join(", ");
   const paymentSummary = calculatePaymentSummary(event, workers);
+  const checklist = checklistProgress(event);
+  const finance = event.finance || emptyFinance(event.id);
+  const profit = calculateEventProfit(event, finance);
   const confirmedIds = new Set(event.confirmedWorkerIds || []);
   const syncStatus = getSupabaseStatus();
   const unconfirmedPaymentWarnings = (event.paymentRecords || [])
@@ -241,6 +304,9 @@ export function EventDetailPage() {
       <section className="flex flex-wrap gap-2 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <StatusChip value={event.registrationStatus} />
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{eventTimingStatus(event.startDate)}</span>
+        <select value={event.status || "interested"} onChange={(e) => updateEventStatus(e.target.value as EventStatus)} className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold">
+          {["interested", "registered", "paid", "preparing", "completed", "skipped"].map((status) => <option key={status} value={status}>{status}</option>)}
+        </select>
       </section>
 
       <section className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
@@ -269,6 +335,47 @@ export function EventDetailPage() {
         <p><strong>Vendor registration:</strong> {event.registrationUrl || "Not set"}</p>
         <p><strong>Source:</strong> {event.sourceUrl || "Not set"}</p>
         <p><strong>Notes:</strong> {event.notes || "None"}</p>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><CheckCircle2 size={18} /> Preparation Checklist</h2>
+          <span className="text-xs font-black text-slate-500 dark:text-slate-400">{checklist.completed}/{checklist.total}</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+          <div className="h-full rounded-full bg-coral transition-all" style={{ width: `${checklist.percent}%` }} />
+        </div>
+        <div className="space-y-2">
+          {(event.checklistItems || []).map((item) => (
+            <div key={item.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70">
+              <input type="checkbox" checked={item.completed} onChange={(e) => saveChecklist({ ...item, completed: e.target.checked, updatedAt: nowIso() })} />
+              <span className={`min-w-0 flex-1 text-sm ${item.completed ? "text-slate-400 line-through" : "text-slate-700 dark:text-slate-200"}`}>{item.label}</span>
+              <button onClick={() => removeChecklistItem(item.id)} className="rounded-lg p-2 text-rose-700"><Trash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input value={newChecklistLabel} onChange={(e) => setNewChecklistLabel(e.target.value)} placeholder="Add custom item" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3" />
+          <button onClick={addChecklistItem} className="rounded-xl bg-ink px-4 font-bold text-white dark:bg-coral"><Plus size={17} /></button>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><DollarSign size={18} /> Profit Tracker</h2>
+        <div className="grid grid-cols-2 gap-2">
+          <input type="number" min={0} step="0.01" value={finance.totalSales || ""} onChange={(e) => saveFinanceField({ totalSales: Number(e.target.value || 0) })} placeholder="Total sales" className="rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={event.eventCost || ""} onChange={(e) => savePlannerEvent({ ...event, eventCost: Number(e.target.value || 0), updatedAt: nowIso() }).then(() => load())} placeholder="Event/table cost" className="rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={finance.gasCost || ""} onChange={(e) => saveFinanceField({ gasCost: Number(e.target.value || 0) })} placeholder="Gas" className="rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={finance.foodCost || ""} onChange={(e) => saveFinanceField({ foodCost: Number(e.target.value || 0) })} placeholder="Food" className="rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={finance.miscCost || ""} onChange={(e) => saveFinanceField({ miscCost: Number(e.target.value || 0) })} placeholder="Misc" className="rounded-xl border border-slate-200 px-3 py-3" />
+          <input type="number" min={0} step="0.01" value={finance.totalExpenses || ""} onChange={(e) => saveFinanceField({ totalExpenses: Number(e.target.value || 0) })} placeholder="Other expenses" className="rounded-xl border border-slate-200 px-3 py-3" />
+        </div>
+        <textarea value={finance.profitNotes || ""} onChange={(e) => saveFinanceField({ profitNotes: e.target.value })} placeholder="Profit notes" className="min-h-20 w-full rounded-xl border border-slate-200 px-3 py-3" />
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Gross</p><p className="font-black">{formatMoney(profit.totalSales)}</p></div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-slate-500">Expenses</p><p className="font-black">{formatMoney(profit.totalExpenses)}</p></div>
+          <div className={`rounded-xl p-3 ${profit.netProfit >= 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300"}`}><p>Profit</p><p className="font-black">{formatMoney(profit.netProfit)}</p></div>
+        </div>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">

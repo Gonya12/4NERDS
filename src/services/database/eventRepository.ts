@@ -1,8 +1,10 @@
-import type { Event, EventDay, RegistrationStatus } from "../../types/models";
+import type { Event, EventDay, EventStatus, RegistrationStatus } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
 import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { deletePaymentRecord, listPaymentRecords, savePaymentRecord } from "./paymentRepository";
+import { getFinance } from "./financeRepository";
+import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from "./checklistRepository";
 
 type EventRow = {
   id: string;
@@ -24,6 +26,7 @@ type EventRow = {
   location_id?: string | null;
   location_instagram_handle?: string | null;
   organizer_instagram_handle?: string | null;
+  status?: EventStatus | null;
   event_cost: number;
   created_at: string;
   updated_at: string;
@@ -113,6 +116,7 @@ function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [
     locationId: row.location_id || undefined,
     locationInstagramHandle: row.location_instagram_handle || undefined,
     organizerInstagramHandle: row.organizer_instagram_handle || undefined,
+    status: row.status || "interested",
     eventDays,
     confirmedWorkerIds,
     eventCost: Number(row.event_cost || 0),
@@ -152,6 +156,7 @@ function toRow(event: Event): EventRow {
     location_id: event.locationId || null,
     location_instagram_handle: event.locationInstagramHandle || null,
     organizer_instagram_handle: event.organizerInstagramHandle || null,
+    status: event.status || "interested",
     event_cost: Number(event.eventCost || 0),
     created_at: event.createdAt,
     updated_at: event.updatedAt
@@ -194,7 +199,15 @@ export async function listEvents() {
   if (!isSupabaseConfigured || !supabase) {
     console.log("Using Local mode");
     const events = await db.events.orderBy("startDate").toArray();
-    return events.map((event) => ({ ...event, confirmedWorkerIds: event.confirmedWorkerIds || [], eventCost: event.eventCost || 0, paymentRecords: event.paymentRecords || [], eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)] }));
+    return events.map((event) => ({
+      ...event,
+      confirmedWorkerIds: event.confirmedWorkerIds || [],
+      eventCost: event.eventCost || 0,
+      paymentRecords: event.paymentRecords || [],
+      eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+      checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
+      status: event.status || "interested"
+    }));
   }
 
   console.log("Using Supabase mode");
@@ -212,7 +225,10 @@ export async function listEvents() {
   });
   const events = await Promise.all(validRows.map(async (row) => {
     const eventRow = row as EventRow;
-    return fromRow(eventRow, workersByEvent.get(eventRow.id) || [], await listPaymentRecords(eventRow.id), daysByEvent.get(eventRow.id) || []);
+    const event = fromRow(eventRow, workersByEvent.get(eventRow.id) || [], await listPaymentRecords(eventRow.id), daysByEvent.get(eventRow.id) || []);
+    event.checklistItems = await listChecklistItems(eventRow.id);
+    event.finance = await getFinance(eventRow.id);
+    return event;
   }));
   console.log(`Loaded ${events.length} events from Supabase`);
   setSupabaseStatus({ connected: true, error: "", synced: true });
@@ -222,7 +238,15 @@ export async function listEvents() {
 export async function getEvent(eventId: string) {
   if (!isSupabaseConfigured || !supabase) {
     const event = await db.events.get(eventId);
-    return event ? { ...event, confirmedWorkerIds: event.confirmedWorkerIds || [], eventCost: event.eventCost || 0, paymentRecords: event.paymentRecords || [], eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)] } : undefined;
+    return event ? {
+      ...event,
+      confirmedWorkerIds: event.confirmedWorkerIds || [],
+      eventCost: event.eventCost || 0,
+      paymentRecords: event.paymentRecords || [],
+      eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+      checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
+      status: event.status || "interested"
+    } : undefined;
   }
 
   const { data, error } = await supabase.from("events").select("*").eq("id", eventId).maybeSingle();
@@ -245,7 +269,10 @@ export async function getEvent(eventId: string) {
     throw dayError;
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  return fromRow(data as EventRow, (eventWorkers || []).map((row) => (row as { worker_id: string }).worker_id), await listPaymentRecords(eventId), (dayRows || []).map((row) => fromDayRow(row as EventDayRow)));
+  const event = fromRow(data as EventRow, (eventWorkers || []).map((row) => (row as { worker_id: string }).worker_id), await listPaymentRecords(eventId), (dayRows || []).map((row) => fromDayRow(row as EventDayRow)));
+  event.checklistItems = await seedChecklistIfEmpty(eventId);
+  event.finance = await getFinance(eventId);
+  return event;
 }
 
 export async function saveEvent(event: Event) {
@@ -255,6 +282,8 @@ export async function saveEvent(event: Event) {
     eventCost: Number(event.eventCost || 0),
     paymentRecords: event.paymentRecords || [],
     eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+    checklistItems: event.checklistItems || [],
+    status: event.status || "interested",
     updatedAt: nowIso()
   };
 
@@ -338,6 +367,7 @@ export async function saveEvent(event: Event) {
     .filter((record) => !savedPaymentIds.has(record.id))
     .map((record) => deletePaymentRecord(record.id)));
   await Promise.all(savedEvent.paymentRecords.map(savePaymentRecord));
+  if (!savedEvent.checklistItems.length) await seedChecklistIfEmpty(savedEvent.id);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   console.log("Saved event to Supabase");
 }
