@@ -2,6 +2,7 @@ import { CalendarCheck, CheckCircle2, DollarSign, Edit, ExternalLink, Map, Plus,
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EventImageUploader } from "../components/EventImageUploader";
+import { EventImageFrame } from "../components/EventImageFrame";
 import { StatusChip } from "../components/StatusChip";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
@@ -82,6 +83,7 @@ function PaymentModal({
   onSave: (payment: PaymentRecord) => void;
 }) {
   const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
+  const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const fallbackWorkerId = confirmed[0]?.id || workers[0]?.id || "";
   const [workerId, setWorkerId] = useState(payment?.workerId || fallbackWorkerId);
   const [amountPaid, setAmountPaid] = useState(String(payment?.amountPaid || ""));
@@ -298,6 +300,7 @@ export function EventDetailPage() {
   const profit = calculateEventProfit(event, finance);
   const confirmedIds = new Set(event.confirmedWorkerIds || []);
   const syncStatus = getSupabaseStatus();
+  const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const unconfirmedPaymentWarnings = (event.paymentRecords || [])
     .filter((record) => !confirmedIds.has(record.workerId))
     .map((record) => workers.find((worker) => worker.id === record.workerId)?.name || "Someone");
@@ -305,9 +308,7 @@ export function EventDetailPage() {
   return (
     <div className="space-y-5">
       <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
-        <div className="mb-4 aspect-[16/9] overflow-hidden rounded-2xl bg-gradient-to-br from-coral via-amber-400 to-emerald-400">
-          {event.imageUrl ? <img src={event.imageUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-5xl font-black text-white/90">4N</div>}
-        </div>
+        <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/3] sm:aspect-[16/10]" />
         <p className="text-sm font-bold text-orange-300">{eventTimingStatus(event.startDate)}</p>
         <h1 className="mt-1 text-3xl font-black leading-tight">{event.name}</h1>
         <p className="mt-2 text-sm text-slate-300">{displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>

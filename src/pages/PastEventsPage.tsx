@@ -2,6 +2,7 @@ import { CopyPlus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
+import { EventImageFrame } from "../components/EventImageFrame";
 import { listPlannerEvents, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
 import type { Event, Worker } from "../types/models";
 import { eventTimingStatus } from "../utils/eventStatus";
@@ -65,9 +66,7 @@ export function PastEventsPage() {
           return (
             <article key={event.id} className="overflow-hidden rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
               <Link to={`/events/${event.id}`} className="block">
-                <div className="aspect-[16/9] overflow-hidden rounded-2xl bg-gradient-to-br from-coral via-amber-400 to-emerald-400">
-                  {event.imageUrl ? <img src={event.imageUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-4xl font-black text-white">{initials || "4N"}</div>}
-                </div>
+                <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[16/9]" />
                 <h2 className="mt-3 text-lg font-black text-ink dark:text-white">{event.name}</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">{dateRangeSummary(event)} · {event.venueName || event.city || "Location not set"}</p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Worked by: {names(event, workers)}</p>

@@ -5,6 +5,7 @@ import { eventTimingStatus } from "../utils/eventStatus";
 import { shortScheduleSummary } from "../utils/eventSchedule";
 import { checklistProgress } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
+import { EventImageFrame } from "./EventImageFrame";
 import { StatusChip } from "./StatusChip";
 
 function workerNames(event: Event, workers: Worker[]) {
@@ -30,13 +31,7 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
 
   return (
     <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="mb-4 aspect-[16/9] overflow-hidden rounded-2xl bg-gradient-to-br from-coral via-amber-400 to-emerald-400">
-        {event.imageUrl ? (
-          <img src={event.imageUrl} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-4xl font-black text-white/90">{initials || "4N"}</div>
-        )}
-      </div>
+      <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[16/9]" />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
