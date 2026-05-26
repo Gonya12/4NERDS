@@ -44,24 +44,24 @@ export function InstallPrompt() {
   }
 
   return (
-    <section className="rounded-lg bg-white p-4 text-sm text-slate-600 shadow-soft">
+    <section className="rounded-lg bg-white p-4 text-sm text-slate-600 shadow-soft dark:bg-slate-900 dark:text-slate-300">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-bold text-ink">Install 4 Nerds</h2>
+          <h2 className="font-bold text-ink dark:text-white">Install 4 Nerds</h2>
           <p className="mt-1">Use it like an app on Android or iPhone. Sync still works through Supabase.</p>
         </div>
-        <button onClick={close} className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">Hide</button>
+        <button onClick={close} className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">Hide</button>
       </div>
       {promptEvent ? (
-        <button onClick={install} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-ink text-sm font-bold text-white">
+        <button onClick={install} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-ink text-sm font-bold text-white dark:bg-coral">
           <Download size={17} /> Install App
         </button>
       ) : ios ? (
-        <p className="mt-3 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+        <p className="mt-3 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
           <Share size={15} /> iPhone: open in Safari, tap Share, then Add to Home Screen.
         </p>
       ) : (
-        <p className="mt-3 text-xs text-slate-500">Use your browser menu and choose Install app or Add to Home Screen.</p>
+        <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Use your browser menu and choose Install app or Add to Home Screen.</p>
       )}
     </section>
   );

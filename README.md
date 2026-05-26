@@ -22,7 +22,7 @@ Create a Supabase project, run `supabase-schema.sql` in the SQL editor, then add
 
 ```bash
 VITE_SUPABASE_URL=your-project-url
-VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
 If those values are missing, the app shows Local Mode and still works locally. For V1 there is no login; each device asks for a user name and saves it locally as `device_user_name`.

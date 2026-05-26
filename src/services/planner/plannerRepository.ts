@@ -1,28 +1,25 @@
 import type { Event, Worker } from "../../types/models";
-import { id, nowIso } from "../../utils/normalize";
-import { db, seedWorkers } from "../storage/localDb";
+import { clearEventsAndResetWorkers, deleteEvent, getEvent, listEvents, saveEvent } from "../database/eventRepository";
+import { addWorker as addDatabaseWorker, deleteWorker as deleteDatabaseWorker, listWorkers as listDatabaseWorkers, saveWorker as saveDatabaseWorker } from "../database/workerRepository";
 
 export async function listPlannerEvents() {
-  const events = await db.events.orderBy("startDate").toArray();
-  return events.map((event) => ({ ...event, confirmedWorkerIds: event.confirmedWorkerIds || [], eventCost: event.eventCost || 0, paymentRecords: event.paymentRecords || [] }));
+  return listEvents();
 }
 
 export async function getPlannerEvent(eventId: string) {
-  const event = await db.events.get(eventId);
-  return event ? { ...event, confirmedWorkerIds: event.confirmedWorkerIds || [], eventCost: event.eventCost || 0, paymentRecords: event.paymentRecords || [] } : undefined;
+  return getEvent(eventId);
 }
 
 export async function savePlannerEvent(event: Event) {
-  await db.events.put({ ...event, confirmedWorkerIds: event.confirmedWorkerIds || [], eventCost: event.eventCost || 0, paymentRecords: event.paymentRecords || [], updatedAt: nowIso() });
+  return saveEvent(event);
 }
 
 export async function deletePlannerEvent(eventId: string) {
-  await db.events.delete(eventId);
+  return deleteEvent(eventId);
 }
 
 export async function listWorkers() {
-  await seedWorkers();
-  return db.workers.orderBy("name").toArray();
+  return listDatabaseWorkers();
 }
 
 export async function activeWorkers() {
@@ -30,34 +27,17 @@ export async function activeWorkers() {
 }
 
 export async function saveWorker(worker: Worker) {
-  await db.workers.put({ ...worker, updatedAt: nowIso() });
+  return saveDatabaseWorker(worker);
 }
 
 export async function addWorker(name: string) {
-  const timestamp = nowIso();
-  await db.workers.add({
-    id: id("worker"),
-    name: name.trim(),
-    active: true,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  });
+  return addDatabaseWorker(name);
 }
 
 export async function deleteWorker(workerId: string) {
-  await db.workers.delete(workerId);
-  const events = await db.events.toArray();
-  await Promise.all(events.map((event) => db.events.put({
-    ...event,
-    confirmedWorkerIds: (event.confirmedWorkerIds || []).filter((id) => id !== workerId),
-    updatedAt: nowIso()
-  })));
+  return deleteDatabaseWorker(workerId);
 }
 
 export async function clearPlannerData() {
-  await Promise.all([
-    db.events.clear(),
-    db.workers.clear()
-  ]);
-  await seedWorkers();
+  return clearEventsAndResetWorkers();
 }

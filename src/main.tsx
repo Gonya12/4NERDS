@@ -4,11 +4,17 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
 import "./services/pwa/registerPwa";
+import { ThemeProvider } from "./services/theme/ThemeProvider";
+import { initializeTheme } from "./services/theme/themeService";
+
+initializeTheme();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <App />
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

@@ -26,30 +26,30 @@ export function EventCard({ event, workers = [] }: { event: Event; workers?: Wor
         : `${formatMoney(payment.totalRemaining)} still owed`;
 
   return (
-    <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99]">
+    <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900/90">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
-            <span className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white">{timing}</span>
+            <span className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white dark:bg-slate-700">{timing}</span>
             <StatusChip value={event.registrationStatus} />
           </div>
-          <h3 className="text-lg font-black leading-tight text-ink">{event.name}</h3>
+          <h3 className="text-lg font-black leading-tight text-ink dark:text-white">{event.name}</h3>
         </div>
       </div>
-      <div className="mt-4 space-y-2 text-sm text-slate-600">
+      <div className="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
         <p className="flex items-center gap-2"><CalendarDays size={16} /> {displayDate(event.startDate)}{event.startTime ? ` · ${event.startTime}${event.endTime ? `-${event.endTime}` : ""}` : ""}</p>
         <p className="flex items-center gap-2"><MapPin size={16} /> {[event.venueName, event.address, event.city, event.state].filter(Boolean).join(" · ") || "Location not set"}</p>
       </div>
-      <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm">
-        <p className="flex items-center gap-2 font-bold text-ink"><Users size={16} /> Confirmed</p>
-        <p className={`mt-1 ${names.length ? "text-slate-700" : "text-slate-400"}`}>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>
+      <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-950/70">
+        <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><Users size={16} /> Confirmed</p>
+        <p className={`mt-1 ${names.length ? "text-slate-700 dark:text-slate-300" : "text-slate-400 dark:text-slate-500"}`}>{names.length ? names.join(", ") : "Nobody confirmed yet"}</p>
       </div>
-      <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm">
-        <p className="flex items-center gap-2 font-bold text-ink"><DollarSign size={16} /> Event cost: {formatMoney(payment.totalCost)}</p>
-        <p className="mt-1 text-slate-700">Paid: {formatMoney(payment.totalPaid)} / {formatMoney(payment.totalCost)}</p>
+      <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
+        <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> Event cost: {formatMoney(payment.totalCost)}</p>
+        <p className="mt-1 text-slate-700 dark:text-slate-300">Paid: {formatMoney(payment.totalPaid)} / {formatMoney(payment.totalCost)}</p>
         <p className={`mt-1 text-xs font-bold ${payment.totalRemaining > 0 ? "text-amber-700" : "text-emerald-700"}`}>{paymentStatus}</p>
         {payment.perWorkerSummary.slice(0, 2).map((worker) => (
-          <p key={worker.workerId} className="mt-1 text-xs text-slate-600">
+          <p key={worker.workerId} className="mt-1 text-xs text-slate-600 dark:text-slate-400">
             {worker.workerName}: {worker.status === "owes" ? `owes ${formatMoney(worker.balance)}` : `paid ${formatMoney(worker.amountPaid)}, covered ${worker.percentOfTotalPaid.toFixed(0)}%`}
           </p>
         ))}

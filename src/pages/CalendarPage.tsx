@@ -28,12 +28,12 @@ export function CalendarPage() {
     <div className="space-y-5">
       <header>
         <p className="text-sm font-bold text-coral">Planner</p>
-        <h1 className="text-3xl font-black text-ink">Events</h1>
+        <h1 className="text-3xl font-black text-ink dark:text-white">Events</h1>
       </header>
       {events.length === 0 ? <EmptyState title="No events yet. Add your first event from the Add Event tab." /> : null}
       {Object.entries(groups).map(([key, dayEvents]) => (
         <section key={key}>
-          <h2 className="mb-3 text-sm font-black uppercase text-slate-500">{dayHeading(dayEvents[0].startDate)}</h2>
+          <h2 className="mb-3 text-sm font-black uppercase text-slate-500 dark:text-slate-400">{dayHeading(dayEvents[0].startDate)}</h2>
           <div className="space-y-3">{dayEvents.map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
         </section>
       ))}

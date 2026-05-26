@@ -91,9 +91,9 @@ export function EventFormPage() {
     <div className="space-y-5">
       <header>
         <p className="text-sm font-bold text-coral">Manual Event Mode</p>
-        <h1 className="text-3xl font-black text-ink">{eventId && eventId !== "new" ? "Edit Event" : "Add Event"}</h1>
+        <h1 className="text-3xl font-black text-ink dark:text-white">{eventId && eventId !== "new" ? "Edit Event" : "Add Event"}</h1>
       </header>
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft">
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Event name" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <div className="grid grid-cols-2 gap-3">
@@ -113,7 +113,7 @@ export function EventFormPage() {
         </select>
         <input type="number" min={0} step="0.01" value={form.eventCost} onChange={(e) => setForm({ ...form, eventCost: e.target.value })} placeholder="Event/table cost" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Notes" className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3" />
-        <button onClick={save} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white transition active:scale-[0.99]"><Save size={18} /> Save Event</button>
+        <button onClick={save} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white transition active:scale-[0.99] dark:bg-coral"><Save size={18} /> Save Event</button>
       </section>
     </div>
   );

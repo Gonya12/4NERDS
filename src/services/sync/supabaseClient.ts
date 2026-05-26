@@ -1,11 +1,1 @@
-import { createClient } from "@supabase/supabase-js";
-
-export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-export const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-
-export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl!, supabaseAnonKey!, {
-      realtime: { params: { eventsPerSecond: 5 } }
-    })
-  : undefined;
+export { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";

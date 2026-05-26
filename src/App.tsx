@@ -12,20 +12,20 @@ import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage
 function Onboarding({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-30 flex items-end bg-slate-950/30 p-4">
-      <section className="mx-auto w-full max-w-md rounded-lg bg-white p-5 shadow-soft">
+      <section className="mx-auto w-full max-w-md rounded-lg bg-white p-5 shadow-soft dark:bg-slate-900 dark:text-slate-100">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-bold text-coral">Welcome to 4 Nerds</p>
-            <h2 className="mt-1 text-xl font-black text-ink">Plan events in three steps.</h2>
+            <h2 className="mt-1 text-xl font-black text-ink dark:text-white">Plan events in three steps.</h2>
           </div>
-          <button onClick={onClose} className="rounded-lg bg-slate-100 p-2"><X size={18} /></button>
+          <button onClick={onClose} className="rounded-lg bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
         </div>
-        <ol className="mt-4 space-y-3 text-sm text-slate-600">
+        <ol className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
           <li><strong>1. Add vendor events.</strong></li>
           <li><strong>2. Open an event.</strong></li>
           <li><strong>3. Confirm who can work it.</strong></li>
         </ol>
-        <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-lg bg-ink font-bold text-white">Start Tracking</button>
+        <button onClick={onClose} className="mt-5 min-h-12 w-full rounded-lg bg-ink font-bold text-white dark:bg-coral">Start Tracking</button>
       </section>
     </div>
   );
@@ -51,7 +51,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-paper">
+    <div className="min-h-screen bg-paper text-ink transition-colors dark:bg-slate-950 dark:text-slate-100">
       <main className="mx-auto max-w-md px-4 pb-28 pt-6">
         <Routes>
           <Route path="/" element={<HomePage />} />
