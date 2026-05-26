@@ -1,5 +1,9 @@
 create extension if not exists pgcrypto;
 
+insert into storage.buckets (id, name, public)
+values ('event-images', 'event-images', true)
+on conflict (id) do update set public = true;
+
 create table if not exists public.workers (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
@@ -139,6 +143,16 @@ create policy "private MVP anon read locations" on public.locations for select t
 create policy "private MVP anon write locations" on public.locations for all to anon using (true) with check (true);
 create policy "private MVP anon read event days" on public.event_days for select to anon using (true);
 create policy "private MVP anon write event days" on public.event_days for all to anon using (true) with check (true);
+
+drop policy if exists "private MVP event images read" on storage.objects;
+drop policy if exists "private MVP event images insert" on storage.objects;
+drop policy if exists "private MVP event images update" on storage.objects;
+drop policy if exists "private MVP event images delete" on storage.objects;
+
+create policy "private MVP event images read" on storage.objects for select to anon using (bucket_id = 'event-images');
+create policy "private MVP event images insert" on storage.objects for insert to anon with check (bucket_id = 'event-images');
+create policy "private MVP event images update" on storage.objects for update to anon using (bucket_id = 'event-images') with check (bucket_id = 'event-images');
+create policy "private MVP event images delete" on storage.objects for delete to anon using (bucket_id = 'event-images');
 
 do $$
 begin

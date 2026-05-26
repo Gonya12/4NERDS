@@ -1,6 +1,7 @@
 import { Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { EventImageUploader } from "../components/EventImageUploader";
 import { listLocations } from "../services/database/locationRepository";
 import { getPlannerEvent, savePlannerEvent } from "../services/planner/plannerRepository";
 import type { Event, EventDay, Location, RegistrationStatus } from "../types/models";
@@ -11,6 +12,7 @@ const statuses: RegistrationStatus[] = ["open", "closed", "unknown", "sold_out",
 export function EventFormPage() {
   const { id: eventId } = useParams();
   const navigate = useNavigate();
+  const [draftEventId] = useState(() => eventId && eventId !== "new" ? eventId : id("event"));
   const [form, setForm] = useState({
     name: "",
     date: new Date().toISOString().slice(0, 10),
@@ -23,6 +25,7 @@ export function EventFormPage() {
     registrationUrl: "",
     sourceUrl: "",
     imageUrl: "",
+    imagePath: "",
     locationId: "",
     locationInstagramHandle: "",
     organizerInstagramHandle: "",
@@ -56,6 +59,7 @@ export function EventFormPage() {
         registrationUrl: event.registrationUrl || "",
         sourceUrl: event.sourceUrl || "",
         imageUrl: event.imageUrl || "",
+        imagePath: event.imagePath || "",
         locationId: event.locationId || "",
         locationInstagramHandle: event.locationInstagramHandle || "",
         organizerInstagramHandle: event.organizerInstagramHandle || "",
@@ -99,7 +103,7 @@ export function EventFormPage() {
     const existing = eventId && eventId !== "new" ? await getPlannerEvent(eventId) : undefined;
     const firstDay = eventDays[0] || blankDay();
     const event: Event = {
-      id: existing?.id || id("event"),
+      id: existing?.id || draftEventId,
       name: form.name.trim(),
       startDate: new Date(`${firstDay.date}T${firstDay.startTime || "12:00"}`).toISOString(),
       startTime: firstDay.startTime,
@@ -113,6 +117,7 @@ export function EventFormPage() {
       registrationUrl: form.registrationUrl,
       sourceUrl: form.sourceUrl,
       imageUrl: form.imageUrl,
+      imagePath: form.imagePath,
       locationId: form.locationId || undefined,
       locationInstagramHandle: form.locationInstagramHandle,
       organizerInstagramHandle: form.organizerInstagramHandle,
@@ -158,7 +163,8 @@ export function EventFormPage() {
         </div>
         <input value={form.registrationUrl} onChange={(e) => setForm({ ...form, registrationUrl: e.target.value })} placeholder="Vendor registration link" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <input value={form.sourceUrl} onChange={(e) => setForm({ ...form, sourceUrl: e.target.value })} placeholder="Source link" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
-        <input value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} placeholder="Event image URL" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
+        <EventImageUploader eventId={draftEventId} imageUrl={form.imageUrl} onChange={(image) => setForm({ ...form, imageUrl: image.imageUrl || "", imagePath: image.imagePath || "" })} />
+        <input value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value, imagePath: "" })} placeholder="Or paste image URL" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
         <div className="grid grid-cols-2 gap-3">
           <input value={form.locationInstagramHandle} onChange={(e) => setForm({ ...form, locationInstagramHandle: e.target.value })} placeholder="Location @handle" className="w-full rounded-xl border border-slate-200 px-3 py-3" />
           <input value={form.organizerInstagramHandle} onChange={(e) => setForm({ ...form, organizerInstagramHandle: e.target.value })} placeholder="Organizer @handle" className="w-full rounded-xl border border-slate-200 px-3 py-3" />

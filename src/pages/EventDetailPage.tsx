@@ -1,6 +1,7 @@
 import { CalendarCheck, CheckCircle2, DollarSign, Edit, ExternalLink, Map, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { EventImageUploader } from "../components/EventImageUploader";
 import { StatusChip } from "../components/StatusChip";
 import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
@@ -276,6 +277,17 @@ export function EventDetailPage() {
     }
   }
 
+  async function saveEventImage(image: { imageUrl?: string; imagePath?: string }) {
+    if (!event) return;
+    const updated = { ...event, imageUrl: image.imageUrl, imagePath: image.imagePath, updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not save image.");
+    }
+  }
+
   if (!event) return <div className="text-sm text-slate-500 dark:text-slate-400">Loading event...</div>;
 
   const confirmed = workers.filter((worker) => (event.confirmedWorkerIds || []).includes(worker.id));
@@ -321,6 +333,10 @@ export function EventDetailPage() {
         <p><strong>Current event ID:</strong> {event.id}</p>
         <p><strong>Current selected worker IDs:</strong> {lastSelectedWorkerIds.length ? lastSelectedWorkerIds.join(", ") : "None selected this session"}</p>
         <p><strong>Current Supabase mode:</strong> {syncStatus.mode}</p>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
+        <EventImageUploader eventId={event.id} imageUrl={event.imageUrl} onChange={saveEventImage} />
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft dark:bg-slate-900 dark:text-slate-300">
