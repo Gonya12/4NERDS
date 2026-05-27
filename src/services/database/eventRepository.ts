@@ -1,4 +1,4 @@
-import type { Event, EventDay, EventStatus, RegistrationStatus, SplitMode } from "../../types/models";
+import type { Event, EventDay, EventStage, EventStatus, RegistrationStatus, SplitMode } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
 import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
@@ -8,6 +8,7 @@ import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from 
 import { getReview, listLiveNotes, seedSalesCategories } from "./eventExtrasRepository";
 import { listEventDayWorkers, replaceEventDayWorkers } from "./availabilityRepository";
 import { listPriceOptions, replacePriceOptions } from "./priceOptionRepository";
+import { listSalesRecordsForEvent } from "./salesRepository";
 
 const homeCacheKey = "4nerds_home_events_cache_v1";
 
@@ -32,6 +33,7 @@ type EventRow = {
   location_instagram_handle?: string | null;
   organizer_instagram_handle?: string | null;
   status?: EventStatus | null;
+  event_stage?: EventStage | null;
   split_mode?: SplitMode | null;
   packing_notes?: string | null;
   booth_number?: string | null;
@@ -165,6 +167,7 @@ function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [
     locationInstagramHandle: row.location_instagram_handle || undefined,
     organizerInstagramHandle: row.organizer_instagram_handle || undefined,
     status: row.status || "interested",
+    eventStage: row.event_stage || "new",
     splitMode: row.split_mode || "equal",
     packingNotes: row.packing_notes || undefined,
     boothNumber: row.booth_number || undefined,
@@ -212,6 +215,7 @@ function toRow(event: Event): EventRow {
     location_instagram_handle: event.locationInstagramHandle || null,
     organizer_instagram_handle: event.organizerInstagramHandle || null,
     status: event.status || "interested",
+    event_stage: event.eventStage || "new",
     split_mode: event.splitMode || "equal",
     packing_notes: event.packingNotes || null,
     booth_number: event.boothNumber || null,
@@ -270,7 +274,8 @@ export async function listEvents() {
       eventDayWorkers: event.eventDayWorkers || [],
       priceOptions: event.priceOptions || [],
       checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
-      status: event.status || "interested"
+      status: event.status || "interested",
+      eventStage: event.eventStage || "new"
     }));
   }
 
@@ -346,7 +351,8 @@ export async function listHomeEvents(limit = 10) {
         eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
         eventDayWorkers: event.eventDayWorkers || [],
         priceOptions: event.priceOptions || [],
-        status: event.status || "interested"
+        status: event.status || "interested",
+        eventStage: event.eventStage || "new"
       }));
     cacheHomeEvents(events);
     setSupabaseStatus({ durationMs: Math.round(performance.now() - startedAt), eventsLoaded: events.length, queryCount: 1, cacheStatus: "Local home cache updated" });
@@ -356,7 +362,7 @@ export async function listHomeEvents(limit = 10) {
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("events")
-    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,split_mode,event_cost,created_at,updated_at")
+    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,created_at,updated_at")
     .gte("start_date", today)
     .neq("status", "completed")
     .neq("status", "skipped")
@@ -440,7 +446,8 @@ export async function getEvent(eventId: string) {
       eventDayWorkers: event.eventDayWorkers || [],
       priceOptions: event.priceOptions || [],
       checklistItems: event.checklistItems?.length ? event.checklistItems : defaultChecklistItems(event.id),
-      status: event.status || "interested"
+      status: event.status || "interested",
+      eventStage: event.eventStage || "new"
     } : undefined;
   }
 
@@ -472,6 +479,7 @@ export async function getEvent(eventId: string) {
   event.review = await getReview(eventId);
   event.eventDayWorkers = await listEventDayWorkers(eventId);
   event.priceOptions = await listPriceOptions(eventId);
+  event.salesRecords = await listSalesRecordsForEvent(eventId);
   return event;
 }
 
@@ -486,6 +494,7 @@ export async function saveEvent(event: Event) {
     priceOptions: event.priceOptions || [],
     checklistItems: event.checklistItems || [],
     status: event.status || "interested",
+    eventStage: event.eventStage || "new",
     splitMode: event.splitMode || "equal",
     updatedAt: nowIso()
   };

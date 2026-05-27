@@ -150,6 +150,7 @@ export function EventFormPage() {
       state: form.state,
       registrationStatus: form.registrationStatus,
       status: existing?.status || "interested",
+      eventStage: existing?.eventStage || "new",
       registrationUrl: form.registrationUrl,
       sourceUrl: form.sourceUrl,
       imageUrl: form.imageUrl,

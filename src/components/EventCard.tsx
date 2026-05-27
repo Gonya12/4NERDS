@@ -9,6 +9,7 @@ import { availabilitySummaryByWorker } from "../utils/availability";
 import { EventImageFrame } from "./EventImageFrame";
 import { StatusChip } from "./StatusChip";
 import { memo } from "react";
+import { eventStage, eventStageAccentClasses, eventStageCardClasses, eventStageLabels } from "../utils/eventStage";
 
 function workerNames(event: Event, workers: Worker[]) {
   const ids = new Set(event.confirmedWorkerIds || []);
@@ -21,6 +22,7 @@ function EventCardBase({ event, workers = [] }: { event: Event; workers?: Worker
   const timing = eventTimingStatus(event.startDate);
   const payment = calculatePaymentSummary(event, workers);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  const stage = eventStage(event.eventStage);
   const checklist = checklistProgress(event);
   const paymentStatus = payment.confirmedWorkerCount === 0
     ? "Split unavailable until workers are confirmed"
@@ -33,12 +35,14 @@ function EventCardBase({ event, workers = [] }: { event: Event; workers?: Worker
         : `${formatMoney(payment.totalRemaining)} still owed`;
 
   return (
-    <Link to={`/events/${event.id}`} className="group block overflow-hidden rounded-2xl border border-white/70 bg-white/90 p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900/90">
+    <Link to={`/events/${event.id}`} className={`group relative block overflow-hidden rounded-2xl border p-4 shadow-soft backdrop-blur transition hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.99] ${eventStageCardClasses[stage]}`}>
+      <span className={`absolute inset-y-0 left-0 w-1.5 ${eventStageAccentClasses[stage]}`} />
       <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="mb-4 aspect-[4/5] max-h-[620px]" />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
             <span className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white dark:bg-slate-700">{timing}</span>
+            <span className={`rounded-full px-3 py-1 text-xs font-bold text-white ${eventStageAccentClasses[stage]}`}>{eventStageLabels[stage]}</span>
             <StatusChip value={event.registrationStatus} />
           </div>
           <h3 className="text-lg font-black leading-tight text-ink dark:text-white">{event.name}</h3>

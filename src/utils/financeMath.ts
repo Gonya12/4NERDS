@@ -3,7 +3,8 @@ import { roundMoney } from "./paymentMath";
 
 export function calculateEventProfit(event: Event, finance?: EventFinance) {
   const eventCost = roundMoney(event.eventCost || 0);
-  const totalSales = roundMoney(finance?.totalSales || 0);
+  const salesRecordTotal = roundMoney((event.salesRecords || []).reduce((sum, sale) => sum + Number(sale.soldPrice || 0), 0));
+  const totalSales = roundMoney((finance?.totalSales || 0) + salesRecordTotal);
   const gasCost = roundMoney(finance?.gasCost || 0);
   const foodCost = roundMoney(finance?.foodCost || 0);
   const miscCost = roundMoney(finance?.miscCost || 0);

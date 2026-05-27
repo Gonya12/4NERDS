@@ -10,6 +10,7 @@ import { FlyerGalleryPage } from "./pages/FlyerGalleryPage";
 import { HomePage } from "./pages/HomePage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { PastEventsPage } from "./pages/PastEventsPage";
+import { SalesControlPage } from "./pages/SalesControlPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
 
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="/past" element={<PastEventsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/flyers" element={<FlyerGalleryPage />} />
+          <Route path="/sales" element={<SalesControlPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/events/new" element={<EventFormPage />} />
           <Route path="/events/:id" element={<EventDetailPage />} />

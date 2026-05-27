@@ -6,6 +6,7 @@ export type AttendanceStatus = "interested" | "maybe" | "not_going" | "none";
 export type EventClassification = "event_high_confidence" | "event_needs_review" | "possible_but_low_confidence" | "not_event";
 export type TeamDecision = "interested" | "maybe" | "not_going";
 export type EventStatus = "interested" | "registered" | "paid" | "preparing" | "completed" | "skipped";
+export type EventStage = "new" | "applied" | "paid" | "past";
 export type SplitMode = "equal" | "weighted_by_days";
 export type PricingType = "flat" | "per_day" | "package";
 
@@ -59,6 +60,7 @@ export interface Event {
   locationInstagramHandle?: string;
   organizerInstagramHandle?: string;
   status?: EventStatus;
+  eventStage?: EventStage;
   packingNotes?: string;
   boothNumber?: string;
   setupTime?: string;
@@ -70,6 +72,7 @@ export interface Event {
   liveNotes?: EventLiveNote[];
   salesCategories?: EventSalesCategory[];
   review?: EventReview;
+  salesRecords?: SalesRecord[];
   confirmedWorkerIds?: string[];
   eventCost?: number;
   paymentRecords?: PaymentRecord[];
@@ -79,6 +82,23 @@ export interface Event {
   lastRegistrationStatus?: RegistrationStatus;
   lastNotifiedRegistrationStatus?: RegistrationStatus;
   notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SalesRecord {
+  id: string;
+  eventId?: string;
+  eventDayId?: string;
+  imageUrl?: string;
+  imagePath?: string;
+  itemName?: string;
+  soldPrice?: number;
+  boughtPrice?: number;
+  boughtFrom?: string;
+  notes?: string;
+  soldAt: string;
+  pendingUpload: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -13,7 +13,7 @@ import { googleMapsDirectionsLink } from "../services/distance/mapLinks";
 import { deletePlannerEvent, getPlannerEvent, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
 import { departureTime, estimateDriveMinutes } from "../services/travel/travelService";
 import { getEventWeather, type WeatherSummary } from "../services/weather/weatherService";
-import type { Event, EventChecklistItem, EventDayWorker, EventFinance, EventPriceOption, EventStatus, PaymentRecord, PricingType, SplitMode, Worker } from "../types/models";
+import type { Event, EventChecklistItem, EventDayWorker, EventFinance, EventPriceOption, EventStage, EventStatus, PaymentRecord, PricingType, SplitMode, Worker } from "../types/models";
 import { displayDate } from "../utils/dateUtils";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
@@ -22,6 +22,7 @@ import { generateInstagramCaption } from "../utils/instagramCaption";
 import { id as createId, nowIso } from "../utils/normalize";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { availabilitySummaryByWorker, effectiveConfirmedWorkerIds, normalizeDayWorkerRows, workersForDay } from "../utils/availability";
+import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } from "../utils/eventStage";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -288,6 +289,17 @@ export function EventDetailPage() {
     }
   }
 
+  async function updateEventStage(stage: EventStage) {
+    if (!event) return;
+    const updated = { ...event, eventStage: stage, updatedAt: nowIso() };
+    try {
+      await savePlannerEvent(updated);
+      setEvent(await getPlannerEvent(event.id) || updated);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not update event stage.");
+    }
+  }
+
   async function saveChecklist(item: EventChecklistItem) {
     if (!event) return;
     try {
@@ -471,6 +483,8 @@ export function EventDetailPage() {
   const notesSummary = event.packingNotes ? "Packing notes added" : "No notes yet";
   const reviewAverage = event.review ? [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).reduce((sum, value) => sum + Number(value), 0) / Math.max(1, [event.review.overallRating, event.review.trafficRating, event.review.organizerRating, event.review.profitRating].filter(Boolean).length) : 0;
   const selectedPrice = paymentSummary.selectedPriceOption;
+  const currentStage = event.eventStage || "new";
+  const isDatePast = eventTimingStatus(event.startDate) === "Past";
 
   return (
     <div className="space-y-4 lg:mx-auto lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-5 lg:space-y-0">
@@ -504,6 +518,24 @@ export function EventDetailPage() {
       </nav>
 
       {errorMessage ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700 lg:col-span-2 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-black text-ink dark:text-white">Event Stage</h2>
+            <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">{eventStageDescriptions[currentStage]}</p>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-bold text-white ${eventStageAccentClasses[currentStage]}`}>{eventStageLabels[currentStage]}</span>
+        </div>
+        {isDatePast && currentStage !== "past" ? <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-800 dark:bg-sky-950/30 dark:text-sky-200">This event date is in the past. You may want to mark it Past.</p> : null}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {(["new", "applied", "paid", "past"] as EventStage[]).map((stage) => (
+            <button key={stage} onClick={() => updateEventStage(stage)} className={`min-h-10 rounded-xl px-3 text-xs font-black transition ${currentStage === stage ? `${eventStageAccentClasses[stage]} text-white shadow-soft` : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200"}`}>
+              {eventStageLabels[stage]}
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft lg:col-start-1 dark:bg-slate-900 dark:text-slate-300">
         <h2 className="font-black text-ink dark:text-white">Schedule</h2>

@@ -4,6 +4,10 @@ insert into storage.buckets (id, name, public)
 values ('event-images', 'event-images', true)
 on conflict (id) do update set public = true;
 
+insert into storage.buckets (id, name, public)
+values ('sale-images', 'sale-images', true)
+on conflict (id) do update set public = true;
+
 create table if not exists public.workers (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
@@ -47,6 +51,7 @@ create table if not exists public.events (
   location_instagram_handle text,
   organizer_instagram_handle text,
   status text not null default 'interested',
+  event_stage text not null default 'new' check (event_stage in ('new', 'applied', 'paid', 'past')),
   packing_notes text,
   booth_number text,
   setup_time text,
@@ -168,12 +173,30 @@ create table if not exists public.event_reviews (
   unique(event_id)
 );
 
+create table if not exists public.sales_records (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid references public.events(id) on delete set null,
+  event_day_id uuid references public.event_days(id) on delete set null,
+  image_url text,
+  image_path text,
+  item_name text,
+  sold_price numeric(10, 2),
+  bought_price numeric(10, 2),
+  bought_from text,
+  notes text,
+  sold_at timestamptz not null default now(),
+  pending_upload boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.events add column if not exists image_url text;
 alter table public.events add column if not exists image_path text;
 alter table public.events add column if not exists location_id uuid references public.locations(id);
 alter table public.events add column if not exists location_instagram_handle text;
 alter table public.events add column if not exists organizer_instagram_handle text;
 alter table public.events add column if not exists status text not null default 'interested';
+alter table public.events add column if not exists event_stage text not null default 'new';
 alter table public.events add column if not exists packing_notes text;
 alter table public.events add column if not exists booth_number text;
 alter table public.events add column if not exists setup_time text;
@@ -193,6 +216,8 @@ alter table public.event_finances add column if not exists updated_at timestampt
 alter table public.event_live_notes add column if not exists updated_at timestamptz not null default now();
 alter table public.event_sales_categories add column if not exists updated_at timestamptz not null default now();
 alter table public.event_reviews add column if not exists updated_at timestamptz not null default now();
+alter table public.sales_records add column if not exists updated_at timestamptz not null default now();
+alter table public.sales_records add column if not exists pending_upload boolean not null default false;
 
 insert into public.workers (name, active)
 values
@@ -218,6 +243,7 @@ alter table public.event_finances replica identity full;
 alter table public.event_live_notes replica identity full;
 alter table public.event_sales_categories replica identity full;
 alter table public.event_reviews replica identity full;
+alter table public.sales_records replica identity full;
 
 alter table public.workers enable row level security;
 alter table public.events enable row level security;
@@ -232,6 +258,7 @@ alter table public.event_finances enable row level security;
 alter table public.event_live_notes enable row level security;
 alter table public.event_sales_categories enable row level security;
 alter table public.event_reviews enable row level security;
+alter table public.sales_records enable row level security;
 
 drop policy if exists "private MVP anon read workers" on public.workers;
 drop policy if exists "private MVP anon write workers" on public.workers;
@@ -259,6 +286,8 @@ drop policy if exists "private MVP anon read sales categories" on public.event_s
 drop policy if exists "private MVP anon write sales categories" on public.event_sales_categories;
 drop policy if exists "private MVP anon read reviews" on public.event_reviews;
 drop policy if exists "private MVP anon write reviews" on public.event_reviews;
+drop policy if exists "private MVP anon read sales records" on public.sales_records;
+drop policy if exists "private MVP anon write sales records" on public.sales_records;
 
 create policy "private MVP anon read workers" on public.workers for select to anon using (true);
 create policy "private MVP anon write workers" on public.workers for all to anon using (true) with check (true);
@@ -286,16 +315,26 @@ create policy "private MVP anon read sales categories" on public.event_sales_cat
 create policy "private MVP anon write sales categories" on public.event_sales_categories for all to anon using (true) with check (true);
 create policy "private MVP anon read reviews" on public.event_reviews for select to anon using (true);
 create policy "private MVP anon write reviews" on public.event_reviews for all to anon using (true) with check (true);
+create policy "private MVP anon read sales records" on public.sales_records for select to anon using (true);
+create policy "private MVP anon write sales records" on public.sales_records for all to anon using (true) with check (true);
 
 drop policy if exists "private MVP event images read" on storage.objects;
 drop policy if exists "private MVP event images insert" on storage.objects;
 drop policy if exists "private MVP event images update" on storage.objects;
 drop policy if exists "private MVP event images delete" on storage.objects;
+drop policy if exists "private MVP sale images read" on storage.objects;
+drop policy if exists "private MVP sale images insert" on storage.objects;
+drop policy if exists "private MVP sale images update" on storage.objects;
+drop policy if exists "private MVP sale images delete" on storage.objects;
 
 create policy "private MVP event images read" on storage.objects for select to anon using (bucket_id = 'event-images');
 create policy "private MVP event images insert" on storage.objects for insert to anon with check (bucket_id = 'event-images');
 create policy "private MVP event images update" on storage.objects for update to anon using (bucket_id = 'event-images') with check (bucket_id = 'event-images');
 create policy "private MVP event images delete" on storage.objects for delete to anon using (bucket_id = 'event-images');
+create policy "private MVP sale images read" on storage.objects for select to anon using (bucket_id = 'sale-images');
+create policy "private MVP sale images insert" on storage.objects for insert to anon with check (bucket_id = 'sale-images');
+create policy "private MVP sale images update" on storage.objects for update to anon using (bucket_id = 'sale-images') with check (bucket_id = 'sale-images');
+create policy "private MVP sale images delete" on storage.objects for delete to anon using (bucket_id = 'sale-images');
 
 do $$
 begin
@@ -375,8 +414,15 @@ begin
 exception when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  alter publication supabase_realtime add table public.sales_records;
+exception when duplicate_object then null;
+end $$;
+
 create index if not exists idx_events_start_date on public.events(start_date);
 create index if not exists idx_events_status_start_date on public.events(status, start_date);
+create index if not exists idx_events_event_stage on public.events(event_stage);
 create index if not exists idx_event_days_event_id on public.event_days(event_id);
 create index if not exists idx_event_days_date on public.event_days(date);
 create index if not exists idx_event_day_workers_event_id on public.event_day_workers(event_id);
@@ -388,3 +434,7 @@ create index if not exists idx_event_live_notes_event_id on public.event_live_no
 create index if not exists idx_event_finances_event_id on public.event_finances(event_id);
 create index if not exists idx_event_sales_categories_event_id on public.event_sales_categories(event_id);
 create index if not exists idx_event_reviews_event_id on public.event_reviews(event_id);
+create index if not exists idx_sales_records_event_id on public.sales_records(event_id);
+create index if not exists idx_sales_records_event_day_id on public.sales_records(event_day_id);
+create index if not exists idx_sales_records_sold_at on public.sales_records(sold_at);
+create index if not exists idx_sales_records_pending_upload on public.sales_records(pending_upload);
