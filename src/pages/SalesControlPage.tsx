@@ -9,7 +9,8 @@ import { eventDays, shortScheduleSummary } from "../utils/eventSchedule";
 import { formatMoney, roundMoney } from "../utils/paymentMath";
 import { useLocation } from "react-router-dom";
 
-type SortMode = "recent" | "oldest" | "highest_sold" | "highest_profit" | "lowest_profit" | "event" | "missing";
+type SortMode = "recent" | "oldest" | "highest_sold" | "highest_profit" | "lowest_profit" | "missing";
+type DateFilter = "all" | "today" | "week" | "month" | "custom";
 
 function profit(sale: SalesRecord) {
   return roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0));
@@ -29,6 +30,10 @@ export function SalesControlPage() {
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("recent");
+  const [eventFilter, setEventFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [eventDayFilter, setEventDayFilter] = useState("");
+  const [customDate, setCustomDate] = useState(new Date().toISOString().slice(0, 10));
   const [imageFile, setImageFile] = useState<File>();
   const [previewUrl, setPreviewUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -143,12 +148,25 @@ export function SalesControlPage() {
   }
 
   const eventMap = new Map(events.map((event) => [event.id, event]));
+  const selectedFilterEvent = eventFilter ? events.find((event) => event.id === eventFilter) : undefined;
   const filtered = useMemo(() => {
     const text = query.toLowerCase();
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const rows = sales.filter((sale) => {
       const event = sale.eventId ? eventMap.get(sale.eventId) : undefined;
       const haystack = `${sale.itemName || ""} ${event?.name || ""} ${sale.boughtFrom || ""} ${sale.notes || ""}`.toLowerCase();
       if (sort === "missing" && sale.itemName && sale.soldPrice !== undefined && sale.boughtPrice !== undefined) return false;
+      if (eventFilter && sale.eventId !== eventFilter) return false;
+      if (eventDayFilter && sale.eventDayId !== eventDayFilter) return false;
+      const soldDate = new Date(sale.soldAt);
+      if (dateFilter === "today" && soldDate.toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) return false;
+      if (dateFilter === "week" && soldDate < startOfWeek) return false;
+      if (dateFilter === "month" && soldDate < startOfMonth) return false;
+      if (dateFilter === "custom" && soldDate.toISOString().slice(0, 10) !== customDate) return false;
       return haystack.includes(text);
     });
     return rows.sort((a, b) => {
@@ -156,10 +174,9 @@ export function SalesControlPage() {
       if (sort === "highest_sold") return Number(b.soldPrice || 0) - Number(a.soldPrice || 0);
       if (sort === "highest_profit") return profit(b) - profit(a);
       if (sort === "lowest_profit") return profit(a) - profit(b);
-      if (sort === "event") return (eventMap.get(a.eventId || "")?.name || "").localeCompare(eventMap.get(b.eventId || "")?.name || "");
       return b.soldAt.localeCompare(a.soldAt);
     });
-  }, [sales, query, sort, events]);
+  }, [sales, query, sort, events, eventFilter, dateFilter, eventDayFilter, customDate]);
 
   const totals = sales.reduce((acc, sale) => ({
     sold: acc.sold + Number(sale.soldPrice || 0),
@@ -243,7 +260,7 @@ export function SalesControlPage() {
         </section>
       ) : (
         <>
-          <section className="grid gap-3 rounded-2xl bg-white/90 p-3 shadow-soft md:grid-cols-[1fr_220px_160px] dark:bg-slate-900">
+          <section className="grid gap-3 rounded-2xl bg-white/90 p-3 shadow-soft md:grid-cols-2 xl:grid-cols-[1fr_190px_220px_190px_160px] dark:bg-slate-900">
             <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
               <Search size={17} className="text-slate-400" />
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sales" className="min-w-0 flex-1 bg-transparent outline-none" />
@@ -254,10 +271,32 @@ export function SalesControlPage() {
               <option value="highest_sold">Highest sold price</option>
               <option value="highest_profit">Highest profit</option>
               <option value="lowest_profit">Lowest profit</option>
-              <option value="event">Event</option>
               <option value="missing">Missing details</option>
             </select>
+            <select value={eventFilter} onChange={(e) => { setEventFilter(e.target.value); setEventDayFilter(""); }} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <option value="">All events</option>
+              {events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
+            </select>
+            <select value={eventDayFilter || dateFilter} onChange={(e) => {
+              const value = e.target.value;
+              if (value.startsWith("day:")) {
+                setEventDayFilter(value.replace("day:", ""));
+                setDateFilter("all");
+              } else {
+                setEventDayFilter("");
+                setDateFilter(value as DateFilter);
+              }
+            }} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <option value="all">All dates</option>
+              <option value="today">Today</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom date</option>
+              {selectedFilterEvent ? eventDays(selectedFilterEvent).map((day) => <option key={day.id} value={`day:${day.id}`}>{day.date.slice(0, 10)}</option>) : null}
+            </select>
             <button onClick={syncPending} className="rounded-xl bg-ink px-3 py-2 text-sm font-bold text-white dark:bg-coral">Sync Pending</button>
+            {dateFilter === "custom" ? <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white" /> : null}
+            <button onClick={() => { setQuery(""); setSort("recent"); setEventFilter(""); setEventDayFilter(""); setDateFilter("all"); }} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Clear Filters</button>
           </section>
           {filtered.length === 0 ? <EmptyState title="No sales yet." /> : null}
           <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

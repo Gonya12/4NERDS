@@ -190,6 +190,23 @@ create table if not exists public.sales_records (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.buy_items (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  product_url text,
+  image_url text,
+  estimated_price numeric(10, 2),
+  quantity integer not null default 1,
+  priority text not null default 'medium' check (priority in ('low', 'medium', 'high')),
+  purchased boolean not null default false,
+  purchased_by text,
+  purchased_at timestamptz,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.events add column if not exists image_url text;
 alter table public.events add column if not exists image_path text;
 alter table public.events add column if not exists location_id uuid references public.locations(id);
@@ -218,6 +235,8 @@ alter table public.event_sales_categories add column if not exists updated_at ti
 alter table public.event_reviews add column if not exists updated_at timestamptz not null default now();
 alter table public.sales_records add column if not exists updated_at timestamptz not null default now();
 alter table public.sales_records add column if not exists pending_upload boolean not null default false;
+alter table public.buy_items add column if not exists updated_at timestamptz not null default now();
+alter table public.buy_items add column if not exists purchased boolean not null default false;
 
 insert into public.workers (name, active)
 values
@@ -244,6 +263,7 @@ alter table public.event_live_notes replica identity full;
 alter table public.event_sales_categories replica identity full;
 alter table public.event_reviews replica identity full;
 alter table public.sales_records replica identity full;
+alter table public.buy_items replica identity full;
 
 alter table public.workers enable row level security;
 alter table public.events enable row level security;
@@ -259,6 +279,7 @@ alter table public.event_live_notes enable row level security;
 alter table public.event_sales_categories enable row level security;
 alter table public.event_reviews enable row level security;
 alter table public.sales_records enable row level security;
+alter table public.buy_items enable row level security;
 
 drop policy if exists "private MVP anon read workers" on public.workers;
 drop policy if exists "private MVP anon write workers" on public.workers;
@@ -288,6 +309,8 @@ drop policy if exists "private MVP anon read reviews" on public.event_reviews;
 drop policy if exists "private MVP anon write reviews" on public.event_reviews;
 drop policy if exists "private MVP anon read sales records" on public.sales_records;
 drop policy if exists "private MVP anon write sales records" on public.sales_records;
+drop policy if exists "private MVP anon read buy items" on public.buy_items;
+drop policy if exists "private MVP anon write buy items" on public.buy_items;
 
 create policy "private MVP anon read workers" on public.workers for select to anon using (true);
 create policy "private MVP anon write workers" on public.workers for all to anon using (true) with check (true);
@@ -317,6 +340,8 @@ create policy "private MVP anon read reviews" on public.event_reviews for select
 create policy "private MVP anon write reviews" on public.event_reviews for all to anon using (true) with check (true);
 create policy "private MVP anon read sales records" on public.sales_records for select to anon using (true);
 create policy "private MVP anon write sales records" on public.sales_records for all to anon using (true) with check (true);
+create policy "private MVP anon read buy items" on public.buy_items for select to anon using (true);
+create policy "private MVP anon write buy items" on public.buy_items for all to anon using (true) with check (true);
 
 drop policy if exists "private MVP event images read" on storage.objects;
 drop policy if exists "private MVP event images insert" on storage.objects;
@@ -420,6 +445,12 @@ begin
 exception when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  alter publication supabase_realtime add table public.buy_items;
+exception when duplicate_object then null;
+end $$;
+
 create index if not exists idx_events_start_date on public.events(start_date);
 create index if not exists idx_events_status_start_date on public.events(status, start_date);
 create index if not exists idx_events_event_stage on public.events(event_stage);
@@ -438,3 +469,6 @@ create index if not exists idx_sales_records_event_id on public.sales_records(ev
 create index if not exists idx_sales_records_event_day_id on public.sales_records(event_day_id);
 create index if not exists idx_sales_records_sold_at on public.sales_records(sold_at);
 create index if not exists idx_sales_records_pending_upload on public.sales_records(pending_upload);
+create index if not exists idx_buy_items_created_at on public.buy_items(created_at);
+create index if not exists idx_buy_items_purchased on public.buy_items(purchased);
+create index if not exists idx_buy_items_priority on public.buy_items(priority);

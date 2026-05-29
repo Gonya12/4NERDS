@@ -8,6 +8,7 @@ import { EventDetailPage } from "./pages/EventDetailPage";
 import { EventFormPage } from "./pages/EventFormPage";
 import { FlyerGalleryPage } from "./pages/FlyerGalleryPage";
 import { HomePage } from "./pages/HomePage";
+import { NeedsToBuyPage } from "./pages/NeedsToBuyPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { PastEventsPage } from "./pages/PastEventsPage";
 import { SalesControlPage } from "./pages/SalesControlPage";
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/flyers" element={<FlyerGalleryPage />} />
           <Route path="/sales" element={<SalesControlPage />} />
+          <Route path="/buy" element={<NeedsToBuyPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/events/new" element={<EventFormPage />} />
           <Route path="/events/:id" element={<EventDetailPage />} />

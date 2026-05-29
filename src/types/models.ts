@@ -9,6 +9,7 @@ export type EventStatus = "interested" | "registered" | "paid" | "preparing" | "
 export type EventStage = "new" | "applied" | "paid" | "past";
 export type SplitMode = "equal" | "weighted_by_days";
 export type PricingType = "flat" | "per_day" | "package";
+export type BuyItemPriority = "low" | "medium" | "high";
 
 export interface Organizer {
   id: string;
@@ -99,6 +100,23 @@ export interface SalesRecord {
   notes?: string;
   soldAt: string;
   pendingUpload: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BuyItem {
+  id: string;
+  title: string;
+  description?: string;
+  productUrl?: string;
+  imageUrl?: string;
+  estimatedPrice?: number;
+  quantity: number;
+  priority: BuyItemPriority;
+  purchased: boolean;
+  purchasedBy?: string;
+  purchasedAt?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }
