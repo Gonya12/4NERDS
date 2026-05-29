@@ -107,6 +107,16 @@ export type ProductPreview = {
   estimatedPrice?: number;
 };
 
+type ProductPreviewApiResponse = {
+  success: boolean;
+  title?: string;
+  description?: string;
+  image_url?: string;
+  estimated_price?: number;
+  source_url?: string;
+  error?: string;
+};
+
 function previewCache() {
   try {
     return JSON.parse(localStorage.getItem(previewCacheKey) || "{}") as Record<string, ProductPreview>;
@@ -122,17 +132,21 @@ export async function fetchProductPreview(productUrl: string) {
   if (cache[url]) return cache[url];
 
   try {
-    const response = await fetch(url);
-    const html = await response.text();
-    const doc = new DOMParser().parseFromString(html, "text/html");
+    const response = await fetch(`/api/product-preview?url=${encodeURIComponent(url)}`);
+    const payload = await response.json() as ProductPreviewApiResponse;
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.error || "Could not preview this link.");
+    }
     const preview: ProductPreview = {
-      title: doc.querySelector("meta[property='og:title']")?.getAttribute("content") || doc.querySelector("title")?.textContent || undefined,
-      description: doc.querySelector("meta[property='og:description']")?.getAttribute("content") || undefined,
-      imageUrl: doc.querySelector("meta[property='og:image']")?.getAttribute("content") || undefined
+      title: payload.title || undefined,
+      description: payload.description || undefined,
+      imageUrl: payload.image_url || undefined,
+      estimatedPrice: payload.estimated_price === undefined || payload.estimated_price === null ? undefined : Number(payload.estimated_price)
     };
     localStorage.setItem(previewCacheKey, JSON.stringify({ ...cache, [url]: preview }));
     return preview;
-  } catch {
+  } catch (error) {
+    console.warn("Product preview failed:", error);
     throw new Error("Could not preview this link. Add details manually.");
   }
 }

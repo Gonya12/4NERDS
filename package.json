@@ -20,6 +20,7 @@
     "@capacitor/preferences": "^7.0.2",
     "@supabase/supabase-js": "^2.106.2",
     "@vitejs/plugin-react": "^5.0.4",
+    "cheerio": "^1.2.0",
     "chrono-node": "^2.9.0",
     "date-fns": "^4.1.0",
     "dexie": "^4.2.1",
