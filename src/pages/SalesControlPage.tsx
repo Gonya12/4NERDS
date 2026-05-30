@@ -21,8 +21,16 @@ function todayEventMatches(events: Event[]) {
   return events.filter((event) => eventDays(event).some((day) => day.date.slice(0, 10) === today));
 }
 
+function todayDayId(event?: Event) {
+  if (!event) return "";
+  const today = new Date().toISOString().slice(0, 10);
+  return eventDays(event).find((day) => day.date.slice(0, 10) === today)?.id || "";
+}
+
 export function SalesControlPage() {
   const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const requestedEventId = params.get("eventId") || "";
   const [sales, setSales] = useState<SalesRecord[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [mode, setMode] = useState<"control" | "sale">("control");
@@ -60,9 +68,14 @@ export function SalesControlPage() {
     const [saleRows, eventRows] = await Promise.all([listSalesRecords(), listPlannerEvents()]);
     setSales(saleRows);
     setEvents(eventRows);
+    const requestedEvent = requestedEventId ? eventRows.find((event) => event.id === requestedEventId) : undefined;
+    if (requestedEvent && !editing) {
+      setForm((current) => ({ ...current, eventId: requestedEvent.id, eventDayId: todayDayId(requestedEvent) }));
+      return;
+    }
     const matches = todayEventMatches(eventRows);
     if (!form.eventId && matches.length === 1) {
-      setForm((current) => ({ ...current, eventId: matches[0].id, eventDayId: eventDays(matches[0]).find((day) => day.date.slice(0, 10) === new Date().toISOString().slice(0, 10))?.id || "" }));
+      setForm((current) => ({ ...current, eventId: matches[0].id, eventDayId: todayDayId(matches[0]) }));
     }
   }
 
@@ -86,10 +99,11 @@ export function SalesControlPage() {
     setPreviewUrl("");
     setCameraError("");
     setCameraReady(false);
-    const match = todayMatches.length === 1 ? todayMatches[0] : undefined;
+    const requestedEvent = requestedEventId ? events.find((event) => event.id === requestedEventId) : undefined;
+    const match = requestedEvent || (todayMatches.length === 1 ? todayMatches[0] : undefined);
     setForm({
       eventId: match?.id || "",
-      eventDayId: match ? eventDays(match).find((day) => day.date.slice(0, 10) === new Date().toISOString().slice(0, 10))?.id || "" : "",
+      eventDayId: match ? todayDayId(match) : "",
       itemName: "",
       soldPrice: "",
       boughtPrice: "",
@@ -324,6 +338,11 @@ export function SalesControlPage() {
               <button onClick={() => setFacingMode((current) => current === "environment" ? "user" : "environment")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><SwitchCamera size={17} /> Switch</button>
               <button onClick={() => inputRef.current?.click()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><ImagePlus size={17} /> Upload</button>
             </div>
+            {selectedEvent ? (
+              <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                Linked to: {selectedEvent.name}
+              </p>
+            ) : null}
             <select value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value, eventDayId: "" })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="">No event selected</option>
               {events.map((event) => <option key={event.id} value={event.id}>{event.name} - {shortScheduleSummary(event)}</option>)}

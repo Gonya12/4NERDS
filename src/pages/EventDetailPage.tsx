@@ -1,4 +1,4 @@
-import { CalendarCheck, CheckCircle2, ChevronDown, CopyPlus, DollarSign, Edit, ExternalLink, ImagePlus, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
+import { CalendarCheck, Camera, CheckCircle2, ChevronDown, CopyPlus, DollarSign, Edit, ExternalLink, ImagePlus, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EventImageFrame } from "../components/EventImageFrame";
@@ -512,6 +512,7 @@ export function EventDetailPage() {
           {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
+          <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-sm font-bold text-white shadow-soft dark:bg-coral"><Camera size={15} /> Quick Sale</Link>
           <button onClick={() => jump(qrRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={15} /> QR</button>
           <button onClick={duplicateEvent} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CopyPlus size={15} /> Duplicate</button>
         </div>
