@@ -1,4 +1,4 @@
-import { CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, Users, X } from "lucide-react";
+import { CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
@@ -20,7 +20,6 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
-  const [showSalesMenu, setShowSalesMenu] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
 
   async function load() {
@@ -189,26 +188,9 @@ export function HomePage() {
         )}
       </section>
 
-      <button onClick={() => setShowSalesMenu(true)} className="fixed bottom-24 right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-full bg-coral text-white shadow-2xl transition active:scale-95 lg:bottom-8 lg:right-8">
+      <button onClick={() => navigate("/sales?mode=sale")} className="fixed bottom-24 right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-full bg-coral text-white shadow-2xl transition active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale">
         <Camera size={24} />
       </button>
-      {showSalesMenu ? (
-        <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
-          <section className="mx-auto w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-bold text-coral">Sales Control</p>
-                <h2 className="text-2xl font-black text-ink dark:text-white">What do you want to open?</h2>
-              </div>
-              <button onClick={() => setShowSalesMenu(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
-            </div>
-            <div className="mt-5 grid gap-3">
-              <button onClick={() => navigate("/sales?mode=sale")} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-coral font-black text-white"><Camera size={18} /> Sale</button>
-              <button onClick={() => navigate("/sales")} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-ink font-black text-white dark:bg-slate-800"><Users size={18} /> Control</button>
-            </div>
-          </section>
-        </div>
-      ) : null}
       {showLegend ? (
         <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
           <section className="mx-auto w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">

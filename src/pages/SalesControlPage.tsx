@@ -1,4 +1,4 @@
-import { Camera, Save, Search, Trash2, Upload, X } from "lucide-react";
+import { Camera, ImagePlus, RotateCcw, Save, Search, SwitchCamera, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { createSaleRecord, deleteSaleRecord, listSalesRecords, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
@@ -36,8 +36,14 @@ export function SalesControlPage() {
   const [customDate, setCustomDate] = useState(new Date().toISOString().slice(0, 10));
   const [imageFile, setImageFile] = useState<File>();
   const [previewUrl, setPreviewUrl] = useState("");
+  const [cameraError, setCameraError] = useState("");
+  const [cameraReady, setCameraReady] = useState(false);
+  const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const todayMatches = useMemo(() => todayEventMatches(events), [events]);
   const [form, setForm] = useState({
     eventId: "",
@@ -65,10 +71,21 @@ export function SalesControlPage() {
     void load();
   }, [location.search]);
 
+  useEffect(() => {
+    if (mode === "sale" && !previewUrl) {
+      void startCamera();
+    } else {
+      stopCamera();
+    }
+    return () => stopCamera();
+  }, [mode, previewUrl, facingMode]);
+
   function resetForm() {
     setEditing(null);
     setImageFile(undefined);
     setPreviewUrl("");
+    setCameraError("");
+    setCameraReady(false);
     const match = todayMatches.length === 1 ? todayMatches[0] : undefined;
     setForm({
       eventId: match?.id || "",
@@ -84,11 +101,70 @@ export function SalesControlPage() {
 
   function pickFile(file?: File) {
     if (!file) return;
+    stopCamera();
+    setCameraError("");
     setImageFile(file);
     setPreviewUrl(URL.createObjectURL(file));
   }
 
+  async function startCamera() {
+    stopCamera();
+    setCameraReady(false);
+    setCameraError("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera is unavailable. You can still upload or paste an image.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode },
+        audio: false
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraReady(true);
+    } catch {
+      setCameraError("Camera permission denied. You can still upload or paste an image.");
+      setCameraReady(false);
+    }
+  }
+
+  function stopCamera() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCameraReady(false);
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }
+
+  async function capturePhoto() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    if (!blob) {
+      setMessage("Could not capture photo.");
+      return;
+    }
+    pickFile(new File([blob], `sale-${Date.now()}.jpg`, { type: "image/jpeg" }));
+  }
+
+  function retakePhoto() {
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+    setImageFile(undefined);
+    setPreviewUrl("");
+    setCameraError("");
+  }
+
   function editSale(sale: SalesRecord) {
+    stopCamera();
     setEditing(sale);
     setPreviewUrl(sale.imageUrl || "");
     setImageFile(undefined);
@@ -220,18 +296,34 @@ export function SalesControlPage() {
               event.preventDefault();
               pickFile(event.dataTransfer.files[0]);
             }}
-            onClick={() => inputRef.current?.click()}
-            className="flex min-h-80 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 text-center dark:border-slate-700 dark:bg-slate-950"
+            className="relative flex min-h-80 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 text-center dark:border-slate-700 dark:bg-slate-950"
           >
-            {previewUrl ? <img src={previewUrl} alt="" className="h-full max-h-[70vh] w-full object-contain" /> : (
-              <div className="space-y-2 p-6">
-                <Camera className="mx-auto text-coral" size={44} />
-                <p className="font-black text-ink dark:text-white">Take, paste, drop, or upload a sold item photo.</p>
-                <p className="text-sm text-slate-500 dark:text-slate-400">You can save with only the image and add details later.</p>
-              </div>
+            {previewUrl ? (
+              <img src={previewUrl} alt="" className="h-full max-h-[70vh] w-full object-contain" />
+            ) : (
+              <>
+                <video ref={videoRef} playsInline muted className={`h-full min-h-80 max-h-[70vh] w-full object-contain ${cameraReady ? "block" : "hidden"}`} />
+                {!cameraReady ? (
+                  <div className="space-y-2 p-6">
+                    <Camera className="mx-auto text-coral" size={44} />
+                    <p className="font-black text-ink dark:text-white">{cameraError || "Starting camera..."}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">You can save with only the image and add details later.</p>
+                  </div>
+                ) : null}
+              </>
             )}
+            <canvas ref={canvasRef} className="hidden" />
           </div>
           <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              {previewUrl ? (
+                <button onClick={retakePhoto} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><RotateCcw size={17} /> Retake</button>
+              ) : (
+                <button onClick={capturePhoto} disabled={!cameraReady} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-coral text-sm font-black text-white disabled:opacity-60"><Camera size={17} /> Capture</button>
+              )}
+              <button onClick={() => setFacingMode((current) => current === "environment" ? "user" : "environment")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><SwitchCamera size={17} /> Switch</button>
+              <button onClick={() => inputRef.current?.click()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><ImagePlus size={17} /> Upload</button>
+            </div>
             <select value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value, eventDayId: "" })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="">No event selected</option>
               {events.map((event) => <option key={event.id} value={event.id}>{event.name} - {shortScheduleSummary(event)}</option>)}
@@ -255,7 +347,7 @@ export function SalesControlPage() {
               <button onClick={saveSale} disabled={busy} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-coral font-black text-white disabled:opacity-60"><Save size={17} /> {busy ? "Saving..." : "Save"}</button>
             </div>
             <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" hidden onChange={(event) => pickFile(event.target.files?.[0])} />
-            <button onClick={() => inputRef.current?.click()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><Upload size={17} /> Choose Image</button>
+            <button onClick={() => inputRef.current?.click()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Upload size={17} /> Choose, paste, or drop image fallback</button>
           </div>
         </section>
       ) : (
