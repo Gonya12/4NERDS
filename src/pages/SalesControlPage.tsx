@@ -96,6 +96,7 @@ export function SalesControlPage() {
   function resetForm() {
     setEditing(null);
     setImageFile(undefined);
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     setCameraError("");
     setCameraReady(false);
@@ -117,6 +118,7 @@ export function SalesControlPage() {
     if (!file) return;
     stopCamera();
     setCameraError("");
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setImageFile(file);
     setPreviewUrl(URL.createObjectURL(file));
   }
@@ -179,6 +181,7 @@ export function SalesControlPage() {
 
   function editSale(sale: SalesRecord) {
     stopCamera();
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setEditing(sale);
     setPreviewUrl(sale.imageUrl || "");
     setImageFile(undefined);

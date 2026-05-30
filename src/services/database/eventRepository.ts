@@ -263,7 +263,6 @@ async function loadConfirmedWorkersByEvent() {
 
 export async function listEvents() {
   if (!isSupabaseConfigured || !supabase) {
-    console.log("Using Local mode");
     const events = await db.events.orderBy("startDate").toArray();
     return events.map((event) => ({
       ...event,
@@ -279,7 +278,6 @@ export async function listEvents() {
     }));
   }
 
-  console.log("Using Supabase mode");
   const { data, error } = await supabase.from("events").select("*").order("start_date");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
@@ -304,7 +302,6 @@ export async function listEvents() {
     event.priceOptions = await listPriceOptions(eventRow.id);
     return event;
   }));
-  console.log(`Loaded ${events.length} events from Supabase`);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   return events;
 }
@@ -530,22 +527,13 @@ export async function saveEvent(event: Event) {
   assertUuid(savedEvent.id, "event_id");
   savedEvent.confirmedWorkerIds.forEach((workerId) => assertUuid(workerId, "worker_id"));
 
-  console.log("selected worker IDs", savedEvent.confirmedWorkerIds);
-  console.log("selected event ID", savedEvent.id);
-
   const deleteResponse = await supabase.from("event_workers").delete().eq("event_id", savedEvent.id);
-  console.log("Supabase event_workers delete response", deleteResponse);
   const deleteWorkerError = deleteResponse.error;
   if (deleteWorkerError) {
     setSupabaseStatus({ connected: false, error: deleteWorkerError.message });
     console.error("Supabase error:", deleteWorkerError.message);
     throw deleteWorkerError;
   }
-
-  console.log("saving availability", {
-    eventId: savedEvent.id,
-    selectedWorkerIds: savedEvent.confirmedWorkerIds
-  });
 
   if (savedEvent.confirmedWorkerIds.length) {
     const timestamp = nowIso();
@@ -555,22 +543,16 @@ export async function saveEvent(event: Event) {
       created_at: timestamp,
       updated_at: timestamp
     }));
-    console.log("payload being inserted", rows);
     const insertResponse = await supabase
       .from("event_workers")
       .insert(rows)
       .select("event_id, worker_id");
-    console.log("Supabase response", insertResponse);
-    console.log("Supabase insert result", insertResponse.data);
     const insertWorkerError = insertResponse.error;
     if (insertWorkerError) {
       setSupabaseStatus({ connected: false, error: insertWorkerError.message });
       console.error("Supabase error:", insertWorkerError.message);
       throw insertWorkerError;
     }
-  } else {
-    console.log("payload being inserted", []);
-    console.log("Supabase insert result", []);
   }
 
   const existingPayments = await listPaymentRecords(savedEvent.id);
@@ -583,7 +565,6 @@ export async function saveEvent(event: Event) {
   await replacePriceOptions(savedEvent.id, savedEvent.priceOptions || []);
   if (!savedEvent.checklistItems.length) await seedChecklistIfEmpty(savedEvent.id);
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  console.log("Saved event to Supabase");
 }
 
 export async function deleteEvent(eventId: string) {

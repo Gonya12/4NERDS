@@ -68,16 +68,13 @@ export async function savePaymentRecord(record: PaymentRecord) {
     });
     return;
   }
-  console.log("saving payment payload", toRow(record));
   const { data, error } = await supabase.from("payment_records").upsert(toRow(record)).select("*");
-  console.log("Supabase payment response", { data, error });
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  console.log("Saved payment to Supabase");
 }
 
 export async function deletePaymentRecord(recordId: string) {

@@ -202,10 +202,6 @@ export function EventDetailPage() {
     if (!event) return;
     setErrorMessage("");
     const workerIds = Array.from(new Set(dayWorkerRows.map((row) => row.workerId)));
-    console.log("selectedWorkerIds", workerIds);
-    console.log("selectedDayWorkerRows", dayWorkerRows);
-    console.log("eventId", event.id);
-    console.log("saving availability");
     const updated = { ...event, confirmedWorkerIds: workerIds, eventDayWorkers: dayWorkerRows, updatedAt: new Date().toISOString() };
     try {
       await savePlannerEvent(updated);
@@ -509,7 +505,7 @@ export function EventDetailPage() {
       <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur lg:top-6 lg:col-start-2 lg:row-span-2 lg:mx-0 lg:rounded-2xl lg:border lg:bg-white/90 lg:p-3 lg:shadow-soft dark:border-slate-800 dark:bg-slate-950/95 lg:dark:bg-slate-900">
         <div className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-2 lg:overflow-visible lg:pb-0">
           <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
-          {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
+          {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
           <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-sm font-bold text-white shadow-soft dark:bg-coral"><Camera size={15} /> Quick Sale</Link>
@@ -798,8 +794,8 @@ export function EventDetailPage() {
       </div>
 
       <section className="grid grid-cols-2 gap-2 lg:col-start-2">
-        {event.registrationUrl ? <a href={event.registrationUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CalendarCheck size={16} /> Register</a> : null}
-        {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><ExternalLink size={16} /> Source</a> : null}
+        {event.registrationUrl ? <a href={event.registrationUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CalendarCheck size={16} /> Register</a> : null}
+        {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><ExternalLink size={16} /> Source</a> : null}
         <button onClick={remove} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={16} /> Delete Event</button>
       </section>
 

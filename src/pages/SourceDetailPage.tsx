@@ -98,7 +98,7 @@ export function SourceDetailPage() {
         {source.lastError ? <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{source.lastError}</p> : null}
         <div className="grid grid-cols-2 gap-2">
           <button onClick={refresh} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-ink text-sm font-bold text-white"><RefreshCw size={17} className={busy ? "animate-spin" : ""} /> Refresh</button>
-          {source.url ? <a href={source.url} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-100 text-sm font-bold text-ink"><ExternalLink size={17} /> Open</a> : null}
+          {source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-100 text-sm font-bold text-ink"><ExternalLink size={17} /> Open</a> : null}
         </div>
       </section>
 

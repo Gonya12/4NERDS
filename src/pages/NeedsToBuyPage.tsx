@@ -248,7 +248,7 @@ export function NeedsToBuyPage() {
               {item.purchased ? <p className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-xs font-black text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200"><User size={13} /> Purchased by {item.purchasedBy || "Not assigned"}</p> : null}
               <p className="font-bold text-slate-700 dark:text-slate-300">{formatMoney(Number(item.estimatedPrice || 0))} x {item.quantity}</p>
               <p className={`text-xs font-black ${item.priority === "high" ? "text-rose-600" : item.priority === "medium" ? "text-amber-600" : "text-slate-500"}`}>{item.priority.toUpperCase()} PRIORITY</p>
-              {item.productUrl ? <a href={item.productUrl} target="_blank" onClick={(event) => event.stopPropagation()} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-slate-100 px-3 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white"><ExternalLink size={14} /> Open Product</a> : null}
+              {item.productUrl ? <a href={item.productUrl} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-slate-100 px-3 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white"><ExternalLink size={14} /> Open Product</a> : null}
             </div>
           </article>
         ))}

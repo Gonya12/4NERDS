@@ -49,11 +49,9 @@ export async function testSupabaseConnection() {
   if (!supabase) {
     const error = "VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are missing.";
     setSupabaseStatus({ connected: false, error });
-    console.log("Using Local mode");
     return { ok: false, error };
   }
 
-  console.log("Using Supabase mode");
   const { error } = await supabase.from("events").select("id").limit(1);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });

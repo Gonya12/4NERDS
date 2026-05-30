@@ -148,8 +148,7 @@ export async function fetchProductPreview(productUrl: string) {
     };
     localStorage.setItem(previewCacheKey, JSON.stringify({ ...cache, [url]: preview }));
     return preview;
-  } catch (error) {
-    console.warn("Product preview failed:", error);
+  } catch {
     throw new Error("Could not preview this link. Add details manually.");
   }
 }

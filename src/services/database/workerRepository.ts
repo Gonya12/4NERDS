@@ -53,9 +53,8 @@ export async function seedSupabaseWorkers() {
     created_at: timestamp,
     updated_at: timestamp
   }));
-  console.log("Seed workers payload", rows);
   const { data: inserted, error: insertError } = await supabase.from("workers").insert(rows).select("id, name");
-  console.log("Seed workers response", inserted);
+  void inserted;
   if (insertError) {
     setSupabaseStatus({ connected: false, error: insertError.message });
     console.error("Supabase error:", insertError.message);
@@ -66,12 +65,10 @@ export async function seedSupabaseWorkers() {
 
 export async function listWorkers() {
   if (!isSupabaseConfigured || !supabase) {
-    console.log("Using Local mode");
     await seedWorkers();
     return db.workers.orderBy("name").toArray();
   }
 
-  console.log("Using Supabase mode");
   await seedSupabaseWorkers();
   const { data, error } = await supabase.from("workers").select("*").order("name");
   if (error) {
@@ -79,7 +76,6 @@ export async function listWorkers() {
     console.error("Supabase error:", error.message);
     throw error;
   }
-  console.log(`Loaded ${data?.length || 0} workers from Supabase`);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   return (data || []).map((row) => fromRow(row as WorkerRow));
 }
