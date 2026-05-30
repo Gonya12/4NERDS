@@ -115,6 +115,7 @@ export interface BuyItem {
   priority: BuyItemPriority;
   purchased: boolean;
   purchasedBy?: string;
+  purchasedByWorkerId?: string;
   purchasedAt?: string;
   notes?: string;
   createdAt: string;

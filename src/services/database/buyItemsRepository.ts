@@ -12,6 +12,7 @@ type BuyItemRow = {
   priority: BuyItemPriority;
   purchased: boolean;
   purchased_by?: string | null;
+  purchased_by_worker_id?: string | null;
   purchased_at?: string | null;
   notes?: string | null;
   created_at: string;
@@ -33,6 +34,7 @@ function fromRow(row: BuyItemRow): BuyItem {
     priority: row.priority || "medium",
     purchased: Boolean(row.purchased),
     purchasedBy: row.purchased_by || undefined,
+    purchasedByWorkerId: row.purchased_by_worker_id || undefined,
     purchasedAt: row.purchased_at || undefined,
     notes: row.notes || undefined,
     createdAt: row.created_at,
@@ -52,6 +54,7 @@ function toRow(item: BuyItem): BuyItemRow {
     priority: item.priority || "medium",
     purchased: Boolean(item.purchased),
     purchased_by: item.purchasedBy || null,
+    purchased_by_worker_id: item.purchasedByWorkerId || null,
     purchased_at: item.purchasedAt || null,
     notes: item.notes || null,
     created_at: item.createdAt,

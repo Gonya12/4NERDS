@@ -201,6 +201,7 @@ create table if not exists public.buy_items (
   priority text not null default 'medium' check (priority in ('low', 'medium', 'high')),
   purchased boolean not null default false,
   purchased_by text,
+  purchased_by_worker_id uuid references public.workers(id) on delete set null,
   purchased_at timestamptz,
   notes text,
   created_at timestamptz not null default now(),
@@ -237,6 +238,9 @@ alter table public.sales_records add column if not exists updated_at timestamptz
 alter table public.sales_records add column if not exists pending_upload boolean not null default false;
 alter table public.buy_items add column if not exists updated_at timestamptz not null default now();
 alter table public.buy_items add column if not exists purchased boolean not null default false;
+alter table public.buy_items add column if not exists purchased_by text;
+alter table public.buy_items add column if not exists purchased_by_worker_id uuid references public.workers(id) on delete set null;
+alter table public.buy_items add column if not exists purchased_at timestamptz;
 
 insert into public.workers (name, active)
 values
@@ -472,3 +476,4 @@ create index if not exists idx_sales_records_pending_upload on public.sales_reco
 create index if not exists idx_buy_items_created_at on public.buy_items(created_at);
 create index if not exists idx_buy_items_purchased on public.buy_items(purchased);
 create index if not exists idx_buy_items_priority on public.buy_items(priority);
+create index if not exists idx_buy_items_purchased_by_worker_id on public.buy_items(purchased_by_worker_id);

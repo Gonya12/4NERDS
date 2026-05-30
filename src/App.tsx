@@ -59,7 +59,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-paper text-ink transition-colors dark:bg-slate-950 dark:text-slate-100">
       <DesktopSidebar />
-      <main className="mx-auto max-w-md px-4 pb-28 pt-6 sm:max-w-2xl md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 xl:px-10">
+      <main className="mx-auto max-w-md px-4 pb-36 pt-5 sm:max-w-2xl md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 lg:pt-6 xl:px-10">
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />

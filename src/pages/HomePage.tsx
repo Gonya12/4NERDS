@@ -101,24 +101,6 @@ export function HomePage() {
         </div>
       </div>
 
-      <section className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0">
-        <div className="min-w-32 rounded-2xl bg-sky-50 p-4 shadow-soft dark:bg-sky-950/30">
-          <CalendarDays className="text-sky-600 dark:text-sky-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Planned</p>
-        </div>
-        <div className="min-w-32 rounded-2xl bg-emerald-50 p-4 shadow-soft dark:bg-emerald-950/30">
-          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Confirmed</p>
-        </div>
-        <div className="min-w-40 rounded-2xl bg-orange-50 p-4 shadow-soft dark:bg-orange-950/30">
-          <DollarSign className="text-orange-600 dark:text-orange-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Cost</p>
-        </div>
-      </section>
-
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Events</h2>
@@ -127,17 +109,17 @@ export function HomePage() {
         {loading ? skeletonCards : upcoming.length === 0 ? (
           <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
         ) : (
-          <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
+          <div className="grid gap-3 lg:grid-cols-3 xl:grid-cols-5">
             {upcoming.slice(0, 5).map((event) => (
-              <div key={event.id} className="w-[82%] shrink-0 snap-start lg:w-auto">
-                <EventCard event={event} workers={workers} />
+              <div key={event.id} className="w-full">
+                <EventCard event={event} workers={workers} compact />
               </div>
             ))}
           </div>
         )}
       </section>
 
-      <section className="grid grid-cols-3 gap-3">
+      <section className="grid grid-cols-3 gap-2 sm:gap-3">
         <Link to="/events/new" className="flex min-h-24 flex-col justify-between rounded-2xl bg-coral p-4 text-white shadow-soft transition active:scale-[0.98]">
           <Plus size={22} />
           <span className="text-sm font-black">Add Event</span>
@@ -150,6 +132,29 @@ export function HomePage() {
           <Package size={22} />
           <span className="text-sm font-black">Needs to Buy</span>
         </Link>
+      </section>
+
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="rounded-2xl bg-sky-50 p-4 shadow-soft dark:bg-sky-950/30">
+          <CalendarDays className="text-sky-600 dark:text-sky-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Planned</p>
+        </div>
+        <div className="rounded-2xl bg-emerald-50 p-4 shadow-soft dark:bg-emerald-950/30">
+          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Confirmed</p>
+        </div>
+        <div className="rounded-2xl bg-orange-50 p-4 shadow-soft dark:bg-orange-950/30">
+          <DollarSign className="text-orange-600 dark:text-orange-300" size={20} />
+          <p className="mt-3 text-xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Cost</p>
+        </div>
+        <div className="rounded-2xl bg-purple-50 p-4 shadow-soft dark:bg-purple-950/30">
+          <CalendarCheck className="text-purple-600 dark:text-purple-300" size={20} />
+          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{upcoming.length}</p>
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Events</p>
+        </div>
       </section>
 
       {highlighted.length > 0 ? (
