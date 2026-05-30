@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Users, X } from "lucide-react";
+import { CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
@@ -52,7 +52,6 @@ export function HomePage() {
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = upcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
-  const confirmedCount = upcoming.filter((event) => (event.confirmedWorkerIds || []).length > 0).length;
   const now = new Date();
   const projectedCosts = upcoming.reduce((sum, event) => sum + Number((event.priceOptions || []).find((option) => option.isSelected)?.price ?? event.eventCost ?? 0), 0);
   const upcomingEventDays = upcoming.flatMap((event) => eventDays(event).map((day) => ({ event, day }))).filter(({ day }) => new Date(`${day.date.slice(0, 10)}T23:59:59`).getTime() >= Date.now());
@@ -85,76 +84,71 @@ export function HomePage() {
   const checklistPercent = checklistItems.length ? Math.round((checklistItems.filter((item) => item.completed).length / checklistItems.length) * 100) : 0;
 
   return (
-    <div className="space-y-6 lg:mx-auto lg:max-w-7xl">
-      <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
-        <p className="text-sm font-bold text-orange-300">4 Nerds</p>
-        <h1 className="mt-1 text-3xl font-black tracking-tight">Event Planner</h1>
-        <p className="mt-2 text-sm text-slate-300">Plan vendor events and confirm who can work each show.</p>
+    <div className="space-y-4 lg:mx-auto lg:max-w-7xl">
+      <header className="flex items-center justify-between gap-3 rounded-2xl bg-white/90 px-4 py-3 shadow-soft dark:bg-slate-900">
+        <div className="min-w-0">
+          <h1 className="text-xl font-black leading-tight text-ink dark:text-white">4 Nerds</h1>
+          <p className="truncate text-xs font-bold text-slate-400 dark:text-slate-500">
+            {syncing || syncMessage ? syncMessage || "Syncing..." : "Dashboard"}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={() => setShowLegend(true)} className="inline-flex min-h-10 items-center gap-1 rounded-full bg-slate-100 px-3 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white"><HelpCircle size={15} /> Legend</button>
+          <Link to="/settings" className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-ink dark:bg-slate-800 dark:text-white" aria-label="Settings"><Settings size={18} /></Link>
+        </div>
       </header>
 
       <InstallPrompt />
-      <div className="flex items-center justify-between gap-3">
-        {syncing || syncMessage ? <p className="text-xs font-bold text-slate-500 dark:text-slate-400">{syncMessage || "Syncing..."}</p> : <p className="text-xs font-bold text-slate-400 dark:text-slate-500">Showing latest saved schedule</p>}
-        <div className="flex gap-2">
-          <button onClick={() => setShowLegend(true)} className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft dark:bg-slate-900 dark:text-white"><HelpCircle size={14} /> Legend</button>
-          <button onClick={load} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync Now</button>
+
+      <section className="grid grid-cols-3 gap-2 lg:grid-cols-6">
+        <div className="rounded-2xl bg-sky-50 p-3 shadow-soft dark:bg-sky-950/30">
+          <CalendarDays className="text-sky-600 dark:text-sky-300" size={18} />
+          <p className="mt-2 text-xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
+          <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Planned</p>
         </div>
-      </div>
+        <div className="rounded-2xl bg-emerald-50 p-3 shadow-soft dark:bg-emerald-950/30">
+          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={18} />
+          <p className="mt-2 text-xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
+          <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Confirmed</p>
+        </div>
+        <div className="rounded-2xl bg-orange-50 p-3 shadow-soft dark:bg-orange-950/30">
+          <DollarSign className="text-orange-600 dark:text-orange-300" size={18} />
+          <p className="mt-2 text-base font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
+          <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Upcoming Cost</p>
+        </div>
+        <Link to="/events/new" className="flex min-h-24 flex-col justify-between rounded-2xl bg-coral p-3 text-white shadow-soft transition active:scale-[0.98]">
+          <Plus size={20} />
+          <span className="text-xs font-black leading-tight">Add Event</span>
+        </Link>
+        <Link to="/sales" className="flex min-h-24 flex-col justify-between rounded-2xl bg-ink p-3 text-white shadow-soft transition active:scale-[0.98] dark:bg-slate-900">
+          <Camera size={20} />
+          <span className="text-xs font-black leading-tight">Sales Control</span>
+        </Link>
+        <Link to="/buy" className="flex min-h-24 flex-col justify-between rounded-2xl bg-white p-3 text-ink shadow-soft transition active:scale-[0.98] dark:bg-slate-900 dark:text-white">
+          <Package size={20} />
+          <span className="text-xs font-black leading-tight">Needs to Buy</span>
+        </Link>
+      </section>
 
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Events</h2>
-          <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
+          <div className="flex items-center gap-2">
+            <button onClick={load} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
+            <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
+          </div>
         </div>
         {loading ? skeletonCards : upcoming.length === 0 ? (
           <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
         ) : (
-          <div className="grid gap-3 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 scroll-smooth lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
             {upcoming.slice(0, 5).map((event) => (
-              <div key={event.id} className="w-full">
+              <div key={event.id} className="w-[84vw] max-w-[380px] shrink-0 snap-start sm:w-[360px] lg:w-auto lg:max-w-none">
                 <EventCard event={event} workers={workers} compact />
               </div>
             ))}
           </div>
         )}
-      </section>
-
-      <section className="grid grid-cols-3 gap-2 sm:gap-3">
-        <Link to="/events/new" className="flex min-h-24 flex-col justify-between rounded-2xl bg-coral p-4 text-white shadow-soft transition active:scale-[0.98]">
-          <Plus size={22} />
-          <span className="text-sm font-black">Add Event</span>
-        </Link>
-        <Link to="/sales" className="flex min-h-24 flex-col justify-between rounded-2xl bg-ink p-4 text-white shadow-soft transition active:scale-[0.98] dark:bg-slate-900">
-          <Camera size={22} />
-          <span className="text-sm font-black">Sales Control</span>
-        </Link>
-        <Link to="/buy" className="flex min-h-24 flex-col justify-between rounded-2xl bg-white p-4 text-ink shadow-soft transition active:scale-[0.98] dark:bg-slate-900 dark:text-white">
-          <Package size={22} />
-          <span className="text-sm font-black">Needs to Buy</span>
-        </Link>
-      </section>
-
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="rounded-2xl bg-sky-50 p-4 shadow-soft dark:bg-sky-950/30">
-          <CalendarDays className="text-sky-600 dark:text-sky-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Planned</p>
-        </div>
-        <div className="rounded-2xl bg-emerald-50 p-4 shadow-soft dark:bg-emerald-950/30">
-          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Days Confirmed</p>
-        </div>
-        <div className="rounded-2xl bg-orange-50 p-4 shadow-soft dark:bg-orange-950/30">
-          <DollarSign className="text-orange-600 dark:text-orange-300" size={20} />
-          <p className="mt-3 text-xl font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Cost</p>
-        </div>
-        <div className="rounded-2xl bg-purple-50 p-4 shadow-soft dark:bg-purple-950/30">
-          <CalendarCheck className="text-purple-600 dark:text-purple-300" size={20} />
-          <p className="mt-3 text-2xl font-black text-ink dark:text-white">{upcoming.length}</p>
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Upcoming Events</p>
-        </div>
       </section>
 
       {highlighted.length > 0 ? (
