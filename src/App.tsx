@@ -11,6 +11,7 @@ import { EventFormPage } from "./pages/EventFormPage";
 import { FlyerGalleryPage } from "./pages/FlyerGalleryPage";
 import { HomePage } from "./pages/HomePage";
 import { NeedsToBuyPage } from "./pages/NeedsToBuyPage";
+import { NjCalendarPage } from "./pages/NjCalendarPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { PastEventsPage } from "./pages/PastEventsPage";
 import { SalesControlPage } from "./pages/SalesControlPage";
@@ -74,6 +75,7 @@ export default function App() {
           <Route path="/events" element={<CalendarPage />} />
           <Route path="/calendar-feeds" element={<CalendarFeedsPage />} />
           <Route path="/calendar-imports" element={<CalendarImportsPage />} />
+          <Route path="/nj-calendar" element={<NjCalendarPage />} />
           <Route path="/past" element={<PastEventsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/flyers" element={<FlyerGalleryPage />} />

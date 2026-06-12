@@ -226,7 +226,7 @@ export function SettingsPage() {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <Link to="/calendar-feeds" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white dark:bg-coral"><CalendarSync size={17} /> Manage Feeds</Link>
-          <Link to="/calendar-imports" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">Review Imports</Link>
+          <Link to="/nj-calendar" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">View NJ Calendar</Link>
         </div>
         <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><MapPinned size={17} /> Open NJ Pokémon Events Map</a>
       </section>

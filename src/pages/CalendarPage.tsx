@@ -75,7 +75,7 @@ export function CalendarPage() {
           <p className="text-sm font-bold text-coral">Planner</p>
           <h1 className="text-3xl font-black text-ink dark:text-white">Events Calendar</h1>
         </div>
-        <Link to="/calendar-feeds" className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white"><CalendarSync size={17} /> Feeds</Link>
+        <Link to="/nj-calendar" className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white"><CalendarSync size={17} /> NJ Calendar</Link>
       </header>
 
       <section className="sticky top-0 z-10 -mx-4 space-y-3 border-y border-slate-200 bg-paper/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:mx-0 lg:rounded-2xl lg:border">

@@ -113,7 +113,7 @@ export function CalendarFeedsPage() {
 
       <div className="flex items-center justify-between gap-3">
         <SyncStatusBadge syncing={Boolean(syncingId)} label={progress || "Syncing calendar..."} />
-        <Link to="/calendar-imports" className="ml-auto rounded-full bg-white px-3 py-2 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">Review Imports</Link>
+        <Link to="/nj-calendar" className="ml-auto rounded-full bg-white px-3 py-2 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">View NJ Calendar</Link>
       </div>
 
       <section className="grid gap-2 sm:grid-cols-2">

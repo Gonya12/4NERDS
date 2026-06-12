@@ -1,4 +1,4 @@
-import { CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
+import { CalendarDays, CalendarSync, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
@@ -105,7 +105,7 @@ export function HomePage() {
       <SyncStatusBadge syncing={syncing && events.length > 0} />
       {syncError ? <ErrorState message="Dashboard data could not be refreshed." details={syncError} onRetry={load} onSync={load} /> : null}
 
-      <section className="grid grid-cols-3 gap-2 lg:grid-cols-6">
+      <section className="grid grid-cols-3 gap-2">
         <div className="rounded-2xl bg-sky-50 p-3 shadow-soft dark:bg-sky-950/30">
           <CalendarDays className="text-sky-600 dark:text-sky-300" size={18} />
           {loading && !events.length ? <div className="mt-3 h-6 w-10 animate-pulse rounded bg-sky-200 dark:bg-sky-900" /> : <p className="mt-2 text-xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>}
@@ -121,17 +121,24 @@ export function HomePage() {
           {loading && !events.length ? <div className="mt-3 h-6 w-16 animate-pulse rounded bg-orange-200 dark:bg-orange-900" /> : <p className="mt-2 text-base font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Upcoming Cost</p>
         </div>
-        <Link to="/events/new" className="flex min-h-24 flex-col justify-between rounded-2xl bg-coral p-3 text-white shadow-soft transition active:scale-[0.98]">
-          <Plus size={20} />
-          <span className="text-xs font-black leading-tight">Add Event</span>
+      </section>
+
+      <section aria-label="Quick actions" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <Link to="/events/new" className="flex min-h-16 items-center gap-3 rounded-2xl bg-coral p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98]">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><Plus size={20} /></span>
+          <span className="text-sm font-black leading-tight">Add Event</span>
         </Link>
-        <Link to="/sales" className="flex min-h-24 flex-col justify-between rounded-2xl bg-ink p-3 text-white shadow-soft transition active:scale-[0.98] dark:bg-slate-900">
-          <Camera size={20} />
-          <span className="text-xs font-black leading-tight">Sales Control</span>
+        <Link to="/sales" className="flex min-h-16 items-center gap-3 rounded-2xl bg-ink p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98] dark:bg-slate-900">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10"><Camera size={20} /></span>
+          <span className="text-sm font-black leading-tight">Sales Control</span>
         </Link>
-        <Link to="/buy" className="flex min-h-24 flex-col justify-between rounded-2xl bg-white p-3 text-ink shadow-soft transition active:scale-[0.98] dark:bg-slate-900 dark:text-white">
-          <Package size={20} />
-          <span className="text-xs font-black leading-tight">Needs to Buy</span>
+        <Link to="/buy" className="flex min-h-16 items-center gap-3 rounded-2xl bg-white p-3 text-ink shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98] dark:bg-slate-900 dark:text-white">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600 dark:bg-orange-950/50 dark:text-orange-300"><Package size={20} /></span>
+          <span className="text-sm font-black leading-tight">Needs to Buy</span>
+        </Link>
+        <Link to="/nj-calendar" className="flex min-h-16 items-center gap-3 rounded-2xl bg-sky-600 p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98]">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><CalendarSync size={20} /></span>
+          <span className="text-sm font-black leading-tight">NJ Calendar</span>
         </Link>
       </section>
 

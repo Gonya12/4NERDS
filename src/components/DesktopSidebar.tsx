@@ -4,7 +4,7 @@ import { NavLink } from "react-router-dom";
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/events", label: "Events", icon: CalendarDays },
-  { to: "/calendar-feeds", label: "Calendar Feeds", icon: CalendarSync },
+  { to: "/nj-calendar", label: "NJ Calendar", icon: CalendarSync },
   { to: "/events/new", label: "Add Event", icon: PlusCircle },
   { to: "/sales", label: "Sales Control", icon: Camera },
   { to: "/buy", label: "Needs to Buy", icon: Package },

@@ -125,6 +125,10 @@ export function listCalendarCandidates() {
   }
 }
 
+export function listCalendarCandidatesForFeed(feedId: string) {
+  return listCalendarCandidates().filter((candidate) => candidate.calendarFeedId === feedId);
+}
+
 export function saveCalendarCandidates(candidates: CalendarImportCandidate[]) {
   localStorage.setItem(candidateKey, JSON.stringify(candidates));
 }
@@ -153,34 +157,44 @@ export async function syncCalendarFeed(feed: CalendarFeed, onProgress?: (message
   const externalIds = await existingExternalIds();
   onProgress?.("Checking duplicates...");
   const timestamp = nowIso();
-  const current = listCalendarCandidates().filter((candidate) => candidate.calendarFeedId !== feed.id || candidate.reviewStatus !== "pending");
+  const current = listCalendarCandidates();
+  const candidatesByUid = new Map(
+    current
+      .filter((candidate) => candidate.calendarFeedId === feed.id)
+      .map((candidate) => [candidate.uid, candidate])
+  );
+  const candidatesFromOtherFeeds = current.filter((candidate) => candidate.calendarFeedId !== feed.id);
   const uniqueEvents = Array.from(new Map((payload.events || []).map((item) => [item.uid, item])).values());
   const candidates = uniqueEvents.map((item): CalendarImportCandidate => ({
     ...item,
-    id: id("calendar_candidate"),
+    id: candidatesByUid.get(item.uid)?.id || id("calendar_candidate"),
     calendarFeedId: feed.id,
     calendarFeedName: feed.name,
-    duplicate: externalIds.has(item.uid),
-    reviewStatus: "pending",
-    createdAt: timestamp
+    duplicate: externalIds.has(item.uid) || candidatesByUid.get(item.uid)?.reviewStatus === "saved",
+    reviewStatus: candidatesByUid.get(item.uid)?.reviewStatus || "pending",
+    createdAt: candidatesByUid.get(item.uid)?.createdAt || timestamp
   }));
 
   let imported = 0;
-  const remaining: CalendarImportCandidate[] = [];
   for (const candidate of candidates) {
-    if (feed.autoImport && !candidate.duplicate) {
+    if (feed.autoImport && !candidate.duplicate && candidate.reviewStatus === "pending") {
       await saveCalendarCandidate(candidate);
+      candidate.reviewStatus = "saved";
+      candidate.duplicate = true;
       imported += 1;
-    } else {
-      remaining.push(candidate);
     }
   }
-  saveCalendarCandidates([...remaining, ...current]);
+  saveCalendarCandidates([...candidates, ...candidatesFromOtherFeeds]);
   const duplicates = candidates.filter((candidate) => candidate.duplicate).length;
   const status = `Found ${candidates.length}; ${imported} imported; ${duplicates} duplicates`;
   await saveCalendarFeed({ ...feed, lastCheckedAt: timestamp, lastStatus: status, lastError: undefined, lastFoundCount: candidates.length });
   onProgress?.("Preparing import list...");
-  return { found: candidates.length, imported, duplicates, review: remaining.filter((candidate) => !candidate.duplicate).length };
+  return {
+    found: candidates.length,
+    imported,
+    duplicates,
+    review: candidates.filter((candidate) => candidate.reviewStatus === "pending" && !candidate.duplicate).length
+  };
 }
 
 export async function saveCalendarCandidate(candidate: CalendarImportCandidate) {
