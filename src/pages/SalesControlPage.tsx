@@ -296,27 +296,27 @@ export function SalesControlPage() {
   const selectedEvent = events.find((event) => event.id === form.eventId);
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
-      <header className="flex items-start justify-between gap-3">
-        <div>
+    <div className="w-full min-w-0 max-w-full space-y-5 overflow-x-hidden lg:mx-auto lg:max-w-7xl">
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm font-bold text-coral">Sales</p>
           <h1 className="text-3xl font-black text-ink dark:text-white">Sales Control</h1>
         </div>
-        <button onClick={() => { resetForm(); setMode("sale"); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
+        <button onClick={() => { resetForm(); setMode("sale"); }} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
       </header>
       <SyncStatusBadge syncing={syncing && sales.length > 0} />
       {loadError ? <ErrorState message="Sales could not be refreshed." details={loadError} onRetry={load} onSync={load} /> : null}
 
-      <section className="grid grid-cols-3 gap-3">
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Total sales</p><p className="font-black">{formatMoney(totals.sold)}</p></div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Total cost</p><p className="font-black">{formatMoney(totals.bought)}</p></div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Profit</p><p className={`font-black ${totals.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(totals.profit)}</p></div>
+      <section className="grid min-w-0 grid-cols-3 gap-2 sm:gap-3">
+        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Total sales</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.sold)}</p></div>
+        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Total cost</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.bought)}</p></div>
+        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Profit</p><p className={`truncate text-sm font-black sm:text-base ${totals.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(totals.profit)}</p></div>
       </section>
 
       {message ? <p className="rounded-2xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{message}</p> : null}
 
       {mode === "sale" ? (
-        <section className="grid gap-4 rounded-3xl bg-white/90 p-4 shadow-soft lg:grid-cols-[minmax(0,1fr)_360px] dark:bg-slate-900">
+        <section className="grid w-full min-w-0 max-w-full gap-4 overflow-hidden rounded-3xl bg-white/90 p-4 shadow-soft lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.55fr)] dark:bg-slate-900">
           <div
             tabIndex={0}
             onPaste={(event) => {
@@ -349,8 +349,8 @@ export function SalesControlPage() {
             )}
             <canvas ref={canvasRef} className="hidden" />
           </div>
-          <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-2">
+          <div className="min-w-0 space-y-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {previewUrl ? (
                 <button onClick={retakePhoto} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><RotateCcw size={17} /> Retake</button>
               ) : (
@@ -364,20 +364,20 @@ export function SalesControlPage() {
                 Linked to: {selectedEvent.name}
               </p>
             ) : null}
-            <select value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value, eventDayId: "" })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+            <select value={form.eventId} onChange={(e) => setForm({ ...form, eventId: e.target.value, eventDayId: "" })} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="">No event selected</option>
               {events.map((event) => <option key={event.id} value={event.id}>{event.name} - {shortScheduleSummary(event)}</option>)}
             </select>
             {selectedEvent ? (
-              <select value={form.eventDayId} onChange={(e) => setForm({ ...form, eventDayId: e.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <select value={form.eventDayId} onChange={(e) => setForm({ ...form, eventDayId: e.target.value })} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
                 <option value="">No day selected</option>
                 {eventDays(selectedEvent).map((day) => <option key={day.id} value={day.id}>{day.date.slice(0, 10)}</option>)}
               </select>
             ) : null}
             <input value={form.itemName} onChange={(e) => setForm({ ...form, itemName: e.target.value })} placeholder="Item name" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-            <div className="grid grid-cols-2 gap-2">
-              <input type="number" value={form.soldPrice} onChange={(e) => setForm({ ...form, soldPrice: e.target.value })} placeholder="Sold price" className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-              <input type="number" value={form.boughtPrice} onChange={(e) => setForm({ ...form, boughtPrice: e.target.value })} placeholder="Bought price" className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <div className="grid min-w-0 grid-cols-2 gap-2">
+              <input type="number" value={form.soldPrice} onChange={(e) => setForm({ ...form, soldPrice: e.target.value })} placeholder="Sold price" className="min-w-0 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <input type="number" value={form.boughtPrice} onChange={(e) => setForm({ ...form, boughtPrice: e.target.value })} placeholder="Bought price" className="min-w-0 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
             </div>
             <input value={form.boughtFrom} onChange={(e) => setForm({ ...form, boughtFrom: e.target.value })} placeholder="Bought from" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
             <input type="datetime-local" value={form.soldAt} onChange={(e) => setForm({ ...form, soldAt: e.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
@@ -392,12 +392,13 @@ export function SalesControlPage() {
         </section>
       ) : (
         <>
-          <section className="grid gap-3 rounded-2xl bg-white/90 p-3 shadow-soft md:grid-cols-2 xl:grid-cols-[1fr_190px_220px_190px_160px] dark:bg-slate-900">
-            <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
+          <section className="w-full min-w-0 max-w-full overflow-hidden rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900">
+            <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <label className="flex w-full min-w-0 max-w-full items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
               <Search size={17} className="text-slate-400" />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sales" className="min-w-0 flex-1 bg-transparent outline-none" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sales" className="w-full min-w-0 max-w-full flex-1 bg-transparent outline-none" />
             </label>
-            <select value={sort} onChange={(e) => setSort(e.target.value as SortMode)} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortMode)} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="recent">Recent</option>
               <option value="oldest">Oldest</option>
               <option value="highest_sold">Highest sold price</option>
@@ -405,7 +406,7 @@ export function SalesControlPage() {
               <option value="lowest_profit">Lowest profit</option>
               <option value="missing">Missing details</option>
             </select>
-            <select value={eventFilter} onChange={(e) => { setEventFilter(e.target.value); setEventDayFilter(""); }} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+            <select value={eventFilter} onChange={(e) => { setEventFilter(e.target.value); setEventDayFilter(""); }} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="">All events</option>
               {events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
             </select>
@@ -418,7 +419,7 @@ export function SalesControlPage() {
                 setEventDayFilter("");
                 setDateFilter(value as DateFilter);
               }
-            }} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+            }} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="all">All dates</option>
               <option value="today">Today</option>
               <option value="week">This week</option>
@@ -426,28 +427,31 @@ export function SalesControlPage() {
               <option value="custom">Custom date</option>
               {selectedFilterEvent ? eventDays(selectedFilterEvent).map((day) => <option key={day.id} value={`day:${day.id}`}>{day.date.slice(0, 10)}</option>) : null}
             </select>
-            <button onClick={syncPending} className="rounded-xl bg-ink px-3 py-2 text-sm font-bold text-white dark:bg-coral">Sync Pending</button>
-            {dateFilter === "custom" ? <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white" /> : null}
-            <button onClick={() => { setQuery(""); setSort("recent"); setEventFilter(""); setEventDayFilter(""); setDateFilter("all"); }} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Clear Filters</button>
+            {dateFilter === "custom" ? <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="w-full min-w-0 max-w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white" /> : null}
+            </div>
+            <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+              <button onClick={syncPending} className="min-h-11 w-full min-w-0 max-w-full rounded-xl bg-ink px-3 py-2 text-sm font-bold text-white dark:bg-coral">Sync Pending</button>
+              <button onClick={() => { setQuery(""); setSort("recent"); setEventFilter(""); setEventDayFilter(""); setDateFilter("all"); }} className="min-h-11 w-full min-w-0 max-w-full rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Clear Filters</button>
+            </div>
           </section>
           {loading ? <LoadingScreen label="Loading sales..."><section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} />)}</section></LoadingScreen> : null}
           {!loading && filtered.length === 0 ? <EmptyState title="No sales yet." /> : null}
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {filtered.map((sale) => {
               const event = sale.eventId ? eventMap.get(sale.eventId) : undefined;
               return (
-                <article key={sale.id} onClick={() => editSale(sale)} className="cursor-pointer overflow-hidden rounded-2xl bg-white/90 p-3 shadow-soft transition hover:-translate-y-0.5 dark:bg-slate-900">
+                <article key={sale.id} onClick={() => editSale(sale)} className="min-w-0 max-w-full cursor-pointer overflow-hidden rounded-2xl bg-white/90 p-3 shadow-soft transition hover:-translate-y-0.5 dark:bg-slate-900">
                   {sale.imageUrl ? <img src={sale.imageUrl} loading="lazy" decoding="async" alt="" className="aspect-[4/5] w-full rounded-xl object-contain bg-slate-100 dark:bg-slate-950" /> : <div className="flex aspect-[4/5] items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-950">No image</div>}
                   <div className="mt-3 space-y-1 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="font-black text-ink dark:text-white">{sale.itemName || "Untitled sale"}</h2>
-                      {sale.pendingUpload ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">Pending upload</span> : null}
+                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                      <h2 className="min-w-0 flex-1 truncate font-black text-ink dark:text-white">{sale.itemName || "Untitled sale"}</h2>
+                      {sale.pendingUpload ? <span className="shrink-0 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">Pending upload</span> : null}
                     </div>
-                    <p className="text-xs text-slate-500">{event?.name || "No event selected"}</p>
+                    <p className="truncate text-xs text-slate-500">{event?.name || "No event selected"}</p>
                     <p>Sold {formatMoney(Number(sale.soldPrice || 0))} | Cost {formatMoney(Number(sale.boughtPrice || 0))}</p>
                     <p className={`font-black ${profit(sale) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>Profit {formatMoney(profit(sale))}</p>
-                    {sale.boughtFrom ? <p className="text-xs text-slate-500">From: {sale.boughtFrom}</p> : null}
-                    {sale.notes ? <p className="text-xs text-slate-500">{sale.notes}</p> : null}
+                    {sale.boughtFrom ? <p className="break-words text-xs text-slate-500">From: {sale.boughtFrom}</p> : null}
+                    {sale.notes ? <p className="break-words text-xs text-slate-500">{sale.notes}</p> : null}
                   </div>
                   <button onClick={async (eventClick) => { eventClick.stopPropagation(); await deleteSaleRecord(sale.id); await load(); }} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={15} /> Delete</button>
                 </article>
