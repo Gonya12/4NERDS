@@ -1,9 +1,10 @@
-import { CalendarDays, Camera, History, Home, Package, PlusCircle, Settings } from "lucide-react";
+import { CalendarDays, CalendarSync, Camera, History, Home, Package, PlusCircle, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/events", label: "Events", icon: CalendarDays },
+  { to: "/calendar-feeds", label: "Calendar Feeds", icon: CalendarSync },
   { to: "/events/new", label: "Add Event", icon: PlusCircle },
   { to: "/sales", label: "Sales Control", icon: Camera },
   { to: "/buy", label: "Needs to Buy", icon: Package },

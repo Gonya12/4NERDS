@@ -21,6 +21,7 @@ type BuyItemRow = {
 
 const localKey = "4nerds_buy_items_local_v1";
 const previewCacheKey = "4nerds_buy_preview_cache_v1";
+const cacheKey = "4nerds_buy_items_cache_v1";
 
 function fromRow(row: BuyItemRow): BuyItem {
   return {
@@ -79,7 +80,17 @@ export async function listBuyItems() {
   const { data, error } = await supabase.from("buy_items").select("*").order("created_at", { ascending: false });
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  return (data || []).map((row) => fromRow(row as BuyItemRow));
+  const items = (data || []).map((row) => fromRow(row as BuyItemRow));
+  try { localStorage.setItem(cacheKey, JSON.stringify(items)); } catch { /* Cache is optional. */ }
+  return items;
+}
+
+export function getCachedBuyItems() {
+  try {
+    return JSON.parse(localStorage.getItem(cacheKey) || "[]") as BuyItem[];
+  } catch {
+    return [] as BuyItem[];
+  }
 }
 
 export async function saveBuyItem(item: BuyItem) {

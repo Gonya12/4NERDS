@@ -4,6 +4,8 @@ import { Route, Routes } from "react-router-dom";
 import { BottomNav } from "./components/BottomNav";
 import { DesktopSidebar } from "./components/DesktopSidebar";
 import { CalendarPage } from "./pages/CalendarPage";
+import { CalendarFeedsPage } from "./pages/CalendarFeedsPage";
+import { CalendarImportsPage } from "./pages/CalendarImportsPage";
 import { EventDetailPage } from "./pages/EventDetailPage";
 import { EventFormPage } from "./pages/EventFormPage";
 import { FlyerGalleryPage } from "./pages/FlyerGalleryPage";
@@ -14,6 +16,7 @@ import { PastEventsPage } from "./pages/PastEventsPage";
 import { SalesControlPage } from "./pages/SalesControlPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
+import { listCalendarFeeds, seedDefaultCalendarFeed, syncCalendarFeed } from "./services/database/calendarFeedRepository";
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   return (
@@ -46,6 +49,12 @@ export default function App() {
       await seedWorkers();
       const settings = await getSettings();
       setShowOnboarding(!settings.onboardingComplete);
+      await seedDefaultCalendarFeed();
+      void listCalendarFeeds().then((feeds) => {
+        const cutoff = Date.now() - 12 * 60 * 60 * 1000;
+        const staleAutoFeeds = feeds.filter((feed) => feed.enabled && feed.autoImport && (!feed.lastCheckedAt || new Date(feed.lastCheckedAt).getTime() < cutoff));
+        return Promise.allSettled(staleAutoFeeds.map((feed) => syncCalendarFeed(feed)));
+      }).catch(() => undefined);
     }
     void boot();
   }, []);
@@ -63,6 +72,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />
+          <Route path="/calendar-feeds" element={<CalendarFeedsPage />} />
+          <Route path="/calendar-imports" element={<CalendarImportsPage />} />
           <Route path="/past" element={<PastEventsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/flyers" element={<FlyerGalleryPage />} />

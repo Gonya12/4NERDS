@@ -62,6 +62,11 @@ export interface Event {
   organizerInstagramHandle?: string;
   status?: EventStatus;
   eventStage?: EventStage;
+  externalSource?: string;
+  externalSourceId?: string;
+  calendarFeedId?: string;
+  importedFromCalendar?: boolean;
+  manuallyEdited?: boolean;
   packingNotes?: string;
   boothNumber?: string;
   setupTime?: string;
@@ -85,6 +90,40 @@ export interface Event {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CalendarFeed {
+  id: string;
+  name: string;
+  icsUrl: string;
+  enabled: boolean;
+  autoImport: boolean;
+  lastCheckedAt?: string;
+  lastStatus?: string;
+  lastError?: string;
+  lastFoundCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CalendarFeedEvent {
+  uid: string;
+  title: string;
+  description?: string;
+  location?: string;
+  start: string;
+  end?: string;
+  allDay: boolean;
+  url?: string;
+}
+
+export interface CalendarImportCandidate extends CalendarFeedEvent {
+  id: string;
+  calendarFeedId: string;
+  calendarFeedName: string;
+  duplicate: boolean;
+  reviewStatus: "pending" | "saved" | "ignored";
+  createdAt: string;
 }
 
 export interface SalesRecord {

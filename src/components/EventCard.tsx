@@ -43,6 +43,7 @@ function EventCardBase({ event, workers = [], compact = false }: { event: Event;
           <div className="mb-2 flex flex-wrap gap-2">
             <span className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white dark:bg-slate-700">{timing}</span>
             <span className={`rounded-full px-3 py-1 text-xs font-bold text-white ${eventStageAccentClasses[stage]}`}>{eventStageLabels[stage]}</span>
+            {event.importedFromCalendar ? <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-200">Imported</span> : null}
             <StatusChip value={event.registrationStatus} />
           </div>
           <h3 className={`${compact ? "text-base" : "text-lg"} font-black leading-tight text-ink dark:text-white`}>{event.name}</h3>

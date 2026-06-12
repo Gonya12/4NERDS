@@ -3,6 +3,9 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EventImageFrame } from "../components/EventImageFrame";
 import { EventImageUploader } from "../components/EventImageUploader";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SkeletonCard } from "../components/SkeletonCard";
 import { StatusChip } from "../components/StatusChip";
 import { deleteChecklistItem, saveChecklistItem } from "../services/database/checklistRepository";
 import { emptyReview, saveLiveNote, saveReview, saveSalesCategory } from "../services/database/eventExtrasRepository";
@@ -23,6 +26,7 @@ import { id as createId, nowIso } from "../utils/normalize";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { availabilitySummaryByWorker, effectiveConfirmedWorkerIds, normalizeDayWorkerRows, workersForDay } from "../utils/availability";
 import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } from "../utils/eventStage";
+import { njPokemonEventsMap } from "../data/njPokemonSources";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -167,6 +171,7 @@ export function EventDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [event, setEvent] = useState<Event>();
+  const [loading, setLoading] = useState(true);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [showWorkers, setShowWorkers] = useState(false);
   const [editingPayment, setEditingPayment] = useState<PaymentRecord | "new" | null>(null);
@@ -182,8 +187,17 @@ export function EventDetailPage() {
 
   async function load() {
     if (!id) return;
-    setEvent(await getPlannerEvent(id));
-    setWorkers(await listWorkers());
+    setErrorMessage("");
+    try {
+      const [eventRow, workerRows] = await Promise.all([getPlannerEvent(id), listWorkers()]);
+      setEvent(eventRow);
+      setWorkers(workerRows);
+      if (!eventRow) setErrorMessage("This event could not be found.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not load event.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { void load(); }, [id]);
@@ -389,6 +403,11 @@ export function EventDetailPage() {
       id: newId,
       name: `${event.name} Copy`,
       status: "interested" as const,
+      externalSource: undefined,
+      externalSourceId: undefined,
+      calendarFeedId: undefined,
+      importedFromCalendar: false,
+      manuallyEdited: false,
       paymentRecords: [],
       finance: undefined,
       review: undefined,
@@ -457,7 +476,17 @@ export function EventDetailPage() {
     }
   }
 
-  if (!event) return <div className="text-sm text-slate-500 dark:text-slate-400">Loading event...</div>;
+  if (loading) return (
+    <LoadingScreen label="Loading event details..."><div className="space-y-4 lg:mx-auto lg:max-w-7xl">
+      <div className="animate-pulse overflow-hidden rounded-3xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="aspect-[4/5] max-h-[65vh] rounded-2xl bg-slate-200 dark:bg-slate-800" />
+        <div className="mt-4 h-8 w-3/4 rounded bg-slate-200 dark:bg-slate-800" />
+        <div className="mt-2 h-4 w-1/2 rounded bg-slate-200 dark:bg-slate-800" />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2"><SkeletonCard /><SkeletonCard /></div>
+    </div></LoadingScreen>
+  );
+  if (!event) return <ErrorState message="Event details could not be loaded." details={errorMessage} onRetry={load} onSync={load} />;
 
   const effectiveWorkerIds = effectiveConfirmedWorkerIds(event);
   const confirmed = workers.filter((worker) => effectiveWorkerIds.includes(worker.id));
@@ -489,6 +518,7 @@ export function EventDetailPage() {
         <div className="space-y-3 p-4">
           <div className="flex flex-wrap gap-2">
             <StatusChip value={event.registrationStatus} />
+            {event.importedFromCalendar ? <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-200">Imported from Calendar</span> : null}
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white">{eventTimingStatus(event.startDate)}</span>
             <select value={event.status || "interested"} onChange={(e) => updateEventStatus(e.target.value as EventStatus)} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-bold text-white">
               {["interested", "registered", "paid", "preparing", "completed", "skipped"].map((status) => <option key={status} value={status} className="text-ink">{status}</option>)}
@@ -505,7 +535,7 @@ export function EventDetailPage() {
       <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur lg:top-6 lg:col-start-2 lg:row-span-2 lg:mx-0 lg:rounded-2xl lg:border lg:bg-white/90 lg:p-3 lg:shadow-soft dark:border-slate-800 dark:bg-slate-950/95 lg:dark:bg-slate-900">
         <div className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-2 lg:overflow-visible lg:pb-0">
           <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
-          {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : null}
+          {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : event.importedFromCalendar ? <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> NJ Events Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
           <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-sm font-bold text-white shadow-soft dark:bg-coral"><Camera size={15} /> Quick Sale</Link>

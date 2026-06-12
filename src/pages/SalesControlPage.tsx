@@ -1,7 +1,11 @@
 import { Camera, ImagePlus, RotateCcw, Save, Search, SwitchCamera, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
-import { createSaleRecord, deleteSaleRecord, listSalesRecords, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SkeletonEventCard } from "../components/SkeletonEventCard";
+import { SyncStatusBadge } from "../components/SyncStatusBadge";
+import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecords, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEvents } from "../services/planner/plannerRepository";
 import type { Event, SalesRecord } from "../types/models";
@@ -31,7 +35,7 @@ export function SalesControlPage() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const requestedEventId = params.get("eventId") || "";
-  const [sales, setSales] = useState<SalesRecord[]>([]);
+  const [sales, setSales] = useState<SalesRecord[]>(() => getCachedSalesRecords());
   const [events, setEvents] = useState<Event[]>([]);
   const [mode, setMode] = useState<"control" | "sale">("control");
   const [editing, setEditing] = useState<SalesRecord | null>(null);
@@ -48,6 +52,9 @@ export function SalesControlPage() {
   const [cameraReady, setCameraReady] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(sales.length === 0);
+  const [loadError, setLoadError] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,17 +72,26 @@ export function SalesControlPage() {
   });
 
   async function load() {
-    const [saleRows, eventRows] = await Promise.all([listSalesRecords(), listPlannerEvents()]);
-    setSales(saleRows);
-    setEvents(eventRows);
-    const requestedEvent = requestedEventId ? eventRows.find((event) => event.id === requestedEventId) : undefined;
-    if (requestedEvent && !editing) {
-      setForm((current) => ({ ...current, eventId: requestedEvent.id, eventDayId: todayDayId(requestedEvent) }));
-      return;
-    }
-    const matches = todayEventMatches(eventRows);
-    if (!form.eventId && matches.length === 1) {
-      setForm((current) => ({ ...current, eventId: matches[0].id, eventDayId: todayDayId(matches[0]) }));
+    setSyncing(true);
+    setLoadError("");
+    try {
+      const [saleRows, eventRows] = await Promise.all([listSalesRecords(), listPlannerEvents()]);
+      setSales(saleRows);
+      setEvents(eventRows);
+      const requestedEvent = requestedEventId ? eventRows.find((event) => event.id === requestedEventId) : undefined;
+      if (requestedEvent && !editing) {
+        setForm((current) => ({ ...current, eventId: requestedEvent.id, eventDayId: todayDayId(requestedEvent) }));
+        return;
+      }
+      const matches = todayEventMatches(eventRows);
+      if (!form.eventId && matches.length === 1) {
+        setForm((current) => ({ ...current, eventId: matches[0].id, eventDayId: todayDayId(matches[0]) }));
+      }
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Could not load sales.");
+    } finally {
+      setLoading(false);
+      setSyncing(false);
     }
   }
 
@@ -288,6 +304,8 @@ export function SalesControlPage() {
         </div>
         <button onClick={() => { resetForm(); setMode("sale"); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
       </header>
+      <SyncStatusBadge syncing={syncing && sales.length > 0} />
+      {loadError ? <ErrorState message="Sales could not be refreshed." details={loadError} onRetry={load} onSync={load} /> : null}
 
       <section className="grid grid-cols-3 gap-3">
         <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900"><p className="text-xs text-slate-500">Total sales</p><p className="font-black">{formatMoney(totals.sold)}</p></div>
@@ -412,7 +430,8 @@ export function SalesControlPage() {
             {dateFilter === "custom" ? <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white" /> : null}
             <button onClick={() => { setQuery(""); setSort("recent"); setEventFilter(""); setEventDayFilter(""); setDateFilter("all"); }} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Clear Filters</button>
           </section>
-          {filtered.length === 0 ? <EmptyState title="No sales yet." /> : null}
+          {loading ? <LoadingScreen label="Loading sales..."><section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} />)}</section></LoadingScreen> : null}
+          {!loading && filtered.length === 0 ? <EmptyState title="No sales yet." /> : null}
           <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {filtered.map((sale) => {
               const event = sale.eventId ? eventMap.get(sale.eventId) : undefined;

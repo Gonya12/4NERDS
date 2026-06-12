@@ -4,6 +4,7 @@ import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/s
 import { fileToDataUrl, uploadSaleImage } from "../images/saleImageService";
 
 const pendingKey = "4nerds_pending_sales_v1";
+const cacheKey = "4nerds_sales_cache_v1";
 
 type SalesRow = {
   id: string;
@@ -76,13 +77,23 @@ export function listPendingSales() {
   return pendingSales();
 }
 
+export function getCachedSalesRecords() {
+  try {
+    return JSON.parse(localStorage.getItem(cacheKey) || "[]") as SalesRecord[];
+  } catch {
+    return [] as SalesRecord[];
+  }
+}
+
 export async function listSalesRecords() {
   const localPending = pendingSales();
   if (!isSupabaseConfigured || !supabase) return localPending;
   const { data, error } = await supabase.from("sales_records").select("*").order("sold_at", { ascending: false });
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  return [...localPending, ...(data || []).map((row) => fromRow(row as SalesRow))];
+  const records = [...localPending, ...(data || []).map((row) => fromRow(row as SalesRow))];
+  try { localStorage.setItem(cacheKey, JSON.stringify(records)); } catch { /* Cache is optional. */ }
+  return records;
 }
 
 export async function listSalesRecordsForEvent(eventId: string) {

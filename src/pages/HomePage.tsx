@@ -2,8 +2,12 @@ import { CalendarDays, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Pl
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
+import { ErrorState } from "../components/ErrorState";
 import { EventCard } from "../components/EventCard";
 import { InstallPrompt } from "../components/InstallPrompt";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SkeletonEventCard } from "../components/SkeletonEventCard";
+import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { getCachedPlannerHomeEvents, listPlannerHomeEvents, listWorkers } from "../services/planner/plannerRepository";
 import type { Event, Worker } from "../types/models";
 import { effectiveConfirmedWorkerIds } from "../utils/availability";
@@ -20,18 +24,22 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [showLegend, setShowLegend] = useState(false);
 
   async function load() {
     setSyncing(true);
     setSyncMessage("Syncing...");
+    setSyncError("");
     try {
       const [allEvents, allWorkers] = await Promise.all([listPlannerHomeEvents(10), listWorkers()]);
       setEvents(allEvents);
       setWorkers(allWorkers);
       setSyncMessage("");
     } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : "Sync failed.");
+      const message = error instanceof Error ? error.message : "Sync failed.";
+      setSyncMessage("");
+      setSyncError(message);
     } finally {
       setLoading(false);
       setSyncing(false);
@@ -63,13 +71,9 @@ export function HomePage() {
   const workersScheduled = new Set(upcoming.flatMap((event) => effectiveConfirmedWorkerIds(event))).size;
 
   const skeletonCards = (
-    <div className="space-y-3">
+    <div className="-mx-4 flex gap-3 overflow-hidden px-4 lg:mx-0 lg:grid lg:grid-cols-3 lg:px-0">
       {[1, 2, 3].map((item) => (
-        <div key={item} className="animate-pulse rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
-          <div className="aspect-[4/5] rounded-2xl bg-slate-200 dark:bg-slate-800" />
-          <div className="mt-4 h-5 w-2/3 rounded bg-slate-200 dark:bg-slate-800" />
-          <div className="mt-2 h-4 w-1/2 rounded bg-slate-200 dark:bg-slate-800" />
-        </div>
+        <div key={item} className="w-[84vw] max-w-[380px] shrink-0 lg:w-auto lg:max-w-none"><SkeletonEventCard /></div>
       ))}
     </div>
   );
@@ -98,21 +102,23 @@ export function HomePage() {
       </header>
 
       <InstallPrompt />
+      <SyncStatusBadge syncing={syncing && events.length > 0} />
+      {syncError ? <ErrorState message="Dashboard data could not be refreshed." details={syncError} onRetry={load} onSync={load} /> : null}
 
       <section className="grid grid-cols-3 gap-2 lg:grid-cols-6">
         <div className="rounded-2xl bg-sky-50 p-3 shadow-soft dark:bg-sky-950/30">
           <CalendarDays className="text-sky-600 dark:text-sky-300" size={18} />
-          <p className="mt-2 text-xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>
+          {loading && !events.length ? <div className="mt-3 h-6 w-10 animate-pulse rounded bg-sky-200 dark:bg-sky-900" /> : <p className="mt-2 text-xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Planned</p>
         </div>
         <div className="rounded-2xl bg-emerald-50 p-3 shadow-soft dark:bg-emerald-950/30">
           <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={18} />
-          <p className="mt-2 text-xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>
+          {loading && !events.length ? <div className="mt-3 h-6 w-10 animate-pulse rounded bg-emerald-200 dark:bg-emerald-900" /> : <p className="mt-2 text-xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Confirmed</p>
         </div>
         <div className="rounded-2xl bg-orange-50 p-3 shadow-soft dark:bg-orange-950/30">
           <DollarSign className="text-orange-600 dark:text-orange-300" size={18} />
-          <p className="mt-2 text-base font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>
+          {loading && !events.length ? <div className="mt-3 h-6 w-16 animate-pulse rounded bg-orange-200 dark:bg-orange-900" /> : <p className="mt-2 text-base font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Upcoming Cost</p>
         </div>
         <Link to="/events/new" className="flex min-h-24 flex-col justify-between rounded-2xl bg-coral p-3 text-white shadow-soft transition active:scale-[0.98]">
@@ -137,7 +143,7 @@ export function HomePage() {
             <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
           </div>
         </div>
-        {loading ? skeletonCards : upcoming.length === 0 ? (
+        {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : upcoming.length === 0 ? (
           <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
         ) : (
           <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 scroll-smooth lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">

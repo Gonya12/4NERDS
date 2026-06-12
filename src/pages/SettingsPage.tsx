@@ -1,4 +1,4 @@
-import { BarChart3, Bell, Download, Images, Plus, RefreshCw, Trash2, Upload, Wifi, X } from "lucide-react";
+import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, Trash2, Upload, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
@@ -10,6 +10,8 @@ import { useTheme } from "../services/theme/ThemeProvider";
 import type { ThemePreference } from "../services/theme/themeService";
 import type { Location, Worker } from "../types/models";
 import { nowIso } from "../utils/normalize";
+import { SyncStatusBadge } from "../components/SyncStatusBadge";
+import { njPokemonEventsMap } from "../data/njPokemonSources";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -32,6 +34,7 @@ export function SettingsPage() {
   const [syncStatus, setSyncStatus] = useState(getSupabaseStatus());
   const [syncMessage, setSyncMessage] = useState("");
   const [notificationMessage, setNotificationMessage] = useState("");
+  const [syncBusy, setSyncBusy] = useState(false);
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -127,13 +130,19 @@ export function SettingsPage() {
   }
 
   async function testConnection() {
+    setSyncBusy(true);
     setSyncMessage("Testing Supabase connection...");
-    const result = await testSupabaseConnection();
-    setSyncStatus(getSupabaseStatus());
-    setSyncMessage(result.ok ? "Supabase connection works." : result.error);
+    try {
+      const result = await testSupabaseConnection();
+      setSyncStatus(getSupabaseStatus());
+      setSyncMessage(result.ok ? "Supabase connection works." : result.error);
+    } finally {
+      setSyncBusy(false);
+    }
   }
 
   async function syncNow() {
+    setSyncBusy(true);
     setSyncMessage("Syncing...");
     try {
       const [events, workerRows] = await Promise.all([listPlannerEvents(), listWorkers()]);
@@ -143,6 +152,8 @@ export function SettingsPage() {
     } catch (error) {
       setSyncStatus(getSupabaseStatus());
       setSyncMessage(error instanceof Error ? error.message : "Sync failed.");
+    } finally {
+      setSyncBusy(false);
     }
   }
 
@@ -208,6 +219,19 @@ export function SettingsPage() {
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div>
+          <p className="text-sm font-bold text-coral">Imports</p>
+          <h2 className="font-black text-ink dark:text-white">Calendar Feeds</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Connect public Google Calendar or ICS feeds and review new events.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Link to="/calendar-feeds" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white dark:bg-coral"><CalendarSync size={17} /> Manage Feeds</Link>
+          <Link to="/calendar-imports" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">Review Imports</Link>
+        </div>
+        <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><MapPinned size={17} /> Open NJ Pokémon Events Map</a>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-bold text-coral">Team Sync</p>
@@ -261,10 +285,11 @@ export function SettingsPage() {
           </p>
         )}
         <div className="grid grid-cols-2 gap-2">
-          <button onClick={testConnection} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-ink text-sm font-bold text-white"><Wifi size={16} /> Test Connection</button>
-          <button onClick={syncNow} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-coral text-sm font-bold text-white"><RefreshCw size={16} /> Sync Now</button>
+          <button onClick={testConnection} disabled={syncBusy} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-ink text-sm font-bold text-white disabled:opacity-50"><Wifi size={16} /> Test Connection</button>
+          <button onClick={syncNow} disabled={syncBusy} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-coral text-sm font-bold text-white disabled:opacity-50"><RefreshCw size={16} className={syncBusy ? "animate-spin" : ""} /> Sync Now</button>
           <button onClick={seedWorkersNow} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Plus size={16} /> Seed Workers</button>
         </div>
+        <SyncStatusBadge syncing={syncBusy} label={syncMessage || "Syncing..."} />
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">

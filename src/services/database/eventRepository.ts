@@ -34,6 +34,11 @@ type EventRow = {
   organizer_instagram_handle?: string | null;
   status?: EventStatus | null;
   event_stage?: EventStage | null;
+  external_source?: string | null;
+  external_source_id?: string | null;
+  calendar_feed_id?: string | null;
+  imported_from_calendar?: boolean | null;
+  manually_edited?: boolean | null;
   split_mode?: SplitMode | null;
   packing_notes?: string | null;
   booth_number?: string | null;
@@ -168,6 +173,11 @@ function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [
     organizerInstagramHandle: row.organizer_instagram_handle || undefined,
     status: row.status || "interested",
     eventStage: row.event_stage || "new",
+    externalSource: row.external_source || undefined,
+    externalSourceId: row.external_source_id || undefined,
+    calendarFeedId: row.calendar_feed_id || undefined,
+    importedFromCalendar: Boolean(row.imported_from_calendar),
+    manuallyEdited: Boolean(row.manually_edited),
     splitMode: row.split_mode || "equal",
     packingNotes: row.packing_notes || undefined,
     boothNumber: row.booth_number || undefined,
@@ -216,6 +226,11 @@ function toRow(event: Event): EventRow {
     organizer_instagram_handle: event.organizerInstagramHandle || null,
     status: event.status || "interested",
     event_stage: event.eventStage || "new",
+    external_source: event.externalSource || null,
+    external_source_id: event.externalSourceId || null,
+    calendar_feed_id: event.calendarFeedId || null,
+    imported_from_calendar: Boolean(event.importedFromCalendar),
+    manually_edited: Boolean(event.manuallyEdited),
     split_mode: event.splitMode || "equal",
     packing_notes: event.packingNotes || null,
     booth_number: event.boothNumber || null,
@@ -359,7 +374,7 @@ export async function listHomeEvents(limit = 10) {
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("events")
-    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,created_at,updated_at")
+    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,external_source,external_source_id,calendar_feed_id,imported_from_calendar,manually_edited,created_at,updated_at")
     .gte("start_date", today)
     .neq("status", "completed")
     .neq("status", "skipped")

@@ -1,7 +1,11 @@
 import { CheckCircle2, Circle, ExternalLink, Package, Plus, Search, Trash2, User, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
-import { deleteBuyItem, fetchProductPreview, listBuyItems, saveBuyItem } from "../services/database/buyItemsRepository";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SkeletonEventCard } from "../components/SkeletonEventCard";
+import { SyncStatusBadge } from "../components/SyncStatusBadge";
+import { deleteBuyItem, fetchProductPreview, getCachedBuyItems, listBuyItems, saveBuyItem } from "../services/database/buyItemsRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import type { BuyItem, BuyItemPriority, Worker } from "../types/models";
 import { id, nowIso } from "../utils/normalize";
@@ -26,7 +30,7 @@ const emptyDraft = {
 };
 
 export function NeedsToBuyPage() {
-  const [items, setItems] = useState<BuyItem[]>([]);
+  const [items, setItems] = useState<BuyItem[]>(() => getCachedBuyItems());
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [editing, setEditing] = useState<BuyItem | "new" | null>(null);
   const [buyerTarget, setBuyerTarget] = useState<BuyItem | null>(null);
@@ -39,11 +43,22 @@ export function NeedsToBuyPage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [loading, setLoading] = useState(items.length === 0);
+  const [syncing, setSyncing] = useState(false);
 
   async function load() {
-    const [loadedItems, loadedWorkers] = await Promise.all([listBuyItems(), listWorkers().catch(() => [] as Worker[])]);
-    setItems(loadedItems);
-    setWorkers(loadedWorkers.filter((worker) => worker.active));
+    setSyncing(true);
+    setError("");
+    try {
+      const [loadedItems, loadedWorkers] = await Promise.all([listBuyItems(), listWorkers().catch(() => [] as Worker[])]);
+      setItems(loadedItems);
+      setWorkers(loadedWorkers.filter((worker) => worker.active));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load buy items.");
+    } finally {
+      setLoading(false);
+      setSyncing(false);
+    }
   }
 
   useEffect(() => { void load(); }, []);
@@ -203,9 +218,10 @@ export function NeedsToBuyPage() {
         </div>
         <button onClick={() => openForm()} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Plus size={18} /> Add Item</button>
       </header>
+      <SyncStatusBadge syncing={syncing && items.length > 0} />
 
       {message ? <p className="rounded-2xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{message}</p> : null}
-      {error ? <p className="rounded-2xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{error}</p> : null}
+      {error ? <ErrorState message="Needs to Buy could not be refreshed." details={error} onRetry={load} onSync={load} /> : null}
 
       <section className="grid gap-3 rounded-2xl bg-white/90 p-3 shadow-soft md:grid-cols-[1fr_160px_160px_180px] dark:bg-slate-900">
         <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
@@ -231,7 +247,8 @@ export function NeedsToBuyPage() {
         </select>
       </section>
 
-      {filtered.length === 0 ? <EmptyState title="No buy items yet." /> : null}
+      {loading ? <LoadingScreen label="Loading items..."><section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} compact />)}</section></LoadingScreen> : null}
+      {!loading && filtered.length === 0 ? <EmptyState title="No buy items yet." /> : null}
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {filtered.map((item) => (
           <article key={item.id} onClick={() => openForm(item)} className={`cursor-pointer overflow-hidden rounded-2xl border p-3 shadow-soft transition hover:-translate-y-0.5 ${item.purchased ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/25" : "border-white/70 bg-white/90 dark:border-slate-800 dark:bg-slate-900"}`}>

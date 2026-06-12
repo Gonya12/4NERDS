@@ -30,6 +30,32 @@ create table if not exists public.locations (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.calendar_feeds (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  ics_url text not null,
+  enabled boolean not null default true,
+  auto_import boolean not null default false,
+  last_checked_at timestamptz,
+  last_status text,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.calendar_feeds (id, name, ics_url, enabled, auto_import)
+select
+  '5f4d64a9-c424-4432-8db7-18bd4c07c1c9'::uuid,
+  'NJ Pokémon Events Calendar',
+  'https://calendar.google.com/calendar/ical/5f4d64a9c42414328db718bd4c07c1c912543a838042231abe151ebdc178d7a1%40group.calendar.google.com/public/basic.ics',
+  true,
+  false
+where not exists (
+  select 1
+  from public.calendar_feeds
+  where ics_url = 'https://calendar.google.com/calendar/ical/5f4d64a9c42414328db718bd4c07c1c912543a838042231abe151ebdc178d7a1%40group.calendar.google.com/public/basic.ics'
+);
+
 create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -52,6 +78,11 @@ create table if not exists public.events (
   organizer_instagram_handle text,
   status text not null default 'interested',
   event_stage text not null default 'new' check (event_stage in ('new', 'applied', 'paid', 'past')),
+  external_source text,
+  external_source_id text,
+  calendar_feed_id uuid references public.calendar_feeds(id) on delete set null,
+  imported_from_calendar boolean not null default false,
+  manually_edited boolean not null default false,
   packing_notes text,
   booth_number text,
   setup_time text,
@@ -215,6 +246,11 @@ alter table public.events add column if not exists location_instagram_handle tex
 alter table public.events add column if not exists organizer_instagram_handle text;
 alter table public.events add column if not exists status text not null default 'interested';
 alter table public.events add column if not exists event_stage text not null default 'new';
+alter table public.events add column if not exists external_source text;
+alter table public.events add column if not exists external_source_id text;
+alter table public.events add column if not exists calendar_feed_id uuid references public.calendar_feeds(id) on delete set null;
+alter table public.events add column if not exists imported_from_calendar boolean not null default false;
+alter table public.events add column if not exists manually_edited boolean not null default false;
 alter table public.events add column if not exists packing_notes text;
 alter table public.events add column if not exists booth_number text;
 alter table public.events add column if not exists setup_time text;
@@ -241,6 +277,7 @@ alter table public.buy_items add column if not exists purchased boolean not null
 alter table public.buy_items add column if not exists purchased_by text;
 alter table public.buy_items add column if not exists purchased_by_worker_id uuid references public.workers(id) on delete set null;
 alter table public.buy_items add column if not exists purchased_at timestamptz;
+alter table public.calendar_feeds add column if not exists updated_at timestamptz not null default now();
 
 insert into public.workers (name, active)
 values
@@ -260,6 +297,7 @@ alter table public.event_day_workers replica identity full;
 alter table public.event_price_options replica identity full;
 alter table public.payment_records replica identity full;
 alter table public.locations replica identity full;
+alter table public.calendar_feeds replica identity full;
 alter table public.event_days replica identity full;
 alter table public.event_checklist_items replica identity full;
 alter table public.event_finances replica identity full;
@@ -284,6 +322,7 @@ alter table public.event_sales_categories enable row level security;
 alter table public.event_reviews enable row level security;
 alter table public.sales_records enable row level security;
 alter table public.buy_items enable row level security;
+alter table public.calendar_feeds enable row level security;
 
 drop policy if exists "private MVP anon read workers" on public.workers;
 drop policy if exists "private MVP anon write workers" on public.workers;
@@ -315,6 +354,8 @@ drop policy if exists "private MVP anon read sales records" on public.sales_reco
 drop policy if exists "private MVP anon write sales records" on public.sales_records;
 drop policy if exists "private MVP anon read buy items" on public.buy_items;
 drop policy if exists "private MVP anon write buy items" on public.buy_items;
+drop policy if exists "private MVP anon read calendar feeds" on public.calendar_feeds;
+drop policy if exists "private MVP anon write calendar feeds" on public.calendar_feeds;
 
 create policy "private MVP anon read workers" on public.workers for select to anon using (true);
 create policy "private MVP anon write workers" on public.workers for all to anon using (true) with check (true);
@@ -346,6 +387,8 @@ create policy "private MVP anon read sales records" on public.sales_records for 
 create policy "private MVP anon write sales records" on public.sales_records for all to anon using (true) with check (true);
 create policy "private MVP anon read buy items" on public.buy_items for select to anon using (true);
 create policy "private MVP anon write buy items" on public.buy_items for all to anon using (true) with check (true);
+create policy "private MVP anon read calendar feeds" on public.calendar_feeds for select to anon using (true);
+create policy "private MVP anon write calendar feeds" on public.calendar_feeds for all to anon using (true) with check (true);
 
 drop policy if exists "private MVP event images read" on storage.objects;
 drop policy if exists "private MVP event images insert" on storage.objects;
@@ -455,6 +498,12 @@ begin
 exception when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  alter publication supabase_realtime add table public.calendar_feeds;
+exception when duplicate_object then null;
+end $$;
+
 create index if not exists idx_events_start_date on public.events(start_date);
 create index if not exists idx_events_status_start_date on public.events(status, start_date);
 create index if not exists idx_events_event_stage on public.events(event_stage);
@@ -477,3 +526,7 @@ create index if not exists idx_buy_items_created_at on public.buy_items(created_
 create index if not exists idx_buy_items_purchased on public.buy_items(purchased);
 create index if not exists idx_buy_items_priority on public.buy_items(priority);
 create index if not exists idx_buy_items_purchased_by_worker_id on public.buy_items(purchased_by_worker_id);
+create index if not exists idx_events_external_source_id on public.events(external_source_id);
+create unique index if not exists idx_events_external_source_unique on public.events(external_source, external_source_id) where external_source_id is not null;
+create index if not exists idx_events_calendar_feed_id on public.events(calendar_feed_id);
+create index if not exists idx_calendar_feeds_enabled on public.calendar_feeds(enabled);
