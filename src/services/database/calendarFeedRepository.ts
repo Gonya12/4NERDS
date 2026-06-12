@@ -24,6 +24,8 @@ type FeedApiResponse = {
   events?: CalendarFeedEvent[];
   error?: string;
   stage?: string;
+  parser_status?: "success" | "failed";
+  event_count?: number;
   source_url?: string;
   upstream_status?: number;
   body_snippet?: string;
@@ -35,6 +37,7 @@ export type CalendarFeedTestResult = {
   eventsFound: number;
   httpStatus: number;
   apiReached: boolean;
+  parserStatus: "Success" | "Failed" | "Unknown";
   details: string;
 };
 
@@ -227,8 +230,9 @@ export async function testCalendarFeed(icsUrl: string): Promise<CalendarFeedTest
       eventsFound: payload.events?.length || 0,
       httpStatus: response.status,
       apiReached: Boolean(payload.reached),
+      parserStatus: payload.parser_status === "success" ? "Success" : payload.parser_status === "failed" ? "Failed" : "Unknown",
       details: reachable
-        ? `HTTP ${response.status}\nCalendar API route reached: yes\nFeed URL: ${payload.source_url || icsUrl}`
+        ? `HTTP ${response.status}\nCalendar API route reached: yes\nParser status: ${payload.parser_status || "unknown"}\nEvents found: ${payload.event_count ?? payload.events?.length ?? 0}\nFeed URL: ${payload.source_url || icsUrl}`
         : formatCalendarFeedError(response.status, payload, icsUrl)
     };
   } catch (error) {
@@ -237,6 +241,7 @@ export async function testCalendarFeed(icsUrl: string): Promise<CalendarFeedTest
       eventsFound: 0,
       httpStatus: error instanceof CalendarFeedRequestError ? error.httpStatus : 0,
       apiReached: error instanceof CalendarFeedRequestError ? error.apiReached : false,
+      parserStatus: "Unknown",
       details: error instanceof Error ? error.message : "Calendar feed test failed."
     };
   }
@@ -295,6 +300,7 @@ function formatCalendarFeedError(httpStatus: number, payload: FeedApiResponse, f
     `HTTP status: ${httpStatus}`,
     `Calendar API route reached: ${payload.reached ? "yes" : "no"}`,
     payload.stage ? `Failure stage: ${payload.stage}` : "",
+    payload.parser_status ? `Parser status: ${payload.parser_status}` : "",
     payload.upstream_status ? `Upstream status: ${payload.upstream_status}` : "",
     `Failed URL: ${payload.source_url || fallbackUrl}`,
     payload.parser_error ? `Parser error: ${payload.parser_error}` : "",

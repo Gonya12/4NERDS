@@ -266,6 +266,7 @@ export function NjCalendarPage() {
                 <p>Events found: <span className="text-ink dark:text-white">{testResult.eventsFound}</span></p>
                 <p>API reached: <span className="text-ink dark:text-white">{testResult.apiReached ? "Yes" : "No"}</span></p>
                 <p>HTTP status: <span className="text-ink dark:text-white">{testResult.httpStatus || "No response"}</span></p>
+                <p>Parser status: <span className="text-ink dark:text-white">{testResult.parserStatus}</span></p>
               </div>
               <details className="mt-3 text-xs text-slate-600 dark:text-slate-300">
                 <summary className="cursor-pointer font-black">Technical details</summary>

@@ -1,4 +1,4 @@
-import * as ical from "node-ical";
+import ICAL from "ical.js";
 
 type ApiRequest = {
   method?: string;
@@ -25,22 +25,12 @@ type CalendarFeedResponse = {
   }>;
   error?: string;
   stage?: "validation" | "fetch" | "response" | "parse";
+  parser_status?: "success" | "failed";
+  event_count?: number;
   source_url?: string;
   upstream_status?: number;
   body_snippet?: string;
   parser_error?: string;
-};
-
-type ParsedEvent = {
-  type?: string;
-  uid?: string;
-  summary?: string;
-  description?: string;
-  location?: string;
-  start?: Date;
-  end?: Date;
-  datetype?: string;
-  url?: string | { val?: string };
 };
 
 const maxFeedBytes = 5_000_000;
@@ -107,15 +97,45 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       });
     }
 
-    let parsed: ReturnType<typeof ical.sync.parseICS>;
+    let events: NonNullable<CalendarFeedResponse["events"]>;
     try {
-      parsed = ical.sync.parseICS(text);
+      const jcalData = ICAL.parse(text);
+      const calendar = new ICAL.Component(jcalData);
+      const vevents = calendar.getAllSubcomponents("vevent");
+      const now = Date.now();
+
+      events = vevents
+        .map((vevent) => {
+          const startTime = vevent.getFirstPropertyValue("dtstart");
+          if (!(startTime instanceof ICAL.Time)) return null;
+
+          const endValue = vevent.getFirstPropertyValue("dtend");
+          const endTime = endValue instanceof ICAL.Time ? endValue : undefined;
+          const start = startTime.toJSDate();
+          const end = endTime?.toJSDate();
+          const summary = textValue(vevent.getFirstPropertyValue("summary"));
+
+          return {
+            uid: textValue(vevent.getFirstPropertyValue("uid")) || `${summary || "event"}-${start.toISOString()}`,
+            title: clean(summary) || "Untitled event",
+            description: clean(textValue(vevent.getFirstPropertyValue("description"))) || undefined,
+            location: clean(textValue(vevent.getFirstPropertyValue("location"))) || undefined,
+            start: start.toISOString(),
+            end: end?.toISOString(),
+            allDay: startTime.isDate,
+            url: clean(textValue(vevent.getFirstPropertyValue("url"))) || undefined
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        .filter((item) => new Date(item.end || item.start).getTime() >= now - 86_400_000)
+        .sort((a, b) => a.start.localeCompare(b.start));
     } catch (parseError) {
       const parserError = parseError instanceof Error ? parseError.message : String(parseError);
       return res.status(422).json({
         success: false,
         reached: true,
         stage: "parse",
+        parser_status: "failed",
         source_url: sourceUrl,
         upstream_status: response.status,
         body_snippet: truncate(text),
@@ -123,29 +143,16 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         error: "The calendar feed was downloaded, but its ICS data could not be parsed."
       });
     }
-    const now = Date.now();
-    const events = (Object.values(parsed) as unknown[])
-      .filter((raw) => {
-        const item = raw as ParsedEvent;
-        return Boolean(item && item.type === "VEVENT" && item.start);
-      })
-      .map((raw) => {
-        const item = raw as ParsedEvent;
-        return {
-        uid: String(item.uid || `${item.summary || "event"}-${item.start?.toISOString()}`),
-        title: clean(item.summary) || "Untitled event",
-        description: clean(item.description) || undefined,
-        location: clean(item.location) || undefined,
-        start: item.start!.toISOString(),
-        end: item.end?.toISOString(),
-        allDay: item.datetype === "date" || Boolean((item.start as Date & { dateOnly?: boolean }).dateOnly),
-        url: typeof item.url === "string" ? item.url : item.url?.val
-        };
-      })
-      .filter((item) => new Date(item.end || item.start).getTime() >= now - 86_400_000)
-      .sort((a, b) => a.start.localeCompare(b.start));
 
-    return res.status(200).json({ success: true, reached: true, source_url: sourceUrl, upstream_status: response.status, events });
+    return res.status(200).json({
+      success: true,
+      reached: true,
+      parser_status: "success",
+      event_count: events.length,
+      source_url: sourceUrl,
+      upstream_status: response.status,
+      events
+    });
   } catch (error) {
     const message = error instanceof Error && error.name === "AbortError"
       ? "Calendar feed request timed out."
@@ -184,6 +191,10 @@ async function fetchPublicCalendar(sourceUrl: string, signal: AbortSignal) {
 
 function clean(value?: string) {
   return value?.replace(/\s+/g, " ").trim() || "";
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
 function truncate(value: string, length = 500) {
