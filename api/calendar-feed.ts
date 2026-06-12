@@ -12,6 +12,7 @@ type ApiResponse = {
 
 type CalendarFeedResponse = {
   success: boolean;
+  reached: true;
   events?: Array<{
     uid: string;
     title: string;
@@ -23,6 +24,11 @@ type CalendarFeedResponse = {
     url?: string;
   }>;
   error?: string;
+  stage?: "validation" | "fetch" | "response" | "parse";
+  source_url?: string;
+  upstream_status?: number;
+  body_snippet?: string;
+  parser_error?: string;
 };
 
 type ParsedEvent = {
@@ -42,13 +48,19 @@ const userAgent = "Mozilla/5.0 (compatible; 4NerdsCalendarImporter/1.0)";
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method && req.method !== "GET") {
-    return res.status(405).json({ success: false, error: "Only GET requests are supported." });
+    return res.status(405).json({ success: false, reached: true, stage: "validation", error: "Only GET requests are supported." });
   }
 
   const rawUrl = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
   const sourceUrl = validateUrl(rawUrl);
   if (!sourceUrl) {
-    return res.status(400).json({ success: false, error: "A valid public http or https ICS URL is required." });
+    return res.status(400).json({
+      success: false,
+      reached: true,
+      stage: "validation",
+      source_url: safeUrl(rawUrl),
+      error: "A valid public http or https ICS URL is required."
+    });
   }
 
   const controller = new AbortController();
@@ -58,20 +70,59 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     const response = await fetchPublicCalendar(sourceUrl, controller.signal);
 
     if (!response.ok) {
-      return res.status(200).json({ success: false, error: `Calendar feed returned ${response.status}.` });
+      const bodySnippet = truncate(await response.text());
+      return res.status(502).json({
+        success: false,
+        reached: true,
+        stage: "response",
+        source_url: sourceUrl,
+        upstream_status: response.status,
+        body_snippet: bodySnippet,
+        error: `Google Calendar returned HTTP ${response.status}.`
+      });
     }
 
     const contentLength = Number(response.headers.get("content-length") || 0);
     if (contentLength > maxFeedBytes) {
-      return res.status(200).json({ success: false, error: "Calendar feed is too large to import." });
+      return res.status(413).json({
+        success: false,
+        reached: true,
+        stage: "response",
+        source_url: sourceUrl,
+        upstream_status: response.status,
+        error: "Calendar feed is too large to import."
+      });
     }
 
     const text = await response.text();
     if (text.length > maxFeedBytes || !text.includes("BEGIN:VCALENDAR")) {
-      return res.status(200).json({ success: false, error: "The URL did not return a valid ICS calendar." });
+      return res.status(422).json({
+        success: false,
+        reached: true,
+        stage: "response",
+        source_url: sourceUrl,
+        upstream_status: response.status,
+        body_snippet: truncate(text),
+        error: "The URL did not return a valid ICS calendar."
+      });
     }
 
-    const parsed = ical.sync.parseICS(text);
+    let parsed: ReturnType<typeof ical.sync.parseICS>;
+    try {
+      parsed = ical.sync.parseICS(text);
+    } catch (parseError) {
+      const parserError = parseError instanceof Error ? parseError.message : String(parseError);
+      return res.status(422).json({
+        success: false,
+        reached: true,
+        stage: "parse",
+        source_url: sourceUrl,
+        upstream_status: response.status,
+        body_snippet: truncate(text),
+        parser_error: parserError,
+        error: "The calendar feed was downloaded, but its ICS data could not be parsed."
+      });
+    }
     const now = Date.now();
     const events = (Object.values(parsed) as unknown[])
       .filter((raw) => {
@@ -94,13 +145,17 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       .filter((item) => new Date(item.end || item.start).getTime() >= now - 86_400_000)
       .sort((a, b) => a.start.localeCompare(b.start));
 
-    return res.status(200).json({ success: true, events });
+    return res.status(200).json({ success: true, reached: true, source_url: sourceUrl, upstream_status: response.status, events });
   } catch (error) {
-    return res.status(200).json({
+    const message = error instanceof Error && error.name === "AbortError"
+      ? "Calendar feed request timed out."
+      : error instanceof Error ? error.message : "Could not read this calendar feed.";
+    return res.status(502).json({
       success: false,
-      error: error instanceof Error && error.name === "AbortError"
-        ? "Calendar feed request timed out."
-        : error instanceof Error ? error.message : "Could not read this calendar feed."
+      reached: true,
+      stage: "fetch",
+      source_url: sourceUrl,
+      error: message
     });
   } finally {
     clearTimeout(timeout);
@@ -129,6 +184,22 @@ async function fetchPublicCalendar(sourceUrl: string, signal: AbortSignal) {
 
 function clean(value?: string) {
   return value?.replace(/\s+/g, " ").trim() || "";
+}
+
+function truncate(value: string, length = 500) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > length ? `${compact.slice(0, length)}...` : compact;
+}
+
+function safeUrl(rawUrl?: string) {
+  try {
+    const parsed = new URL(rawUrl || "");
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function validateUrl(rawUrl?: string) {

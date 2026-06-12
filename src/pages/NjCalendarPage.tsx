@@ -11,6 +11,7 @@ import {
   Pencil,
   RefreshCw,
   Save,
+  TestTube2,
   X
 } from "lucide-react";
 import {
@@ -38,7 +39,9 @@ import {
   listCalendarFeeds,
   saveCalendarCandidate,
   saveCalendarCandidates,
-  syncCalendarFeed
+  syncCalendarFeed,
+  testCalendarFeed,
+  type CalendarFeedTestResult
 } from "../services/database/calendarFeedRepository";
 import { listPlannerEvents } from "../services/planner/plannerRepository";
 import type { CalendarFeed, CalendarImportCandidate, Event } from "../types/models";
@@ -61,19 +64,34 @@ export function NjCalendarPage() {
   const [selected, setSelected] = useState<CalendarImportCandidate | null>(null);
   const [editing, setEditing] = useState<CalendarImportCandidate | null>(null);
   const [savingId, setSavingId] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<CalendarFeedTestResult | null>(null);
 
   async function load(autoSyncEmpty = false) {
     setError("");
+    let activeFeed: CalendarFeed = defaultNjFeed();
     try {
-      const feeds = await listCalendarFeeds();
-      const activeFeed = feeds.find((item) => item.id === njPokemonCalendar.id)
-        || feeds.find((item) => item.icsUrl === njPokemonCalendar.icsUrl)
-        || null;
+      try {
+        const feeds = await listCalendarFeeds();
+        activeFeed = feeds.find((item) => item.id === njPokemonCalendar.id)
+          || feeds.find((item) => item.icsUrl === njPokemonCalendar.icsUrl)
+          || activeFeed;
+      } catch (feedError) {
+        const details = feedError instanceof Error ? feedError.message : String(feedError);
+        console.warn("Calendar feed settings could not be loaded; using the built-in NJ feed.", details);
+        setError(`Feed settings could not be loaded, so the built-in NJ feed is being used.\n${details}`);
+      }
       setFeed(activeFeed);
-      const cached = activeFeed ? listCalendarCandidatesForFeed(activeFeed.id) : [];
+      const cached = listCalendarCandidatesForFeed(activeFeed.id);
       setCandidates(cached);
-      setSavedEvents(await loadSavedEvents(activeFeed?.id));
-      if (autoSyncEmpty && activeFeed?.enabled && cached.length === 0) await runSync(activeFeed);
+      try {
+        setSavedEvents(await loadSavedEvents(activeFeed.id));
+      } catch (savedError) {
+        const details = savedError instanceof Error ? savedError.message : String(savedError);
+        console.warn("Saved calendar events could not be loaded.", details);
+        setError((current) => [current, `Saved Events could not be loaded.\n${details}`].filter(Boolean).join("\n\n"));
+      }
+      if (autoSyncEmpty && activeFeed.enabled && cached.length === 0) await runSync(activeFeed);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load the NJ calendar.");
     } finally {
@@ -94,7 +112,8 @@ export function NjCalendarPage() {
     setMessage("");
     setError("");
     try {
-      const result = await syncCalendarFeed(target, setProgress);
+      const njFeed = { ...target, icsUrl: njPokemonCalendar.icsUrl };
+      const result = await syncCalendarFeed(njFeed, setProgress);
       const feeds = await listCalendarFeeds();
       setFeed(feeds.find((item) => item.id === target.id) || target);
       setCandidates(listCalendarCandidatesForFeed(target.id));
@@ -105,6 +124,16 @@ export function NjCalendarPage() {
     } finally {
       setProgress("");
       setSyncing(false);
+    }
+  }
+
+  async function runTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await testCalendarFeed(njPokemonCalendar.icsUrl));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -195,7 +224,7 @@ export function NjCalendarPage() {
       {message ? <p className="rounded-2xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{message}</p> : null}
       {error ? <ErrorState message="The calendar could not be loaded." details={error} onRetry={() => void load()} onSync={() => void runSync()} /> : null}
 
-      <section className="grid grid-cols-3 gap-2">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <button
           onClick={() => void runSync()}
           disabled={syncing || !feed}
@@ -209,6 +238,13 @@ export function NjCalendarPage() {
         >
           <CalendarCheck size={16} /> Review Imports
         </button>
+        <button
+          onClick={() => void runTest()}
+          disabled={testing}
+          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white px-2 text-xs font-black text-ink shadow-soft disabled:opacity-50 dark:bg-slate-900 dark:text-white"
+        >
+          <TestTube2 size={16} /> {testing ? "Testing..." : "Test Feed"}
+        </button>
         <a
           href={njPokemonEventsMap.url}
           target="_blank"
@@ -218,6 +254,27 @@ export function NjCalendarPage() {
           <MapPinned size={16} /> Open Map
         </a>
       </section>
+
+      {testResult ? (
+        <section className={`rounded-2xl border p-4 ${testResult.reachable ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30" : "border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950/30"}`}>
+          <div className="flex items-start gap-3">
+            <TestTube2 className={testResult.reachable ? "text-emerald-600" : "text-rose-600"} size={20} />
+            <div className="min-w-0 flex-1">
+              <h2 className="font-black text-ink dark:text-white">Feed Test</h2>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-sm font-bold text-slate-600 dark:text-slate-300">
+                <p>Feed reachable: <span className="text-ink dark:text-white">{testResult.reachable ? "Yes" : "No"}</span></p>
+                <p>Events found: <span className="text-ink dark:text-white">{testResult.eventsFound}</span></p>
+                <p>API reached: <span className="text-ink dark:text-white">{testResult.apiReached ? "Yes" : "No"}</span></p>
+                <p>HTTP status: <span className="text-ink dark:text-white">{testResult.httpStatus || "No response"}</span></p>
+              </div>
+              <details className="mt-3 text-xs text-slate-600 dark:text-slate-300">
+                <summary className="cursor-pointer font-black">Technical details</summary>
+                <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-white/70 p-3 font-mono leading-5 dark:bg-slate-950/60">{testResult.details}</pre>
+              </details>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <nav className="grid grid-cols-3 rounded-2xl bg-white p-1 shadow-soft dark:bg-slate-900">
         <TabButton active={tab === "feed"} onClick={() => setTab("feed")} label="Feed Events" count={visibleCandidates.length} />
@@ -327,6 +384,19 @@ async function loadSavedEvents(feedId?: string) {
     event.importedFromCalendar
     && (event.calendarFeedId === feedId || event.externalSource === "google_calendar_ics")
   );
+}
+
+function defaultNjFeed(): CalendarFeed {
+  const timestamp = new Date().toISOString();
+  return {
+    id: njPokemonCalendar.id,
+    name: njPokemonCalendar.name,
+    icsUrl: njPokemonCalendar.icsUrl,
+    enabled: true,
+    autoImport: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
 }
 
 function TabButton({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) {

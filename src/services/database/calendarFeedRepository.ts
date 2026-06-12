@@ -20,9 +20,30 @@ type CalendarFeedRow = {
 
 type FeedApiResponse = {
   success: boolean;
+  reached?: boolean;
   events?: CalendarFeedEvent[];
   error?: string;
+  stage?: string;
+  source_url?: string;
+  upstream_status?: number;
+  body_snippet?: string;
+  parser_error?: string;
 };
+
+export type CalendarFeedTestResult = {
+  reachable: boolean;
+  eventsFound: number;
+  httpStatus: number;
+  apiReached: boolean;
+  details: string;
+};
+
+class CalendarFeedRequestError extends Error {
+  constructor(message: string, public readonly httpStatus: number, public readonly apiReached: boolean) {
+    super(message);
+    this.name = "CalendarFeedRequestError";
+  }
+}
 
 const localFeedKey = "4nerds_calendar_feeds_local_v1";
 const candidateKey = "4nerds_calendar_import_candidates_v1";
@@ -145,15 +166,15 @@ async function existingExternalIds() {
 
 export async function syncCalendarFeed(feed: CalendarFeed, onProgress?: (message: string) => void) {
   onProgress?.("Reading calendar feed...");
-  const response = await fetch(`/api/calendar-feed?url=${encodeURIComponent(feed.icsUrl)}`);
-  const payload = await response.json() as FeedApiResponse;
+  const { response, payload } = await callCalendarFeedApi(feed.icsUrl);
   if (!response.ok || !payload.success) {
-    const message = payload.error || "Could not read calendar feed.";
-    await saveCalendarFeed({ ...feed, lastCheckedAt: nowIso(), lastStatus: "Failed", lastError: message });
+    const message = formatCalendarFeedError(response.status, payload, feed.icsUrl);
+    await saveFeedStatusSafely({ ...feed, lastCheckedAt: nowIso(), lastStatus: "Failed", lastError: message });
     throw new Error(message);
   }
 
   onProgress?.("Parsing events...");
+  console.info("Parsed events count", payload.events?.length || 0);
   const externalIds = await existingExternalIds();
   onProgress?.("Checking duplicates...");
   const timestamp = nowIso();
@@ -187,7 +208,7 @@ export async function syncCalendarFeed(feed: CalendarFeed, onProgress?: (message
   saveCalendarCandidates([...candidates, ...candidatesFromOtherFeeds]);
   const duplicates = candidates.filter((candidate) => candidate.duplicate).length;
   const status = `Found ${candidates.length}; ${imported} imported; ${duplicates} duplicates`;
-  await saveCalendarFeed({ ...feed, lastCheckedAt: timestamp, lastStatus: status, lastError: undefined, lastFoundCount: candidates.length });
+  await saveFeedStatusSafely({ ...feed, lastCheckedAt: timestamp, lastStatus: status, lastError: undefined, lastFoundCount: candidates.length });
   onProgress?.("Preparing import list...");
   return {
     found: candidates.length,
@@ -195,6 +216,99 @@ export async function syncCalendarFeed(feed: CalendarFeed, onProgress?: (message
     duplicates,
     review: candidates.filter((candidate) => candidate.reviewStatus === "pending" && !candidate.duplicate).length
   };
+}
+
+export async function testCalendarFeed(icsUrl: string): Promise<CalendarFeedTestResult> {
+  try {
+    const { response, payload } = await callCalendarFeedApi(icsUrl);
+    const reachable = response.ok && payload.success;
+    return {
+      reachable,
+      eventsFound: payload.events?.length || 0,
+      httpStatus: response.status,
+      apiReached: Boolean(payload.reached),
+      details: reachable
+        ? `HTTP ${response.status}\nCalendar API route reached: yes\nFeed URL: ${payload.source_url || icsUrl}`
+        : formatCalendarFeedError(response.status, payload, icsUrl)
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      eventsFound: 0,
+      httpStatus: error instanceof CalendarFeedRequestError ? error.httpStatus : 0,
+      apiReached: error instanceof CalendarFeedRequestError ? error.apiReached : false,
+      details: error instanceof Error ? error.message : "Calendar feed test failed."
+    };
+  }
+}
+
+async function callCalendarFeedApi(icsUrl: string) {
+  const apiUrl = `/api/calendar-feed?url=${encodeURIComponent(icsUrl)}`;
+  console.info("Calling calendar feed API", apiUrl);
+  let response: Response;
+  try {
+    response = await fetch(apiUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Network request failed.";
+    console.error("Calendar feed error", message);
+    throw new CalendarFeedRequestError(
+      `Calendar API route reached: no\nFailed URL: ${apiUrl}\nNetwork error: ${message}`,
+      0,
+      false
+    );
+  }
+
+  const rawBody = await response.text();
+  let payload: FeedApiResponse;
+  try {
+    payload = JSON.parse(rawBody) as FeedApiResponse;
+  } catch {
+    const routeMissing = response.status === 404 || rawBody.includes("<!DOCTYPE html") || rawBody.includes("<html");
+    const message = routeMissing
+      ? "Calendar API route not found. Make sure api/calendar-feed.ts is deployed."
+      : "Calendar API returned a response that was not valid JSON.";
+    console.error("Calendar feed error", message, { status: response.status, body: rawBody.slice(0, 500) });
+    throw new CalendarFeedRequestError(
+      `${message}\nHTTP status: ${response.status}\nCalendar API route reached: no\nFailed URL: ${apiUrl}\nAPI response: ${rawBody.slice(0, 500) || "(empty)"}`,
+      response.status,
+      false
+    );
+  }
+
+  console.info("API response", { status: response.status, payload });
+  if (response.status === 404 && !payload.reached) {
+    const message = "Calendar API route not found. Make sure api/calendar-feed.ts is deployed.";
+    console.error("Calendar feed error", message, payload);
+    throw new CalendarFeedRequestError(
+      `${message}\nHTTP status: 404\nCalendar API route reached: no\nFailed URL: ${apiUrl}\nAPI response: ${JSON.stringify(payload, null, 2)}`,
+      404,
+      false
+    );
+  }
+  if (!payload.success) console.error("Calendar feed error", payload.error || "Unknown calendar API error");
+  return { response, payload };
+}
+
+function formatCalendarFeedError(httpStatus: number, payload: FeedApiResponse, fallbackUrl: string) {
+  return [
+    payload.error || "Could not read calendar feed.",
+    `HTTP status: ${httpStatus}`,
+    `Calendar API route reached: ${payload.reached ? "yes" : "no"}`,
+    payload.stage ? `Failure stage: ${payload.stage}` : "",
+    payload.upstream_status ? `Upstream status: ${payload.upstream_status}` : "",
+    `Failed URL: ${payload.source_url || fallbackUrl}`,
+    payload.parser_error ? `Parser error: ${payload.parser_error}` : "",
+    payload.body_snippet ? `Upstream response snippet: ${payload.body_snippet}` : "",
+    `API response: ${JSON.stringify(payload, null, 2)}`
+  ].filter(Boolean).join("\n");
+}
+
+async function saveFeedStatusSafely(feed: CalendarFeed) {
+  try {
+    await saveCalendarFeed(feed);
+  } catch (error) {
+    console.warn("Calendar feed status could not be saved", error);
+  }
 }
 
 export async function saveCalendarCandidate(candidate: CalendarImportCandidate) {
