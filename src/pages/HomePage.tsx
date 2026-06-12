@@ -16,6 +16,7 @@ import { eventDays } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
 import { formatMoney } from "../utils/paymentMath";
 import { eventStageAccentClasses, eventStageDescriptions } from "../utils/eventStage";
+import { isPaidOrConfirmedEvent } from "../utils/eventCommitment";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -57,8 +58,11 @@ export function HomePage() {
   }, []);
 
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
+  const paidUpcoming = useMemo(() => upcoming
+    .filter((event) => isPaidOrConfirmedEvent(event, workers))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate)), [upcoming, workers]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
-  const highlighted = upcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
+  const highlighted = paidUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const now = new Date();
   const projectedCosts = upcoming.reduce((sum, event) => sum + Number((event.priceOptions || []).find((option) => option.isSelected)?.price ?? event.eventCost ?? 0), 0);
   const upcomingEventDays = upcoming.flatMap((event) => eventDays(event).map((day) => ({ event, day }))).filter(({ day }) => new Date(`${day.date.slice(0, 10)}T23:59:59`).getTime() >= Date.now());
@@ -144,17 +148,17 @@ export function HomePage() {
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Events</h2>
+          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Paid Events</h2>
           <div className="flex items-center gap-2">
             <button onClick={load} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
-            <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
+            <Link to="/events" className="text-sm font-bold text-coral">View All Upcoming Events</Link>
           </div>
         </div>
-        {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : upcoming.length === 0 ? (
-          <EmptyState title="No upcoming events yet." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
+        {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : paidUpcoming.length === 0 ? (
+          <EmptyState title="No paid events yet." action={<Link to="/events" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">View All Upcoming Events</Link>} />
         ) : (
           <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 scroll-smooth lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
-            {upcoming.slice(0, 5).map((event) => (
+            {paidUpcoming.slice(0, 5).map((event) => (
               <div key={event.id} className="w-[84vw] max-w-[380px] shrink-0 snap-start sm:w-[360px] lg:w-auto lg:max-w-none">
                 <EventCard event={event} workers={workers} compact />
               </div>
@@ -187,18 +191,6 @@ export function HomePage() {
           <p className="text-xs text-slate-500 dark:text-slate-400">Checklist completion</p>
           <p className="mt-2 text-xl font-black text-ink dark:text-white">{checklistPercent}%</p>
         </div>
-      </section>
-
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xl font-black text-ink dark:text-white">Upcoming Events</h2>
-          <Link to="/events" className="text-sm font-bold text-coral">View all</Link>
-        </div>
-        {loading ? skeletonCards : upcoming.length === 0 ? (
-          <EmptyState title="No events yet. Add your first vendor event." action={<Link to="/events/new" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">Add Event</Link>} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{upcoming.slice(0, 6).map((event) => <EventCard key={event.id} event={event} workers={workers} />)}</div>
-        )}
       </section>
 
       <button onClick={() => navigate("/sales?mode=sale")} className="fixed bottom-24 right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-full bg-coral text-white shadow-2xl transition active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale">
