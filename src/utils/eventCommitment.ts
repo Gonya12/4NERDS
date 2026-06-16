@@ -16,6 +16,16 @@ export function isPaidOrConfirmedEvent(event: Event, workers: Worker[]) {
   return isPaidEvent(event, workers);
 }
 
+export function isPlannedEvent(event: Event, workers: Worker[]) {
+  if (event.status === "skipped") return false;
+  if (event.eventStage === "new" || event.eventStage === "past") return false;
+  if (event.importedFromCalendar && event.eventStage !== "applied" && event.eventStage !== "paid") return false;
+  if (event.eventStage === "applied" || event.eventStage === "paid") return true;
+  if (["applied", "reserved", "confirmed", "paid"].includes(String(event.registrationStatus))) return true;
+  const payment = calculatePaymentSummary(event, workers);
+  return payment.totalCost > 0 && payment.totalPaid >= payment.totalCost;
+}
+
 export function latestEventDayDate(event: Event) {
   const days = eventDays(event)
     .map((day) => day.date.slice(0, 10))

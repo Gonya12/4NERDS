@@ -16,7 +16,7 @@ import { eventDays } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { eventStageAccentClasses, eventStageDescriptions } from "../utils/eventStage";
-import { isPaidOrConfirmedEvent } from "../utils/eventCommitment";
+import { isPlannedEvent } from "../utils/eventCommitment";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 export function HomePage() {
@@ -67,23 +67,24 @@ export function HomePage() {
   }, []);
 
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
-  const paidUpcoming = useMemo(() => upcoming
+  const plannedUpcoming = useMemo(() => upcoming
     .filter((event) => {
-      const paid = isPaidOrConfirmedEvent(event, workers);
+      const planned = isPlannedEvent(event, workers);
       const payment = calculatePaymentSummary(event, workers);
-      console.info("Paid event check", {
+      console.info("Planned event check", {
         name: event.name,
         event_stage: event.eventStage,
+        registration_status: event.registrationStatus,
         totalPaid: payment.totalPaid,
         totalCost: payment.totalCost,
-        isPaidEvent: paid,
+        isPlannedEvent: planned,
         startDate: event.startDate
       });
-      return paid;
+      return planned;
     })
     .sort((a, b) => a.startDate.localeCompare(b.startDate)), [upcoming, workers]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
-  const highlighted = paidUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
+  const highlighted = plannedUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const now = new Date();
   const projectedCosts = upcoming.reduce((sum, event) => sum + Number((event.priceOptions || []).find((option) => option.isSelected)?.price ?? event.eventCost ?? 0), 0);
   const upcomingEventDays = upcoming.flatMap((event) => eventDays(event).map((day) => ({ event, day }))).filter(({ day }) => new Date(`${day.date.slice(0, 10)}T23:59:59`).getTime() >= Date.now());
@@ -169,17 +170,17 @@ export function HomePage() {
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Paid Events</h2>
+          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Planned Events</h2>
           <div className="flex items-center gap-2">
             <button onClick={() => void load(true)} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
             <Link to="/events" className="text-sm font-bold text-coral">View All Upcoming Events</Link>
           </div>
         </div>
-        {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : paidUpcoming.length === 0 ? (
-          <EmptyState title="No paid events yet." action={<Link to="/events" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">View All Upcoming Events</Link>} />
+        {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : plannedUpcoming.length === 0 ? (
+          <EmptyState title="No planned events yet." action={<Link to="/events" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">View All Upcoming Events</Link>} />
         ) : (
           <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 scroll-smooth lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
-            {paidUpcoming.slice(0, 5).map((event) => (
+            {plannedUpcoming.slice(0, 5).map((event) => (
               <div key={event.id} className="w-[84vw] max-w-[380px] shrink-0 snap-start sm:w-[360px] lg:w-auto lg:max-w-none">
                 <EventCard event={event} workers={workers} compact />
               </div>

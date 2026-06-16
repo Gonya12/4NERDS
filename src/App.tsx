@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { BottomNav } from "./components/BottomNav";
 import { DesktopSidebar } from "./components/DesktopSidebar";
 import { CalendarPage } from "./pages/CalendarPage";
@@ -42,8 +42,22 @@ function Onboarding({ onClose }: { onClose: () => void }) {
   );
 }
 
+function ScrollToTop({ containerRef }: { containerRef: React.RefObject<HTMLElement | null> }) {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    document.documentElement.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
+    document.body.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
+    containerRef.current?.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [pathname, containerRef]);
+
+  return null;
+}
+
 export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const mainRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     async function boot() {
@@ -71,8 +85,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-paper text-ink transition-colors dark:bg-slate-950 dark:text-slate-100">
+      <ScrollToTop containerRef={mainRef} />
       <DesktopSidebar />
-      <main className="mx-auto max-w-md px-4 pb-36 pt-5 sm:max-w-2xl md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 lg:pt-6 xl:px-10">
+      <main ref={mainRef} className="mx-auto max-w-md px-4 pb-36 pt-5 sm:max-w-2xl md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 lg:pt-6 xl:px-10">
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/events" element={<CalendarPage />} />
