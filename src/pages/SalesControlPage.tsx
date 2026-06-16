@@ -5,13 +5,14 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { SkeletonEventCard } from "../components/SkeletonEventCard";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
-import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecords, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
+import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecordsPage, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { imageFromClipboard } from "../services/images/saleImageService";
-import { listPlannerEvents } from "../services/planner/plannerRepository";
+import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import type { Event, SalesRecord } from "../types/models";
 import { eventDays, shortScheduleSummary } from "../utils/eventSchedule";
 import { formatMoney, roundMoney } from "../utils/paymentMath";
 import { useLocation } from "react-router-dom";
+import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 type SortMode = "recent" | "oldest" | "highest_sold" | "highest_profit" | "lowest_profit" | "missing";
 type DateFilter = "all" | "today" | "week" | "month" | "custom";
@@ -53,6 +54,9 @@ export function SalesControlPage() {
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(sales.length === 0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [salesPage, setSalesPage] = useState(0);
+  const [hasMoreSales, setHasMoreSales] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -71,12 +75,16 @@ export function SalesControlPage() {
     soldAt: new Date().toISOString().slice(0, 16)
   });
 
-  async function load() {
+  async function load(page = 0, append = false) {
+    recordPageLoad("Sales Control");
+    if (append) setLoadingMore(true);
     setSyncing(true);
     setLoadError("");
     try {
-      const [saleRows, eventRows] = await Promise.all([listSalesRecords(), listPlannerEvents()]);
-      setSales(saleRows);
+      const [saleResult, eventRows] = await Promise.all([listSalesRecordsPage(page, 50), listPlannerEventOptions(500)]);
+      setSales((current) => append ? [...current, ...saleResult.records] : saleResult.records);
+      setSalesPage(page);
+      setHasMoreSales(saleResult.hasMore);
       setEvents(eventRows);
       const requestedEvent = requestedEventId ? eventRows.find((event) => event.id === requestedEventId) : undefined;
       if (requestedEvent && !editing) {
@@ -91,13 +99,14 @@ export function SalesControlPage() {
       setLoadError(error instanceof Error ? error.message : "Could not load sales.");
     } finally {
       setLoading(false);
+      setLoadingMore(false);
       setSyncing(false);
     }
   }
 
   useEffect(() => {
     if (new URLSearchParams(location.search).get("mode") === "sale") setMode("sale");
-    void load();
+    void load(0, false);
   }, [location.search]);
 
   useEffect(() => {
@@ -241,7 +250,7 @@ export function SalesControlPage() {
       }
       resetForm();
       setMode("control");
-      await load();
+      await load(0, false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save sale.");
     } finally {
@@ -250,10 +259,16 @@ export function SalesControlPage() {
   }
 
   async function syncPending() {
+    const key = "sales-sync-pending";
+    if (!canRunAction(key, 45_000)) {
+      setMessage(`Please wait ${actionCooldownRemainingSeconds(key, 45_000)}s before syncing again.`);
+      return;
+    }
+    markActionRun(key);
     setMessage("Syncing pending sales...");
     const result = await syncPendingSales();
     setMessage(`Synced ${result.synced}. Pending ${result.failed}.`);
-    await load();
+    await load(0, false);
   }
 
   const eventMap = new Map(events.map((event) => [event.id, event]));
@@ -305,7 +320,7 @@ export function SalesControlPage() {
         <button onClick={() => { resetForm(); setMode("sale"); }} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
       </header>
       <SyncStatusBadge syncing={syncing && sales.length > 0} />
-      {loadError ? <ErrorState message="Sales could not be refreshed." details={loadError} onRetry={load} onSync={load} /> : null}
+      {loadError ? <ErrorState message="Sales could not be refreshed." details={loadError} onRetry={() => void load(0, false)} onSync={() => void load(0, false)} /> : null}
 
       <section className="grid min-w-0 grid-cols-3 gap-2 sm:gap-3">
         <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Total sales</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.sold)}</p></div>
@@ -453,11 +468,20 @@ export function SalesControlPage() {
                     {sale.boughtFrom ? <p className="break-words text-xs text-slate-500">From: {sale.boughtFrom}</p> : null}
                     {sale.notes ? <p className="break-words text-xs text-slate-500">{sale.notes}</p> : null}
                   </div>
-                  <button onClick={async (eventClick) => { eventClick.stopPropagation(); await deleteSaleRecord(sale.id); await load(); }} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={15} /> Delete</button>
+                  <button onClick={async (eventClick) => { eventClick.stopPropagation(); await deleteSaleRecord(sale.id); await load(0, false); }} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 size={15} /> Delete</button>
                 </article>
               );
             })}
           </section>
+          {hasMoreSales ? (
+            <button
+              onClick={() => void load(salesPage + 1, true)}
+              disabled={loadingMore}
+              className="min-h-11 w-full rounded-xl bg-white text-sm font-black text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white"
+            >
+              {loadingMore ? "Loading more..." : "Load more sales"}
+            </button>
+          ) : null}
         </>
       )}
     </div>

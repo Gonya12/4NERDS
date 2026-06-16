@@ -38,13 +38,14 @@ import {
   listCalendarCandidates,
   saveCalendarCandidate
 } from "../services/database/calendarFeedRepository";
-import { getCachedPlannerHomeEvents, listPlannerEvents, listWorkers } from "../services/planner/plannerRepository";
+import { getCachedPlannerHomeEvents, listPlannerEventOptions, listWorkers } from "../services/planner/plannerRepository";
 import type { CalendarImportCandidate, Event, EventDay, EventStage, Worker } from "../types/models";
 import { effectiveConfirmedWorkerIds, workersForDay } from "../utils/availability";
 import { isPaidOrConfirmedEvent } from "../utils/eventCommitment";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
 import { eventStageAccentClasses, eventStageLabels } from "../utils/eventStage";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
+import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 type CalendarView = "month" | "agenda";
 type CalendarFilter = "all" | "paid" | "new" | "applied" | "imported" | "manual" | "week" | "month";
@@ -69,11 +70,20 @@ export function CalendarPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  async function load() {
+  async function load(manual = false) {
+    recordPageLoad("Event Calendar");
+    if (manual) {
+      const key = "event-calendar-refresh";
+      if (!canRunAction(key, 30_000)) {
+        setError(`Please wait ${actionCooldownRemainingSeconds(key, 30_000)}s before refreshing again.`);
+        return;
+      }
+      markActionRun(key);
+    }
     setSyncing(true);
     setError("");
     try {
-      const [eventRows, workerRows] = await Promise.all([listPlannerEvents(), listWorkers()]);
+      const [eventRows, workerRows] = await Promise.all([listPlannerEventOptions(500), listWorkers()]);
       setEvents(eventRows);
       setWorkers(workerRows);
       setImports(pendingImports());
@@ -162,7 +172,7 @@ export function CalendarPage() {
           </div>
           <div className="flex items-center gap-2">
             <SyncStatusBadge syncing={syncing} />
-            <button onClick={load} disabled={syncing} className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-white px-3 text-xs font-bold text-ink shadow-soft disabled:opacity-50 dark:bg-slate-900 dark:text-white"><RefreshCw size={14} /> Refresh</button>
+            <button onClick={() => void load(true)} disabled={syncing} className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-white px-3 text-xs font-bold text-ink shadow-soft disabled:opacity-50 dark:bg-slate-900 dark:text-white"><RefreshCw size={14} /> Refresh</button>
           </div>
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -174,7 +184,7 @@ export function CalendarPage() {
         </div>
       </section>
 
-      {error ? <ErrorState message="Events could not be refreshed." details={error} onRetry={load} onSync={load} /> : null}
+      {error ? <ErrorState message="Events could not be refreshed." details={error} onRetry={() => void load(true)} onSync={() => void load(true)} /> : null}
       {message ? <p className="rounded-2xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{message}</p> : null}
       {loading ? <LoadingScreen label="Loading calendar events..."><div className="grid gap-3 md:grid-cols-2"><SkeletonCard /><SkeletonCard /></div></LoadingScreen> : null}
 

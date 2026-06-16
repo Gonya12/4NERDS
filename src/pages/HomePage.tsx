@@ -14,9 +14,10 @@ import { effectiveConfirmedWorkerIds } from "../utils/availability";
 import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
-import { formatMoney } from "../utils/paymentMath";
+import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { eventStageAccentClasses, eventStageDescriptions } from "../utils/eventStage";
 import { isPaidOrConfirmedEvent } from "../utils/eventCommitment";
+import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -28,12 +29,21 @@ export function HomePage() {
   const [syncError, setSyncError] = useState("");
   const [showLegend, setShowLegend] = useState(false);
 
-  async function load() {
+  async function load(manual = false) {
+    recordPageLoad("Home");
+    const key = "home-dashboard-sync";
+    if (manual) {
+      if (!canRunAction(key, 30_000)) {
+        setSyncError(`Please wait ${actionCooldownRemainingSeconds(key, 30_000)}s before syncing again.`);
+        return;
+      }
+      markActionRun(key);
+    }
     setSyncing(true);
     setSyncMessage("Syncing...");
     setSyncError("");
     try {
-      const [allEvents, allWorkers] = await Promise.all([listPlannerHomeEvents(10), listWorkers()]);
+      const [allEvents, allWorkers] = await Promise.all([listPlannerHomeEvents(100), listWorkers()]);
       setEvents(allEvents);
       setWorkers(allWorkers);
       setSyncMessage("");
@@ -53,13 +63,24 @@ export function HomePage() {
       setEvents(cached);
       setLoading(false);
     }
-    void listWorkers().then(setWorkers);
-    void load();
+    void load(false);
   }, []);
 
   const upcoming = useMemo(() => events.filter((event) => eventTimingStatus(event.startDate) !== "Past"), [events]);
   const paidUpcoming = useMemo(() => upcoming
-    .filter((event) => isPaidOrConfirmedEvent(event, workers))
+    .filter((event) => {
+      const paid = isPaidOrConfirmedEvent(event, workers);
+      const payment = calculatePaymentSummary(event, workers);
+      console.info("Paid event check", {
+        name: event.name,
+        event_stage: event.eventStage,
+        totalPaid: payment.totalPaid,
+        totalCost: payment.totalCost,
+        isPaidEvent: paid,
+        startDate: event.startDate
+      });
+      return paid;
+    })
     .sort((a, b) => a.startDate.localeCompare(b.startDate)), [upcoming, workers]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = paidUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
@@ -107,7 +128,7 @@ export function HomePage() {
 
       <InstallPrompt />
       <SyncStatusBadge syncing={syncing && events.length > 0} />
-      {syncError ? <ErrorState message="Dashboard data could not be refreshed." details={syncError} onRetry={load} onSync={load} /> : null}
+      {syncError ? <ErrorState message="Dashboard data could not be refreshed." details={syncError} onRetry={() => void load(true)} onSync={() => void load(true)} /> : null}
 
       <section className="grid grid-cols-3 gap-2">
         <div className="rounded-2xl bg-sky-50 p-3 shadow-soft dark:bg-sky-950/30">
@@ -150,7 +171,7 @@ export function HomePage() {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Paid Events</h2>
           <div className="flex items-center gap-2">
-            <button onClick={load} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
+            <button onClick={() => void load(true)} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
             <Link to="/events" className="text-sm font-bold text-coral">View All Upcoming Events</Link>
           </div>
         </div>

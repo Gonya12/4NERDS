@@ -1,10 +1,10 @@
 import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, Trash2, Upload, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
+import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listPlannerHomeEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
 import { exportBackup, importBackup } from "../services/storage/backupService";
 import { deleteLocation, listLocations, saveLocation } from "../services/database/locationRepository";
-import { getSupabaseStatus, testSupabaseConnection } from "../utils/supabase";
+import { actionCooldownRemainingSeconds, canRunAction, getSupabaseStatus, markActionRun, recordPageLoad, testSupabaseConnection } from "../utils/supabase";
 import { scheduleSmartEventNotifications } from "../services/notifications/smartNotificationService";
 import { useTheme } from "../services/theme/ThemeProvider";
 import type { ThemePreference } from "../services/theme/themeService";
@@ -39,6 +39,7 @@ export function SettingsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function load() {
+    recordPageLoad("Settings");
     try {
       setWorkers(await listWorkers());
       setLocations(await listLocations());
@@ -130,6 +131,11 @@ export function SettingsPage() {
   }
 
   async function testConnection() {
+    if (!canRunAction("settings-test-connection", 30_000)) {
+      setSyncMessage(`Please wait ${actionCooldownRemainingSeconds("settings-test-connection", 30_000)}s before testing again.`);
+      return;
+    }
+    markActionRun("settings-test-connection");
     setSyncBusy(true);
     setSyncMessage("Testing Supabase connection...");
     try {
@@ -142,10 +148,15 @@ export function SettingsPage() {
   }
 
   async function syncNow() {
+    if (!canRunAction("settings-sync-now", 45_000)) {
+      setSyncMessage(`Please wait ${actionCooldownRemainingSeconds("settings-sync-now", 45_000)}s before syncing again.`);
+      return;
+    }
+    markActionRun("settings-sync-now");
     setSyncBusy(true);
     setSyncMessage("Syncing...");
     try {
-      const [events, workerRows] = await Promise.all([listPlannerEvents(), listWorkers()]);
+      const [events, workerRows] = await Promise.all([listPlannerHomeEvents(100), listWorkers(true)]);
       setWorkers(workerRows);
       setSyncStatus(getSupabaseStatus());
       setSyncMessage(`Synced ${events.length} events and ${workerRows.length} workers.`);
@@ -273,6 +284,14 @@ export function SettingsPage() {
           <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
             <p className="text-xs font-bold text-slate-500">Queries made</p>
             <p className="font-black text-ink dark:text-white">{syncStatus.lastQueryCount}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Supabase requests this session</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.sessionRequestCount}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Last page loaded</p>
+            <p className="font-black text-ink dark:text-white">{syncStatus.lastPageLoaded || "Not tracked yet"}</p>
           </div>
           <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
             <p className="text-xs font-bold text-slate-500">Cache status</p>

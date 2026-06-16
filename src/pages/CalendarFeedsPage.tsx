@@ -8,6 +8,7 @@ import { deleteCalendarFeed, listCalendarFeeds, saveCalendarFeed, syncCalendarFe
 import type { CalendarFeed } from "../types/models";
 import { nowIso } from "../utils/normalize";
 import { njPokemonCalendar, njPokemonEventsMap } from "../data/njPokemonSources";
+import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 const emptyDraft = { name: "", icsUrl: "", enabled: true, autoImport: false };
 
@@ -23,6 +24,7 @@ export function CalendarFeedsPage() {
   const [result, setResult] = useState("");
 
   async function load() {
+    recordPageLoad("Calendar Feeds");
     setError("");
     try {
       setFeeds(await listCalendarFeeds());
@@ -80,6 +82,12 @@ export function CalendarFeedsPage() {
   }
 
   async function sync(feed: CalendarFeed) {
+    const key = `calendar-sync:${feed.id}`;
+    if (!canRunAction(key, 60_000)) {
+      setResult(`Calendar sync was just run. Try again in ${actionCooldownRemainingSeconds(key, 60_000)}s.`);
+      return;
+    }
+    markActionRun(key);
     setSyncingId(feed.id);
     setProgress("Reading calendar feed...");
     setResult("");

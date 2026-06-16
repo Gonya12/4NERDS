@@ -46,6 +46,7 @@ import {
 import { listPlannerEvents } from "../services/planner/plannerRepository";
 import type { CalendarFeed, CalendarImportCandidate, Event } from "../types/models";
 import { displayDateTime } from "../utils/dateUtils";
+import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 type Tab = "feed" | "review" | "saved";
 type DateFilter = "upcoming" | "week" | "month";
@@ -68,6 +69,7 @@ export function NjCalendarPage() {
   const [testResult, setTestResult] = useState<CalendarFeedTestResult | null>(null);
 
   async function load(autoSyncEmpty = false) {
+    recordPageLoad("NJ Calendar");
     setError("");
     let activeFeed: CalendarFeed = defaultNjFeed();
     try {
@@ -91,7 +93,7 @@ export function NjCalendarPage() {
         console.warn("Saved calendar events could not be loaded.", details);
         setError((current) => [current, `Saved Events could not be loaded.\n${details}`].filter(Boolean).join("\n\n"));
       }
-      if (autoSyncEmpty && activeFeed.enabled && cached.length === 0) await runSync(activeFeed);
+      if (autoSyncEmpty && activeFeed.enabled && cached.length === 0 && isFeedStale(activeFeed)) await runSync(activeFeed);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load the NJ calendar.");
     } finally {
@@ -100,7 +102,7 @@ export function NjCalendarPage() {
   }
 
   useEffect(() => {
-    void load(true);
+    void load(false);
   }, []);
 
   async function runSync(target = feed) {
@@ -108,6 +110,12 @@ export function NjCalendarPage() {
       setError("The NJ Pokemon calendar feed is not configured. Add it in Calendar Feed settings.");
       return;
     }
+    const key = `calendar-sync:${target.id}`;
+    if (!canRunAction(key, 60_000)) {
+      setMessage(`Calendar sync was just run. Try again in ${actionCooldownRemainingSeconds(key, 60_000)}s.`);
+      return;
+    }
+    markActionRun(key);
     setSyncing(true);
     setMessage("");
     setError("");
@@ -377,6 +385,11 @@ export function NjCalendarPage() {
       {editing ? <EditSheet candidate={editing} saving={savingId === editing.id} onChange={updateCandidate} onClose={() => setEditing(null)} onSave={() => void save(editing)} /> : null}
     </div>
   );
+}
+
+function isFeedStale(feed: CalendarFeed) {
+  if (!feed.lastCheckedAt) return true;
+  return Date.now() - new Date(feed.lastCheckedAt).getTime() > 12 * 60 * 60 * 1000;
 }
 
 async function loadSavedEvents(feedId?: string) {

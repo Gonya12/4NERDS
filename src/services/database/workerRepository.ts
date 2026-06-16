@@ -1,9 +1,14 @@
 import type { Worker } from "../../types/models";
 import { nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
-import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 
 const defaultWorkerNames = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Slave 1", "Slave 2", "Slave 3"];
+const workerCacheKey = "4nerds_workers_cache_v1";
+let workersSeedChecked = false;
+let workerMemoryCache: Worker[] | null = null;
+let workerMemoryCacheAt = 0;
+const workerCacheMs = 60_000;
 
 type WorkerRow = {
   id: string;
@@ -36,6 +41,7 @@ function toRow(worker: Worker): WorkerRow {
 export async function seedSupabaseWorkers() {
   if (!supabase) return;
   const { data, error } = await supabase.from("workers").select("id, name");
+  recordSupabaseRequest("workers", "seedSupabaseWorkers:select", data?.length || 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -44,7 +50,10 @@ export async function seedSupabaseWorkers() {
 
   const existingNames = new Set((data || []).map((worker) => String((worker as { name: string }).name).toLowerCase()));
   const missingNames = defaultWorkerNames.filter((name) => !existingNames.has(name.toLowerCase()));
-  if (!missingNames.length) return;
+  if (!missingNames.length) {
+    workersSeedChecked = true;
+    return;
+  }
 
   const timestamp = nowIso();
   const rows = missingNames.map((name) => ({
@@ -54,6 +63,7 @@ export async function seedSupabaseWorkers() {
     updated_at: timestamp
   }));
   const { data: inserted, error: insertError } = await supabase.from("workers").insert(rows).select("id, name");
+  recordSupabaseRequest("workers", "seedSupabaseWorkers:insert", inserted?.length || 0);
   void inserted;
   if (insertError) {
     setSupabaseStatus({ connected: false, error: insertError.message });
@@ -61,23 +71,61 @@ export async function seedSupabaseWorkers() {
     throw insertError;
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
+  workersSeedChecked = true;
 }
 
-export async function listWorkers() {
+function getCachedWorkers() {
+  if (workerMemoryCache && Date.now() - workerMemoryCacheAt < workerCacheMs) return workerMemoryCache;
+  try {
+    const cached = JSON.parse(localStorage.getItem(workerCacheKey) || "[]") as Worker[];
+    if (cached.length) {
+      workerMemoryCache = cached;
+      workerMemoryCacheAt = Date.now();
+      return cached;
+    }
+  } catch {
+    return [] as Worker[];
+  }
+  return [] as Worker[];
+}
+
+function cacheWorkers(workers: Worker[]) {
+  workerMemoryCache = workers;
+  workerMemoryCacheAt = Date.now();
+  try { localStorage.setItem(workerCacheKey, JSON.stringify(workers)); } catch { /* Cache is optional. */ }
+}
+
+function invalidateWorkerCache() {
+  workerMemoryCache = null;
+  workerMemoryCacheAt = 0;
+  try { localStorage.removeItem(workerCacheKey); } catch { /* Cache is optional. */ }
+}
+
+export async function listWorkers(force = false) {
   if (!isSupabaseConfigured || !supabase) {
     await seedWorkers();
     return db.workers.orderBy("name").toArray();
   }
 
-  await seedSupabaseWorkers();
+  if (!force) {
+    const cached = getCachedWorkers();
+    if (cached.length && Date.now() - workerMemoryCacheAt < workerCacheMs) {
+      setSupabaseStatus({ cacheStatus: `Loaded ${cached.length} cached workers` });
+      return cached;
+    }
+  }
+  if (!workersSeedChecked) await seedSupabaseWorkers();
   const { data, error } = await supabase.from("workers").select("*").order("name");
+  recordSupabaseRequest("workers", "listWorkers", data?.length || 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  return (data || []).map((row) => fromRow(row as WorkerRow));
+  const workers = (data || []).map((row) => fromRow(row as WorkerRow));
+  cacheWorkers(workers);
+  return workers;
 }
 
 export async function saveWorker(worker: Worker) {
@@ -87,11 +135,13 @@ export async function saveWorker(worker: Worker) {
   }
 
   const { error } = await supabase.from("workers").upsert(toRow({ ...worker, updatedAt: nowIso() }));
+  recordSupabaseRequest("workers", "saveWorker");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
+  invalidateWorkerCache();
   setSupabaseStatus({ connected: true, error: "", synced: true });
 }
 
@@ -114,11 +164,13 @@ export async function addWorker(name: string) {
     created_at: timestamp,
     updated_at: timestamp
   });
+  recordSupabaseRequest("workers", "addWorker");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
+  invalidateWorkerCache();
   setSupabaseStatus({ connected: true, error: "", synced: true });
 }
 
@@ -135,16 +187,19 @@ export async function deleteWorker(workerId: string) {
   }
 
   const { error: eventWorkerError } = await supabase.from("event_workers").delete().eq("worker_id", workerId);
+  recordSupabaseRequest("event_workers", "deleteWorker:deleteEventWorkers");
   if (eventWorkerError) {
     setSupabaseStatus({ connected: false, error: eventWorkerError.message });
     console.error("Supabase error:", eventWorkerError.message);
     throw eventWorkerError;
   }
   const { error } = await supabase.from("workers").delete().eq("id", workerId);
+  recordSupabaseRequest("workers", "deleteWorker");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
     throw error;
   }
+  invalidateWorkerCache();
   setSupabaseStatus({ connected: true, error: "", synced: true });
 }

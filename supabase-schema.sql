@@ -507,6 +507,8 @@ end $$;
 create index if not exists idx_events_start_date on public.events(start_date);
 create index if not exists idx_events_status_start_date on public.events(status, start_date);
 create index if not exists idx_events_event_stage on public.events(event_stage);
+create index if not exists idx_events_status on public.events(status);
+create index if not exists idx_events_registration_status on public.events(registration_status);
 create index if not exists idx_event_days_event_id on public.event_days(event_id);
 create index if not exists idx_event_days_date on public.event_days(date);
 create index if not exists idx_event_day_workers_event_id on public.event_day_workers(event_id);

@@ -1,7 +1,8 @@
 import type { Event, EventDay, EventStage, EventStatus, RegistrationStatus, SplitMode } from "../../types/models";
+import { isPastPaidOrAttendedEvent } from "../../utils/eventCommitment";
 import { id, nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
-import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { deletePaymentRecord, listPaymentRecords, savePaymentRecord } from "./paymentRepository";
 import { getFinance } from "./financeRepository";
 import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from "./checklistRepository";
@@ -247,6 +248,7 @@ function toRow(event: Event): EventRow {
 async function loadEventDaysByEvent() {
   if (!supabase) return new Map<string, EventDay[]>();
   const { data, error } = await supabase.from("event_days").select("*").order("date");
+  recordSupabaseRequest("event_days", "loadEventDaysByEvent", data?.length || 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -263,6 +265,7 @@ async function loadEventDaysByEvent() {
 async function loadConfirmedWorkersByEvent() {
   if (!supabase) return new Map<string, string[]>();
   const { data, error } = await supabase.from("event_workers").select("event_id, worker_id");
+  recordSupabaseRequest("event_workers", "loadConfirmedWorkersByEvent", data?.length || 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -294,6 +297,7 @@ export async function listEvents() {
   }
 
   const { data, error } = await supabase.from("events").select("*").order("start_date");
+  recordSupabaseRequest("events", "listEvents", data?.length || 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -380,6 +384,7 @@ export async function listHomeEvents(limit = 10) {
     .neq("status", "skipped")
     .order("start_date")
     .limit(limit);
+  recordSupabaseRequest("events", "listHomeEvents", data?.length || 0);
   queryCount += 1;
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message, durationMs: Math.round(performance.now() - startedAt), queryCount });
@@ -401,6 +406,11 @@ export async function listHomeEvents(limit = 10) {
     supabase.from("event_price_options").select("*").in("event_id", ids),
     supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids)
   ]);
+  recordSupabaseRequest("event_days", "listHomeEvents:days", daysResult.data?.length || 0);
+  recordSupabaseRequest("event_workers", "listHomeEvents:workers", workersResult.data?.length || 0);
+  recordSupabaseRequest("event_day_workers", "listHomeEvents:dayWorkers", dayWorkersResult.data?.length || 0);
+  recordSupabaseRequest("event_price_options", "listHomeEvents:prices", pricesResult.data?.length || 0);
+  recordSupabaseRequest("payment_records", "listHomeEvents:payments", paymentsResult.data?.length || 0);
   queryCount += 5;
   const relatedError = [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult].find((result) => result.error)?.error;
   if (relatedError) {
@@ -446,6 +456,140 @@ export async function listHomeEvents(limit = 10) {
   return events;
 }
 
+export async function listEventOptions(limit = 500) {
+  if (!isSupabaseConfigured || !supabase) {
+    const events = await db.events.orderBy("startDate").limit(limit).toArray();
+    return events.map((event) => ({
+      ...event,
+      confirmedWorkerIds: event.confirmedWorkerIds || [],
+      eventCost: event.eventCost || 0,
+      paymentRecords: event.paymentRecords || [],
+      eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+      eventDayWorkers: event.eventDayWorkers || [],
+      priceOptions: event.priceOptions || [],
+      status: event.status || "interested",
+      eventStage: event.eventStage || "new"
+    }));
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,external_source,external_source_id,calendar_feed_id,imported_from_calendar,manually_edited,created_at,updated_at")
+    .order("start_date", { ascending: false })
+    .limit(limit);
+  recordSupabaseRequest("events", "listEventOptions", data?.length || 0);
+  if (error) {
+    setSupabaseStatus({ connected: false, error: error.message });
+    throw error;
+  }
+  const rows = ((data || []) as EventRow[]).filter((row) => row.name && row.start_date);
+  const ids = rows.map((row) => row.id);
+  if (!ids.length) return [] as Event[];
+  const { data: dayRows, error: daysError } = await supabase.from("event_days").select("*").in("event_id", ids).order("date");
+  recordSupabaseRequest("event_days", "listEventOptions:days", dayRows?.length || 0);
+  if (daysError) {
+    setSupabaseStatus({ connected: false, error: daysError.message });
+    throw daysError;
+  }
+  const daysByEvent = new Map<string, EventDay[]>();
+  (dayRows || []).forEach((row) => {
+    const day = fromDayRow(row as EventDayRow);
+    daysByEvent.set(day.eventId, [...(daysByEvent.get(day.eventId) || []), day]);
+  });
+  setSupabaseStatus({ connected: true, error: "", synced: true, cacheStatus: `Loaded ${rows.length} event options` });
+  return rows.map((row) => fromRow(row, [], [], daysByEvent.get(row.id) || []));
+}
+
+export async function listPastPaidEventsPage(page = 0, pageSize = 20) {
+  const scanLimit = pageSize * 5;
+  const scanOffset = page * scanLimit;
+  if (!isSupabaseConfigured || !supabase) {
+    const rows = await db.events.orderBy("startDate").reverse().offset(scanOffset).limit(scanLimit).toArray();
+    const all = rows
+      .map((event) => ({
+        ...event,
+        confirmedWorkerIds: event.confirmedWorkerIds || [],
+        eventCost: event.eventCost || 0,
+        paymentRecords: event.paymentRecords || [],
+        eventDays: event.eventDays?.length ? event.eventDays : [fallbackEventDay(event)],
+        eventDayWorkers: event.eventDayWorkers || [],
+        priceOptions: event.priceOptions || [],
+        status: event.status || "interested",
+        eventStage: event.eventStage || "new"
+      }))
+      .filter((event) => isPastPaidOrAttendedEvent(event, []))
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
+    return { events: all.slice(0, pageSize), hasMore: rows.length === scanLimit };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("events")
+    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,notes,created_at,updated_at")
+    .lte("start_date", today)
+    .neq("status", "skipped")
+    .order("start_date", { ascending: false })
+    .range(scanOffset, scanOffset + scanLimit - 1);
+  recordSupabaseRequest("events", "listPastPaidEventsPage", data?.length || 0);
+  if (error) {
+    setSupabaseStatus({ connected: false, error: error.message });
+    throw error;
+  }
+
+  const rows = ((data || []) as EventRow[]).filter((row) => row.name && row.start_date);
+  const ids = rows.map((row) => row.id);
+  if (!ids.length) return { events: [] as Event[], hasMore: false };
+
+  const [daysResult, workersResult, pricesResult, paymentsResult] = await Promise.all([
+    supabase.from("event_days").select("*").in("event_id", ids).order("date"),
+    supabase.from("event_workers").select("event_id, worker_id").in("event_id", ids),
+    supabase.from("event_price_options").select("*").in("event_id", ids),
+    supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids)
+  ]);
+  recordSupabaseRequest("event_days", "listPastPaidEventsPage:days", daysResult.data?.length || 0);
+  recordSupabaseRequest("event_workers", "listPastPaidEventsPage:workers", workersResult.data?.length || 0);
+  recordSupabaseRequest("event_price_options", "listPastPaidEventsPage:prices", pricesResult.data?.length || 0);
+  recordSupabaseRequest("payment_records", "listPastPaidEventsPage:payments", paymentsResult.data?.length || 0);
+  const relatedError = [daysResult, workersResult, pricesResult, paymentsResult].find((result) => result.error)?.error;
+  if (relatedError) {
+    setSupabaseStatus({ connected: false, error: relatedError.message });
+    throw relatedError;
+  }
+
+  const daysByEvent = new Map<string, EventDay[]>();
+  (daysResult.data || []).forEach((row) => {
+    const day = fromDayRow(row as EventDayRow);
+    daysByEvent.set(day.eventId, [...(daysByEvent.get(day.eventId) || []), day]);
+  });
+  const workersByEvent = new Map<string, string[]>();
+  (workersResult.data || []).forEach((row) => {
+    const typed = row as EventWorkerRow;
+    workersByEvent.set(typed.event_id, [...(workersByEvent.get(typed.event_id) || []), typed.worker_id]);
+  });
+  const pricesByEvent = new Map<string, ReturnType<typeof fromPriceOptionRow>[]>();
+  (pricesResult.data || []).forEach((row) => {
+    const item = fromPriceOptionRow(row as PriceOptionRow);
+    pricesByEvent.set(item.eventId, [...(pricesByEvent.get(item.eventId) || []), item]);
+  });
+  const paymentsByEvent = new Map<string, ReturnType<typeof fromPaymentRow>[]>();
+  (paymentsResult.data || []).forEach((row) => {
+    const item = fromPaymentRow(row as PaymentRow);
+    paymentsByEvent.set(item.eventId, [...(paymentsByEvent.get(item.eventId) || []), item]);
+  });
+
+  const events = rows
+    .map((row) => ({
+      ...fromRow(row, workersByEvent.get(row.id) || [], paymentsByEvent.get(row.id) || [], daysByEvent.get(row.id) || []),
+      priceOptions: pricesByEvent.get(row.id) || []
+    }))
+    .filter((event) => isPastPaidOrAttendedEvent(event, []))
+    .sort((a, b) => b.startDate.localeCompare(a.startDate))
+    .slice(0, pageSize);
+
+  setSupabaseStatus({ connected: true, error: "", synced: true });
+  return { events, hasMore: rows.length === scanLimit };
+}
+
 export async function getEvent(eventId: string) {
   if (!isSupabaseConfigured || !supabase) {
     const event = await db.events.get(eventId);
@@ -464,6 +608,7 @@ export async function getEvent(eventId: string) {
   }
 
   const { data, error } = await supabase.from("events").select("*").eq("id", eventId).maybeSingle();
+  recordSupabaseRequest("events", "getEvent", data ? 1 : 0);
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -471,12 +616,14 @@ export async function getEvent(eventId: string) {
   }
   if (!data || !(data as EventRow).name || !(data as EventRow).start_date) return undefined;
   const { data: eventWorkers, error: eventWorkerError } = await supabase.from("event_workers").select("worker_id").eq("event_id", eventId);
+  recordSupabaseRequest("event_workers", "getEvent:workers", eventWorkers?.length || 0);
   if (eventWorkerError) {
     setSupabaseStatus({ connected: false, error: eventWorkerError.message });
     console.error("Supabase error:", eventWorkerError.message);
     throw eventWorkerError;
   }
   const { data: dayRows, error: dayError } = await supabase.from("event_days").select("*").eq("event_id", eventId).order("date");
+  recordSupabaseRequest("event_days", "getEvent:days", dayRows?.length || 0);
   if (dayError) {
     setSupabaseStatus({ connected: false, error: dayError.message });
     console.error("Supabase error:", dayError.message);
@@ -517,6 +664,7 @@ export async function saveEvent(event: Event) {
   }
 
   const { error } = await supabase.from("events").upsert(toRow(savedEvent));
+  recordSupabaseRequest("events", "saveEvent");
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
     console.error("Supabase error:", error.message);
@@ -524,6 +672,7 @@ export async function saveEvent(event: Event) {
   }
 
   const { error: deleteDaysError } = await supabase.from("event_days").delete().eq("event_id", savedEvent.id);
+  recordSupabaseRequest("event_days", "saveEvent:deleteDays");
   if (deleteDaysError) {
     setSupabaseStatus({ connected: false, error: deleteDaysError.message });
     console.error("Supabase error:", deleteDaysError.message);
@@ -532,6 +681,7 @@ export async function saveEvent(event: Event) {
   const dayRows = savedEvent.eventDays.map((day) => toDayRow({ ...day, eventId: savedEvent.id, updatedAt: nowIso() }, savedEvent.id));
   if (dayRows.length) {
     const { error: insertDaysError } = await supabase.from("event_days").insert(dayRows);
+    recordSupabaseRequest("event_days", "saveEvent:insertDays", dayRows.length);
     if (insertDaysError) {
       setSupabaseStatus({ connected: false, error: insertDaysError.message });
       console.error("Supabase error:", insertDaysError.message);
@@ -543,6 +693,7 @@ export async function saveEvent(event: Event) {
   savedEvent.confirmedWorkerIds.forEach((workerId) => assertUuid(workerId, "worker_id"));
 
   const deleteResponse = await supabase.from("event_workers").delete().eq("event_id", savedEvent.id);
+  recordSupabaseRequest("event_workers", "saveEvent:deleteWorkers");
   const deleteWorkerError = deleteResponse.error;
   if (deleteWorkerError) {
     setSupabaseStatus({ connected: false, error: deleteWorkerError.message });
@@ -562,6 +713,7 @@ export async function saveEvent(event: Event) {
       .from("event_workers")
       .insert(rows)
       .select("event_id, worker_id");
+    recordSupabaseRequest("event_workers", "saveEvent:insertWorkers", insertResponse.data?.length || 0);
     const insertWorkerError = insertResponse.error;
     if (insertWorkerError) {
       setSupabaseStatus({ connected: false, error: insertWorkerError.message });
@@ -597,6 +749,7 @@ export async function deleteEvent(eventId: string) {
     supabase.from("events").delete().eq("id", eventId)
   ];
   const results = await Promise.all(tables);
+  recordSupabaseRequest("events", "deleteEvent", 1);
   const error = results.find((result) => result.error)?.error;
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });
@@ -620,6 +773,7 @@ export async function clearEventsAndResetWorkers() {
     supabase.from("event_workers").delete().not("id", "is", null),
     supabase.from("events").delete().not("id", "is", null)
   ]);
+  recordSupabaseRequest("events", "clearEventsAndResetWorkers");
   const error = results.find((result) => result.error)?.error;
   if (error) {
     setSupabaseStatus({ connected: false, error: error.message });

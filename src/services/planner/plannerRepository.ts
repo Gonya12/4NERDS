@@ -1,5 +1,5 @@
 import type { Event, Worker } from "../../types/models";
-import { clearEventsAndResetWorkers, deleteEvent, getCachedHomeEvents, getEvent, listEvents, listHomeEvents, saveEvent } from "../database/eventRepository";
+import { clearEventsAndResetWorkers, deleteEvent, getCachedHomeEvents, getEvent, listEventOptions, listEvents, listHomeEvents, listPastPaidEventsPage, saveEvent } from "../database/eventRepository";
 import { addWorker as addDatabaseWorker, deleteWorker as deleteDatabaseWorker, listWorkers as listDatabaseWorkers, saveWorker as saveDatabaseWorker, seedSupabaseWorkers } from "../database/workerRepository";
 
 export async function listPlannerEvents() {
@@ -14,6 +14,14 @@ export async function listPlannerHomeEvents(limit = 10) {
   return listHomeEvents(limit);
 }
 
+export async function listPlannerEventOptions(limit = 500) {
+  return listEventOptions(limit);
+}
+
+export async function listPlannerPastPaidEventsPage(page = 0, pageSize = 20) {
+  return listPastPaidEventsPage(page, pageSize);
+}
+
 export async function getPlannerEvent(eventId: string) {
   return getEvent(eventId);
 }
@@ -26,8 +34,8 @@ export async function deletePlannerEvent(eventId: string) {
   return deleteEvent(eventId);
 }
 
-export async function listWorkers() {
-  return listDatabaseWorkers();
+export async function listWorkers(force = false) {
+  return listDatabaseWorkers(force);
 }
 
 export async function activeWorkers() {

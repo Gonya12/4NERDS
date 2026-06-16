@@ -1,7 +1,7 @@
 import type { CalendarFeed, CalendarFeedEvent, CalendarImportCandidate, Event, EventDay } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { db } from "../storage/localDb";
-import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { saveEvent } from "./eventRepository";
 import { njPokemonCalendar } from "../../data/njPokemonSources";
 
@@ -97,6 +97,7 @@ function writeLocalFeeds(feeds: CalendarFeed[]) {
 export async function listCalendarFeeds() {
   if (!isSupabaseConfigured || !supabase) return readLocalFeeds();
   const { data, error } = await supabase.from("calendar_feeds").select("*").order("name");
+  recordSupabaseRequest("calendar_feeds", "listCalendarFeeds", data?.length || 0);
   if (error) throw new Error(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   return (data || []).map((row) => fromRow(row as CalendarFeedRow));
@@ -127,6 +128,7 @@ export async function saveCalendarFeed(feed: CalendarFeed) {
     return saved;
   }
   const { data, error } = await supabase.from("calendar_feeds").upsert(toRow(saved)).select("*").single();
+  recordSupabaseRequest("calendar_feeds", "saveCalendarFeed", data ? 1 : 0);
   if (error) throw new Error(error.message);
   return fromRow(data as CalendarFeedRow);
 }
@@ -136,6 +138,7 @@ export async function deleteCalendarFeed(feedId: string) {
     writeLocalFeeds(readLocalFeeds().filter((item) => item.id !== feedId));
   } else {
     const { error } = await supabase.from("calendar_feeds").delete().eq("id", feedId);
+    recordSupabaseRequest("calendar_feeds", "deleteCalendarFeed");
     if (error) throw new Error(error.message);
   }
   saveCalendarCandidates(listCalendarCandidates().filter((candidate) => candidate.calendarFeedId !== feedId));
@@ -163,6 +166,7 @@ async function existingExternalIds() {
     return new Set(events.map((event) => event.externalSourceId).filter(Boolean));
   }
   const { data, error } = await supabase.from("events").select("external_source_id").not("external_source_id", "is", null);
+  recordSupabaseRequest("events", "existingExternalIds", data?.length || 0);
   if (error) throw new Error(error.message);
   return new Set((data || []).map((row) => String((row as { external_source_id: string }).external_source_id)));
 }

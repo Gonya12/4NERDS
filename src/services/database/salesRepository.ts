@@ -1,6 +1,6 @@
 import type { SalesRecord } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
-import { isSupabaseConfigured, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { fileToDataUrl, uploadSaleImage } from "../images/saleImageService";
 
 const pendingKey = "4nerds_pending_sales_v1";
@@ -86,20 +86,35 @@ export function getCachedSalesRecords() {
 }
 
 export async function listSalesRecords() {
+  return (await listSalesRecordsPage(0, 50)).records;
+}
+
+export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   const localPending = pendingSales();
-  if (!isSupabaseConfigured || !supabase) return localPending;
-  const { data, error } = await supabase.from("sales_records").select("*").order("sold_at", { ascending: false });
+  if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
+  const from = page * pageSize;
+  const to = from + pageSize - 1;
+  const { data, error } = await supabase
+    .from("sales_records")
+    .select("id,event_id,event_day_id,image_url,image_path,item_name,sold_price,bought_price,bought_from,notes,sold_at,pending_upload,created_at,updated_at")
+    .order("sold_at", { ascending: false })
+    .range(from, to);
+  recordSupabaseRequest("sales_records", "listSalesRecordsPage", data?.length || 0);
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
-  const records = [...localPending, ...(data || []).map((row) => fromRow(row as SalesRow))];
-  try { localStorage.setItem(cacheKey, JSON.stringify(records)); } catch { /* Cache is optional. */ }
-  return records;
+  const remote = (data || []).map((row) => fromRow(row as SalesRow));
+  const records = page === 0 ? [...localPending, ...remote] : remote;
+  if (page === 0) {
+    try { localStorage.setItem(cacheKey, JSON.stringify(records)); } catch { /* Cache is optional. */ }
+  }
+  return { records, hasMore: remote.length === pageSize };
 }
 
 export async function listSalesRecordsForEvent(eventId: string) {
   const localPending = pendingSales().filter((sale) => sale.eventId === eventId);
   if (!isSupabaseConfigured || !supabase) return localPending;
   const { data, error } = await supabase.from("sales_records").select("*").eq("event_id", eventId).order("sold_at", { ascending: false });
+  recordSupabaseRequest("sales_records", "listSalesRecordsForEvent", data?.length || 0);
   if (error) throwSupabase(error.message);
   return [...localPending, ...(data || []).map((row) => fromRow(row as SalesRow))];
 }
@@ -111,6 +126,7 @@ export async function saveSaleRecord(sale: SalesRecord) {
     return saved;
   }
   const { data, error } = await supabase.from("sales_records").upsert(toRow(saved)).select("*").single();
+  recordSupabaseRequest("sales_records", "saveSaleRecord", data ? 1 : 0);
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   return fromRow(data as SalesRow);
@@ -160,6 +176,7 @@ export async function deleteSaleRecord(saleId: string) {
   savePendingSales(pendingSales().filter((sale) => sale.id !== saleId));
   if (!isSupabaseConfigured || !supabase) return;
   const { error } = await supabase.from("sales_records").delete().eq("id", saleId);
+  recordSupabaseRequest("sales_records", "deleteSaleRecord");
   if (error) throwSupabase(error.message);
 }
 
@@ -177,6 +194,7 @@ export async function syncPendingSales() {
         syncedSale = { ...syncedSale, imageUrl: uploaded.imageUrl, imagePath: uploaded.imagePath };
       }
       const { error } = await supabase.from("sales_records").upsert(toRow({ ...syncedSale, pendingUpload: false, updatedAt: nowIso() }));
+      recordSupabaseRequest("sales_records", "syncPendingSales");
       if (error) throw error;
       synced += 1;
     } catch {

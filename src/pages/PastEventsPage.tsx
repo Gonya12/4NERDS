@@ -1,11 +1,13 @@
 import { CopyPlus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { EventImageFrame } from "../components/EventImageFrame";
-import { listPlannerEvents, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { SkeletonEventCard } from "../components/SkeletonEventCard";
+import { listPlannerPastPaidEventsPage, listWorkers, savePlannerEvent } from "../services/planner/plannerRepository";
 import type { Event, Worker } from "../types/models";
-import { eventTimingStatus } from "../utils/eventStatus";
 import { dateRangeSummary } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
 import { id, nowIso } from "../utils/normalize";
@@ -20,19 +22,34 @@ export function PastEventsPage() {
   const navigate = useNavigate();
   const [events, setEvents] = useState<Event[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [visibleCount, setVisibleCount] = useState(20);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    async function load() {
-      setEvents(await listPlannerEvents());
-      setWorkers(await listWorkers());
+  async function load(targetPage = 0, append = false) {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    setError("");
+    try {
+      const [eventPage, workerRows] = await Promise.all([
+        listPlannerPastPaidEventsPage(targetPage, 20),
+        workers.length ? Promise.resolve(workers) : listWorkers()
+      ]);
+      setWorkers(workerRows);
+      setEvents((current) => append ? [...current, ...eventPage.events] : eventPage.events);
+      setHasMore(eventPage.hasMore);
+      setPage(targetPage);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load past events.");
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
     }
-    void load();
-  }, []);
+  }
 
-  const pastEvents = useMemo(() => events
-    .filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past")
-    .sort((a, b) => b.startDate.localeCompare(a.startDate)), [events]);
+  useEffect(() => { void load(); }, []);
 
   async function useAsTemplate(event: Event) {
     const timestamp = nowIso();
@@ -42,6 +59,7 @@ export function PastEventsPage() {
       id: newId,
       name: `${event.name} Copy`,
       status: "interested",
+      eventStage: "new",
       confirmedWorkerIds: [],
       paymentRecords: [],
       finance: undefined,
@@ -58,10 +76,13 @@ export function PastEventsPage() {
       <header>
         <p className="text-sm font-bold text-coral">Insights</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Past Events</h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Only paid, completed, or attended events are shown.</p>
       </header>
-      {pastEvents.length === 0 ? <EmptyState title="No past events yet." /> : null}
+      {error ? <ErrorState message="Past events could not be loaded." details={error} onRetry={() => void load()} onSync={() => void load()} /> : null}
+      {loading ? <LoadingScreen label="Loading past paid events..."><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} />)}</div></LoadingScreen> : null}
+      {!loading && events.length === 0 ? <EmptyState title="No paid or attended past events yet." /> : null}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {pastEvents.slice(0, visibleCount).map((event) => {
+        {events.map((event) => {
           const profit = calculateEventProfit(event, event.finance);
           const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
           return (
@@ -79,8 +100,8 @@ export function PastEventsPage() {
           );
         })}
       </div>
-      {pastEvents.length > visibleCount ? (
-        <button onClick={() => setVisibleCount((count) => count + 20)} className="min-h-11 w-full rounded-xl bg-white text-sm font-bold text-ink shadow-soft dark:bg-slate-900 dark:text-white">Load 20 more</button>
+      {hasMore ? (
+        <button onClick={() => void load(page + 1, true)} disabled={loadingMore} className="min-h-11 w-full rounded-xl bg-white text-sm font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">{loadingMore ? "Loading..." : "Load 20 more"}</button>
       ) : null}
     </div>
   );

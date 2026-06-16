@@ -302,10 +302,13 @@ export function EventDetailPage() {
   async function updateEventStage(stage: EventStage) {
     if (!event) return;
     const updated = { ...event, eventStage: stage, updatedAt: nowIso() };
+    console.info("Updating event stage", { eventId: event.id, eventName: event.name, event_stage: stage });
+    setEvent(updated);
     try {
       await savePlannerEvent(updated);
       setEvent(await getPlannerEvent(event.id) || updated);
     } catch (error) {
+      setEvent(event);
       setErrorMessage(error instanceof Error ? error.message : "Could not update event stage.");
     }
   }

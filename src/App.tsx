@@ -18,6 +18,7 @@ import { SalesControlPage } from "./pages/SalesControlPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
 import { listCalendarFeeds, seedDefaultCalendarFeed, syncCalendarFeed } from "./services/database/calendarFeedRepository";
+import { canRunAction, markActionRun } from "./utils/supabase";
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   return (
@@ -54,6 +55,8 @@ export default function App() {
       void listCalendarFeeds().then((feeds) => {
         const cutoff = Date.now() - 12 * 60 * 60 * 1000;
         const staleAutoFeeds = feeds.filter((feed) => feed.enabled && feed.autoImport && (!feed.lastCheckedAt || new Date(feed.lastCheckedAt).getTime() < cutoff));
+        if (!staleAutoFeeds.length || !canRunAction("app-calendar-auto-sync", 12 * 60 * 60 * 1000)) return undefined;
+        markActionRun("app-calendar-auto-sync");
         return Promise.allSettled(staleAutoFeeds.map((feed) => syncCalendarFeed(feed)));
       }).catch(() => undefined);
     }
