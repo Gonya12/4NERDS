@@ -1,4 +1,4 @@
-import { CalendarCheck, Camera, CheckCircle2, ChevronDown, CopyPlus, DollarSign, Edit, ExternalLink, ImagePlus, Map, MessageSquare, Plus, QrCode, Star, Trash2, Users, X } from "lucide-react";
+import { CalendarCheck, Camera, CheckCircle2, ChevronDown, CopyPlus, DollarSign, Edit, ExternalLink, ImagePlus, Map, MessageSquare, Plus, QrCode, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EventImageFrame } from "../components/EventImageFrame";
@@ -27,6 +27,15 @@ import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { availabilitySummaryByWorker, effectiveConfirmedWorkerIds, normalizeDayWorkerRows, workersForDay } from "../utils/availability";
 import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } from "../utils/eventStage";
 import { njPokemonEventsMap } from "../data/njPokemonSources";
+import {
+  defaultFlyerPromptOptions,
+  generateCaptionPrompt,
+  generateFlyerPrompt,
+  loadFlyerBrandDefaults,
+  type FlyerPromptKind,
+  type FlyerPromptMode,
+  type FlyerPromptOptions
+} from "../services/prompts/flyerPromptService";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -167,6 +176,95 @@ function PaymentModal({ event, workers, payment, onClose, onSave }: { event: Eve
   );
 }
 
+function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: Worker[]; onClose: () => void }) {
+  const [kind, setKind] = useState<FlyerPromptKind>("instagram_flyer");
+  const [mode, setMode] = useState<FlyerPromptMode>("detailed");
+  const [options, setOptions] = useState<FlyerPromptOptions>(defaultFlyerPromptOptions);
+  const [copied, setCopied] = useState("");
+  const defaults = loadFlyerBrandDefaults();
+  const flyerPrompt = generateFlyerPrompt(event, workers, defaults, kind, mode, options);
+  const captionPrompt = generateCaptionPrompt(event, workers, defaults, options);
+
+  async function copy(text: string, label: string) {
+    await navigator.clipboard.writeText(text);
+    setCopied(`${label} copied.`);
+    window.setTimeout(() => setCopied(""), 1800);
+  }
+
+  function regenerate() {
+    setCopied("Prompt regenerated.");
+    window.setTimeout(() => setCopied(""), 1200);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-950/60 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
+      <section className="mx-auto max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900 dark:text-slate-100">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="inline-flex items-center gap-1 text-sm font-bold text-coral"><Sparkles size={16} /> Flyer Prompt Generator</p>
+            <h2 className="mt-1 text-2xl font-black text-ink dark:text-white">Copy prompts for ChatGPT</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">This only creates prompt text. It does not generate images in the app.</p>
+          </div>
+          <button onClick={onClose} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <label className="text-xs font-bold text-slate-500 dark:text-slate-400">
+            Prompt Type
+            <select value={kind} onChange={(e) => setKind(e.target.value as FlyerPromptKind)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <option value="instagram_flyer">Instagram Flyer</option>
+              <option value="instagram_story">Instagram Story</option>
+              <option value="square_post">Square Post</option>
+              <option value="simple_announcement">Simple Announcement</option>
+              <option value="bold_poster">Bold Promotional Poster</option>
+            </select>
+          </label>
+          <div>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">Flyer Prompt Version</p>
+            <div className="mt-1 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-950/70">
+              {(["short", "detailed"] as FlyerPromptMode[]).map((value) => (
+                <button key={value} onClick={() => setMode(value)} className={`min-h-11 rounded-xl text-sm font-black capitalize ${mode === value ? "bg-white text-ink shadow-soft dark:bg-slate-800 dark:text-white" : "text-slate-500 dark:text-slate-400"}`}>{value}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {[
+            ["includeCta", "Include business CTA"],
+            ["includeOrganizerHandle", "Include organizer handle"],
+            ["includeDateTime", "Include date/time"],
+            ["includeAddress", "Include full address"],
+            ["includeBuyTrade", "Include buy/trade"]
+          ].map(([key, label]) => (
+            <label key={key} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm font-bold text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
+              {label}
+              <input type="checkbox" checked={Boolean(options[key as keyof FlyerPromptOptions])} onChange={(e) => setOptions({ ...options, [key]: e.target.checked })} />
+            </label>
+          ))}
+        </div>
+
+        {copied ? <p className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{copied}</p> : null}
+
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="font-black text-ink dark:text-white">Flyer Prompt</h3>
+            <button onClick={regenerate} className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white">Regenerate</button>
+          </div>
+          <textarea readOnly value={flyerPrompt} className="min-h-56 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <button onClick={() => copy(flyerPrompt, "Flyer prompt")} className="min-h-11 w-full rounded-xl bg-coral text-sm font-black text-white">Copy Flyer Prompt</button>
+        </div>
+
+        <div className="mt-5 space-y-3">
+          <h3 className="font-black text-ink dark:text-white">Caption Prompt</h3>
+          <textarea readOnly value={captionPrompt} className="min-h-36 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <button onClick={() => copy(captionPrompt, "Caption prompt")} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Copy Caption Prompt</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function EventDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -181,6 +279,7 @@ export function EventDetailPage() {
   const [liveNoteText, setLiveNoteText] = useState("");
   const [weather, setWeather] = useState<WeatherSummary>();
   const [qrUrl, setQrUrl] = useState("");
+  const [showFlyerPrompt, setShowFlyerPrompt] = useState(false);
   const captionRef = useRef<HTMLElement>(null);
   const paymentRef = useRef<HTMLElement>(null);
   const qrRef = useRef<HTMLElement>(null);
@@ -540,6 +639,7 @@ export function EventDetailPage() {
           <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
           {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : event.importedFromCalendar ? <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> NJ Events Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
+          <button onClick={() => setShowFlyerPrompt(true)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Sparkles size={15} /> Flyer Prompt</button>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
           <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-sm font-bold text-white shadow-soft dark:bg-coral"><Camera size={15} /> Quick Sale</Link>
           <button onClick={() => jump(qrRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={15} /> QR</button>
@@ -844,6 +944,7 @@ export function EventDetailPage() {
 
       {showWorkers ? <WorkerModal event={event} workers={workers} onClose={() => setShowWorkers(false)} onSave={saveWorkers} /> : null}
       {editingPayment ? <PaymentModal event={event} workers={workers} payment={editingPayment === "new" ? undefined : editingPayment} onClose={() => setEditingPayment(null)} onSave={savePayment} /> : null}
+      {showFlyerPrompt ? <FlyerPromptModal event={event} workers={workers} onClose={() => setShowFlyerPrompt(false)} /> : null}
     </div>
   );
 }

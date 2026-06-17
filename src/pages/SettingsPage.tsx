@@ -1,4 +1,4 @@
-import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, Trash2, Upload, Wifi, X } from "lucide-react";
+import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, Sparkles, Trash2, Upload, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listPlannerHomeEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
@@ -12,6 +12,7 @@ import type { Location, Worker } from "../types/models";
 import { nowIso } from "../utils/normalize";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { njPokemonEventsMap } from "../data/njPokemonSources";
+import { loadFlyerBrandDefaults, saveFlyerBrandDefaults } from "../services/prompts/flyerPromptService";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -35,6 +36,8 @@ export function SettingsPage() {
   const [syncMessage, setSyncMessage] = useState("");
   const [notificationMessage, setNotificationMessage] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
+  const [flyerDefaults, setFlyerDefaults] = useState(() => loadFlyerBrandDefaults());
+  const [flyerMessage, setFlyerMessage] = useState("");
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -197,6 +200,12 @@ export function SettingsPage() {
     }
   }
 
+  function saveFlyerDefaults() {
+    saveFlyerBrandDefaults(flyerDefaults);
+    setFlyerMessage("Flyer prompt defaults saved.");
+    window.setTimeout(() => setFlyerMessage(""), 1800);
+  }
+
   async function downloadBackup() {
     const data = await exportBackup();
     const blob = new Blob([data], { type: "application/json" });
@@ -338,6 +347,26 @@ export function SettingsPage() {
           <Link to="/analytics" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><BarChart3 size={16} /> Analytics</Link>
           <Link to="/flyers" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Images size={16} /> Flyers</Link>
         </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div>
+          <p className="inline-flex items-center gap-1 text-sm font-bold text-coral"><Sparkles size={16} /> Flyer Prompts</p>
+          <h2 className="font-black text-ink dark:text-white">Brand Defaults</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Used by Event Detail when generating copy-ready flyer and caption prompts.</p>
+        </div>
+        {flyerMessage ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{flyerMessage}</p> : null}
+        <div className="grid gap-3 md:grid-cols-2">
+          <input value={flyerDefaults.businessName} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, businessName: e.target.value })} placeholder="Business name" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.instagramHandle} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, instagramHandle: e.target.value })} placeholder="Instagram handle" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.tagline} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, tagline: e.target.value })} placeholder="Tagline" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.cta} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, cta: e.target.value })} placeholder="Default CTA" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.defaultFlyerStyle} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, defaultFlyerStyle: e.target.value })} placeholder="Preferred flyer style" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.preferredColors} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, preferredColors: e.target.value })} placeholder="Preferred colors" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <input value={flyerDefaults.preferredLayout} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, preferredLayout: e.target.value })} placeholder="Preferred layout" className="rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <textarea value={flyerDefaults.brandingNotes} onChange={(e) => setFlyerDefaults({ ...flyerDefaults, brandingNotes: e.target.value })} placeholder="Optional branding notes" className="min-h-24 rounded-xl border border-slate-200 px-3 py-3 text-sm md:col-span-2 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+        </div>
+        <button onClick={saveFlyerDefaults} className="min-h-11 w-full rounded-xl bg-coral text-sm font-black text-white">Save Flyer Defaults</button>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
