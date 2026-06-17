@@ -214,7 +214,7 @@ function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: 
             <select value={kind} onChange={(e) => setKind(e.target.value as FlyerPromptKind)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white">
               <option value="instagram_flyer">Instagram Flyer</option>
               <option value="instagram_story">Instagram Story</option>
-              <option value="square_post">Square Post</option>
+              <option value="square_post">Portrait Post</option>
               <option value="simple_announcement">Simple Announcement</option>
               <option value="bold_poster">Bold Promotional Poster</option>
             </select>

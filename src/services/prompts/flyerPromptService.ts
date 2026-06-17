@@ -30,11 +30,11 @@ const defaultsKey = "4nerds_flyer_prompt_defaults_v1";
 export const defaultFlyerBrandDefaults: FlyerBrandDefaults = {
   businessName: "4 Nerds",
   instagramHandle: "",
-  tagline: "Pokemon, TCG, and collectibles",
-  cta: "Come visit us for great deals, buying, selling, and trading.",
-  defaultFlyerStyle: "bold modern collectible trading card convention style",
+  tagline: "Pokémon cards, Pokémon singles, and Pokémon sealed products",
+  cta: "Come visit us for great Pokémon card deals, buying, selling, and trading Pokémon cards.",
+  defaultFlyerStyle: "bold modern Pokémon card vendor style with a Pokémon TCG event look",
   preferredColors: "dark background with bright red, yellow, blue, and electric accent colors",
-  preferredLayout: "Instagram portrait flyer",
+  preferredLayout: "Instagram portrait flyer in 4:5 aspect ratio",
   brandingNotes: "Keep text readable, clean, high contrast, and social-media friendly."
 };
 
@@ -49,21 +49,21 @@ export const defaultFlyerPromptOptions: FlyerPromptOptions = {
 const promptKindLabels: Record<FlyerPromptKind, string> = {
   instagram_flyer: "Instagram promotional flyer",
   instagram_story: "Instagram Story vertical promotional graphic",
-  square_post: "square Instagram post",
+  square_post: "Instagram portrait post",
   simple_announcement: "simple clean announcement graphic",
   bold_poster: "bold promotional poster"
 };
 
 export function loadFlyerBrandDefaults(): FlyerBrandDefaults {
   try {
-    return { ...defaultFlyerBrandDefaults, ...JSON.parse(localStorage.getItem(defaultsKey) || "{}") };
+    return pokemonOnlyDefaults({ ...defaultFlyerBrandDefaults, ...JSON.parse(localStorage.getItem(defaultsKey) || "{}") });
   } catch {
     return defaultFlyerBrandDefaults;
   }
 }
 
 export function saveFlyerBrandDefaults(defaults: FlyerBrandDefaults) {
-  localStorage.setItem(defaultsKey, JSON.stringify(defaults));
+  localStorage.setItem(defaultsKey, JSON.stringify(pokemonOnlyDefaults(defaults)));
 }
 
 export function generateFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, kind: FlyerPromptKind, mode: FlyerPromptMode, options: FlyerPromptOptions) {
@@ -75,26 +75,28 @@ export function generateFlyerPrompt(event: Event, workers: Worker[], defaults: F
 export function generateCaptionPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, options: FlyerPromptOptions) {
   const where = locationSummary(event, false);
   const handle = options.includeOrganizerHandle && event.organizerInstagramHandle ? ` Mention the event or organizer handle ${event.organizerInstagramHandle}.` : "";
-  const buyTrade = options.includeBuyTrade ? " Mention that we buy and trade." : "";
   const attendees = attendanceText(event, workers);
   return [
     `Write an Instagram caption for ${defaults.businessName || "4 Nerds"} announcing that we will be attending ${event.name} ${datePhrase(event)} at ${where}.`,
     `${attendees}.`,
     options.includeCta ? defaults.cta || "Invite people to come visit us." : "Invite people to come visit us.",
-    buyTrade,
+    options.includeBuyTrade ? " Mention that we buy, sell, and trade Pokémon cards." : "",
     handle,
     defaults.instagramHandle ? ` Include our handle ${defaults.instagramHandle} if it fits naturally.` : "",
     "Keep it social-media friendly, promotional, clear, and not too long.",
-    "Add relevant hashtags for Pokemon, TCG, trading cards, collectibles, and 4 Nerds."
+    "Add relevant hashtags for Pokémon cards, Pokémon TCG, Pokémon singles, and 4 Nerds."
   ].filter(Boolean).join(" ");
 }
 
 function shortFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, kind: FlyerPromptKind, options: FlyerPromptOptions) {
   const where = locationSummary(event, false);
   return [
+    `Create this as an Instagram portrait flyer in 4:5 aspect ratio.`,
+    `${defaults.businessName || "4 Nerds"} is a Pokémon card vendor brand.`,
     `Create a ${promptKindLabels[kind]} for ${defaults.businessName || "4 Nerds"} announcing we will be attending ${event.name} ${datePhrase(event)} at ${where}.`,
     options.includeDateTime ? `Include time details: ${timeSummary(event)}.` : "",
-    `Use a ${defaults.defaultFlyerStyle || "bold collectible/TCG style"}.`,
+    `Use a ${defaults.defaultFlyerStyle || "bold Pokémon card vendor vibe, Pokémon TCG event style, trading card show atmosphere"}.`,
+    "Feature Pokémon cards, Pokémon singles, and Pokémon sealed products only.",
     `Include text like "We Will Be Attending," "Come Visit Us"${options.includeBuyTrade ? ', and "We Buy and Trade."' : "."}`,
     options.includeCta ? defaults.cta : "",
     organizerLine(event, options),
@@ -105,13 +107,16 @@ function shortFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBrandD
 function detailedFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, kind: FlyerPromptKind, options: FlyerPromptOptions) {
   const fullAddress = locationSummary(event, options.includeAddress);
   return [
-    `Create a bold, eye-catching ${promptKindLabels[kind]} for a Pokemon/TCG vendor brand called ${defaults.businessName || "4 Nerds"}.`,
+    `Create this as an Instagram portrait flyer in 4:5 aspect ratio.`,
+    `${defaults.businessName || "4 Nerds"} is a Pokémon card vendor brand.`,
+    `Create a bold, eye-catching ${promptKindLabels[kind]} for ${defaults.businessName || "4 Nerds"}.`,
     `The design should announce that ${defaults.businessName || "4 Nerds"} will be attending ${event.name} ${datePhrase(event)} at ${fullAddress}.`,
     `${attendanceText(event, workers)}.`,
     options.includeDateTime ? `Show the event schedule clearly: ${eventDays(event).map((day) => formatEventDay(day)).join("; ")}.` : "",
-    `Make the design modern, energetic, and social-media-friendly with a collectible trading card, Pokemon event, TCG, anime, and convention vendor vibe.`,
+    `Make the design modern, energetic, and social-media-friendly with a Pokémon card vendor vibe, Pokémon TCG event style, and trading card show atmosphere.`,
+    `Only reference Pokémon cards, Pokémon TCG, Pokémon singles, Pokémon sealed products, and buying, selling, and trading Pokémon cards.`,
     `Use strong title hierarchy, readable text, polished spacing, and a clean layout suitable for Instagram.`,
-    defaults.preferredLayout ? `Preferred layout: ${defaults.preferredLayout}.` : "",
+    defaults.preferredLayout ? `Preferred layout: ${defaults.preferredLayout}. Keep the final image 4:5.` : "Preferred layout: Instagram portrait flyer in 4:5 aspect ratio.",
     defaults.preferredColors ? `Preferred colors: ${defaults.preferredColors}.` : "",
     defaults.tagline ? `Brand/tagline idea: ${defaults.tagline}.` : "",
     `Include phrases such as "We Will Be Attending" and "Come Visit Us"${options.includeBuyTrade ? ', plus "We Buy and Trade."' : "."}`,
@@ -122,6 +127,38 @@ function detailedFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBra
     defaults.brandingNotes ? `Branding notes: ${defaults.brandingNotes}` : "",
     "Do not make the text cluttered. Prioritize readability and a professional promotional flyer feel."
   ].filter(Boolean).join(" ");
+}
+
+function pokemonOnlyDefaults(defaults: FlyerBrandDefaults): FlyerBrandDefaults {
+  return {
+    businessName: defaults.businessName || "4 Nerds",
+    instagramHandle: defaults.instagramHandle || "",
+    tagline: pokemonOnlyText(defaults.tagline || defaultFlyerBrandDefaults.tagline),
+    cta: pokemonOnlyText(defaults.cta || defaultFlyerBrandDefaults.cta),
+    defaultFlyerStyle: pokemonOnlyText(defaults.defaultFlyerStyle || defaultFlyerBrandDefaults.defaultFlyerStyle),
+    preferredColors: defaults.preferredColors || defaultFlyerBrandDefaults.preferredColors,
+    preferredLayout: withFourByFive(defaults.preferredLayout || defaultFlyerBrandDefaults.preferredLayout),
+    brandingNotes: pokemonOnlyText(defaults.brandingNotes || defaultFlyerBrandDefaults.brandingNotes)
+  };
+}
+
+function pokemonOnlyText(value: string) {
+  const pokemonTcgToken = "__POKEMON_TCG__";
+  return value
+    .replace(/Pokémon TCG|Pokemon TCG/gi, pokemonTcgToken)
+    .replace(/\bTCG\b/gi, "Pokémon TCG")
+    .replace(new RegExp(pokemonTcgToken, "g"), "Pokémon TCG")
+    .replace(/One Piece|Lorcana|Yu-Gi-Oh|sports cards|anime collectibles|collectibles in general|collectibles|collectible/gi, "Pokémon cards")
+    .replace(/trading cards|trading card convention/gi, "Pokémon cards")
+    .replace(/buying, selling, and trading(?! Pokémon cards| Pokemon cards)/gi, "buying, selling, and trading Pokémon cards")
+    .replace(/Pokemon/g, "Pokémon")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function withFourByFive(value: string) {
+  const clean = pokemonOnlyText(value);
+  return /4:5/.test(clean) ? clean : `${clean}, 4:5 aspect ratio`;
 }
 
 function organizerLine(event: Event, options: FlyerPromptOptions) {
