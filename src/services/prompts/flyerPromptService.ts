@@ -25,6 +25,12 @@ export type FlyerPromptOptions = {
   includeBuyTrade: boolean;
 };
 
+export type InstagramCaptionOptions = {
+  includeHostHandle: boolean;
+  includeHashtags: boolean;
+  mode: "short" | "detailed";
+};
+
 const defaultsKey = "4nerds_flyer_prompt_defaults_v1";
 
 export const defaultFlyerBrandDefaults: FlyerBrandDefaults = {
@@ -73,19 +79,40 @@ export function generateFlyerPrompt(event: Event, workers: Worker[], defaults: F
 }
 
 export function generateCaptionPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, options: FlyerPromptOptions) {
-  const where = locationSummary(event, false);
-  const handle = options.includeOrganizerHandle && event.organizerInstagramHandle ? ` Mention the event or organizer handle ${event.organizerInstagramHandle}.` : "";
-  const attendees = attendanceText(event, workers);
+  return generateInstagramCaptionText(event, workers, defaults, {
+    includeHostHandle: options.includeOrganizerHandle,
+    includeHashtags: true,
+    mode: "detailed"
+  });
+}
+
+export function generateInstagramCaptionText(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, options: InstagramCaptionOptions) {
+  const businessName = defaults.businessName || "4 Nerds";
+  const location = locationSummary(event, false);
+  const hostHandle = options.includeHostHandle ? eventHostHandle(event) : "";
+  const attendance = attendanceText(event, workers);
+  const time = timeSummary(event);
+  const intro = `${businessName} will be attending ${event.name} ${datePhrase(event)} at ${location}! 🎉`;
+  const detailLine = options.mode === "short"
+    ? "Come visit us for Pokémon cards, great deals, buying, selling, and trading."
+    : `${attendance}, so come visit us for Pokémon cards, great deals, buying, selling, and trading.`;
+  const timeLine = options.mode === "detailed" && time && !time.includes("optional") ? `Event time: ${time}` : "";
+  const hostLine = hostHandle ? `Hosted by ${hostHandle}` : "";
+  const brandHandle = normalizeHandle(defaults.instagramHandle);
+  const buyTradeLine = "We buy and trade — bring your Pokémon cards! 🔥";
+  const hashtags = options.includeHashtags
+    ? "#4Nerds #PokemonCards #PokemonTCG #PokemonCardShow #CardShow #TradingCards #PokemonCollectors #TCGCommunity"
+    : "";
+
   return [
-    `Write an Instagram caption for ${defaults.businessName || "4 Nerds"} announcing that we will be attending ${event.name} ${datePhrase(event)} at ${where}.`,
-    `${attendees}.`,
-    options.includeCta ? defaults.cta || "Invite people to come visit us." : "Invite people to come visit us.",
-    options.includeBuyTrade ? " Mention that we buy, sell, and trade Pokémon cards." : "",
-    handle,
-    defaults.instagramHandle ? ` Include our handle ${defaults.instagramHandle} if it fits naturally.` : "",
-    "Keep it social-media friendly, promotional, clear, and not too long.",
-    "Add relevant hashtags for Pokémon cards, Pokémon TCG, Pokémon singles, and 4 Nerds."
-  ].filter(Boolean).join(" ");
+    intro,
+    detailLine,
+    timeLine,
+    hostLine,
+    brandHandle,
+    buyTradeLine,
+    hashtags
+  ].filter(Boolean).join("\n\n");
 }
 
 function shortFlyerPrompt(event: Event, workers: Worker[], defaults: FlyerBrandDefaults, kind: FlyerPromptKind, options: FlyerPromptOptions) {
@@ -162,8 +189,20 @@ function withFourByFive(value: string) {
 }
 
 function organizerLine(event: Event, options: FlyerPromptOptions) {
-  if (!options.includeOrganizerHandle || !event.organizerInstagramHandle) return "";
-  return `Include organizer/event handle ${event.organizerInstagramHandle} in small text if useful.`;
+  const handle = eventHostHandle(event);
+  if (!options.includeOrganizerHandle || !handle) return "";
+  return `Include organizer/event handle ${handle} in small text if useful.`;
+}
+
+function eventHostHandle(event: Event) {
+  return normalizeHandle(event.organizerInstagramHandle || event.locationInstagramHandle);
+}
+
+function normalizeHandle(value?: string) {
+  if (!value) return "";
+  const clean = value.trim();
+  if (!clean || clean.toLowerCase() === "unknown") return "";
+  return `@${clean.replace(/^@+/, "")}`;
 }
 
 function locationSummary(event: Event, includeAddress: boolean) {

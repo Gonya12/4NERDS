@@ -29,12 +29,13 @@ import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } fro
 import { njPokemonEventsMap } from "../data/njPokemonSources";
 import {
   defaultFlyerPromptOptions,
-  generateCaptionPrompt,
   generateFlyerPrompt,
+  generateInstagramCaptionText,
   loadFlyerBrandDefaults,
   type FlyerPromptKind,
   type FlyerPromptMode,
-  type FlyerPromptOptions
+  type FlyerPromptOptions,
+  type InstagramCaptionOptions
 } from "../services/prompts/flyerPromptService";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
@@ -180,10 +181,11 @@ function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: 
   const [kind, setKind] = useState<FlyerPromptKind>("instagram_flyer");
   const [mode, setMode] = useState<FlyerPromptMode>("detailed");
   const [options, setOptions] = useState<FlyerPromptOptions>(defaultFlyerPromptOptions);
+  const [captionOptions, setCaptionOptions] = useState<InstagramCaptionOptions>({ includeHostHandle: true, includeHashtags: true, mode: "detailed" });
   const [copied, setCopied] = useState("");
   const defaults = loadFlyerBrandDefaults();
   const flyerPrompt = generateFlyerPrompt(event, workers, defaults, kind, mode, options);
-  const captionPrompt = generateCaptionPrompt(event, workers, defaults, options);
+  const instagramCaption = generateInstagramCaptionText(event, workers, defaults, captionOptions);
 
   async function copy(text: string, label: string) {
     await navigator.clipboard.writeText(text);
@@ -191,8 +193,8 @@ function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: 
     window.setTimeout(() => setCopied(""), 1800);
   }
 
-  function regenerate() {
-    setCopied("Prompt regenerated.");
+  function regenerate(label = "Prompt") {
+    setCopied(`${label} regenerated.`);
     window.setTimeout(() => setCopied(""), 1200);
   }
 
@@ -249,16 +251,33 @@ function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: 
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="font-black text-ink dark:text-white">Flyer Prompt</h3>
-            <button onClick={regenerate} className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white">Regenerate</button>
+            <button onClick={() => regenerate("Flyer prompt")} className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white">Regenerate</button>
           </div>
           <textarea readOnly value={flyerPrompt} className="min-h-56 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
           <button onClick={() => copy(flyerPrompt, "Flyer prompt")} className="min-h-11 w-full rounded-xl bg-coral text-sm font-black text-white">Copy Flyer Prompt</button>
         </div>
 
         <div className="mt-5 space-y-3">
-          <h3 className="font-black text-ink dark:text-white">Caption Prompt</h3>
-          <textarea readOnly value={captionPrompt} className="min-h-36 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-          <button onClick={() => copy(captionPrompt, "Caption prompt")} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Copy Caption Prompt</button>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="font-black text-ink dark:text-white">Instagram Caption</h3>
+            <button onClick={() => regenerate("Instagram caption")} className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white">Regenerate Caption</button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm font-bold text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
+              Include host handle
+              <input type="checkbox" checked={captionOptions.includeHostHandle} onChange={(e) => setCaptionOptions({ ...captionOptions, includeHostHandle: e.target.checked })} />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm font-bold text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
+              Include hashtags
+              <input type="checkbox" checked={captionOptions.includeHashtags} onChange={(e) => setCaptionOptions({ ...captionOptions, includeHashtags: e.target.checked })} />
+            </label>
+            <select value={captionOptions.mode} onChange={(e) => setCaptionOptions({ ...captionOptions, mode: e.target.value as InstagramCaptionOptions["mode"] })} className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-bold dark:border-slate-800 dark:bg-slate-950 dark:text-white">
+              <option value="short">Short caption</option>
+              <option value="detailed">Detailed caption</option>
+            </select>
+          </div>
+          <textarea readOnly value={instagramCaption} className="min-h-56 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+          <button onClick={() => copy(instagramCaption, "Instagram caption")} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white">Copy Instagram Caption</button>
         </div>
       </section>
     </div>
