@@ -6,6 +6,7 @@ import { ignoreCalendarCandidate, listCalendarCandidates, saveCalendarCandidate,
 import type { CalendarImportCandidate } from "../types/models";
 import { displayDateTime } from "../utils/dateUtils";
 import { njPokemonEventsMap } from "../data/njPokemonSources";
+import { safeDateFromLocalInput } from "../utils/browserCompat";
 
 export function CalendarImportsPage() {
   const [candidates, setCandidates] = useState(() => listCalendarCandidates());
@@ -91,8 +92,8 @@ export function CalendarImportsPage() {
             </div>
             <div className="mt-5 space-y-3">
               <input value={editing.title} onChange={(event) => updateCandidate({ ...editing, title: event.target.value })} placeholder="Event name" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-              <input type="datetime-local" value={toLocalInput(editing.start)} onChange={(event) => updateCandidate({ ...editing, start: new Date(event.target.value).toISOString() })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-              <input type="datetime-local" value={editing.end ? toLocalInput(editing.end) : ""} onChange={(event) => updateCandidate({ ...editing, end: event.target.value ? new Date(event.target.value).toISOString() : undefined })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <input type="datetime-local" value={toLocalInput(editing.start)} onChange={(event) => updateCandidate({ ...editing, start: safeDateFromLocalInput(event.target.value).toISOString() })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+              <input type="datetime-local" value={editing.end ? toLocalInput(editing.end) : ""} onChange={(event) => updateCandidate({ ...editing, end: event.target.value ? safeDateFromLocalInput(event.target.value).toISOString() : undefined })} className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
               <input value={editing.location || ""} onChange={(event) => updateCandidate({ ...editing, location: event.target.value })} placeholder="Location" className="w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
               <textarea value={editing.description || ""} onChange={(event) => updateCandidate({ ...editing, description: event.target.value })} placeholder="Notes" className="min-h-28 w-full rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
             </div>

@@ -13,6 +13,8 @@ import { nowIso } from "../utils/normalize";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { njPokemonEventsMap } from "../data/njPokemonSources";
 import { loadFlyerBrandDefaults, saveFlyerBrandDefaults } from "../services/prompts/flyerPromptService";
+import { appBuildTime, appVersion, getDebugLogs, subscribeDebugLogs } from "../services/debug/debugLog";
+import { getPwaStatus, subscribePwaStatus } from "../services/pwa/registerPwa";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -38,6 +40,8 @@ export function SettingsPage() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [flyerDefaults, setFlyerDefaults] = useState(() => loadFlyerBrandDefaults());
   const [flyerMessage, setFlyerMessage] = useState("");
+  const [pwaStatus, setPwaStatus] = useState(getPwaStatus());
+  const [debugLogs, setDebugLogs] = useState(() => getDebugLogs());
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -54,6 +58,8 @@ export function SettingsPage() {
   }
 
   useEffect(() => { void load(); }, []);
+  useEffect(() => subscribePwaStatus(() => setPwaStatus(getPwaStatus())), []);
+  useEffect(() => subscribeDebugLogs(() => setDebugLogs([...getDebugLogs()])), []);
 
   async function add() {
     if (!newWorker.trim()) return;
@@ -236,6 +242,10 @@ export function SettingsPage() {
         <p className="mt-2 inline-flex rounded-full bg-white/10 px-3 py-1 text-xs font-bold">
           Manual event planning, {syncStatus.configured ? "shared Supabase storage" : "local-only storage"}
         </p>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <p className="rounded-xl bg-white/10 p-2"><strong>Version:</strong> {appVersion}</p>
+          <p className="rounded-xl bg-white/10 p-2"><strong>Build:</strong> {new Date(appBuildTime).toLocaleString()}</p>
+        </div>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
@@ -318,6 +328,46 @@ export function SettingsPage() {
           <button onClick={seedWorkersNow} className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-slate-100 text-sm font-bold text-ink dark:bg-slate-800 dark:text-white"><Plus size={16} /> Seed Workers</button>
         </div>
         <SyncStatusBadge syncing={syncBusy} label={syncMessage || "Syncing..."} />
+      </section>
+
+      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div>
+          <p className="text-sm font-bold text-coral">Developer Debug</p>
+          <h2 className="font-black text-ink dark:text-white">iPhone / PWA Status</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Local-only diagnostics. Nothing is sent anywhere.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Service worker</p>
+            <p className="font-black text-ink dark:text-white">{pwaStatus.status}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Update ready</p>
+            <p className="font-black text-ink dark:text-white">{pwaStatus.needRefresh ? "Yes" : "No"}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">PWA display</p>
+            <p className="font-black text-ink dark:text-white">{window.matchMedia("(display-mode: standalone)").matches ? "Installed" : "Browser"}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">
+            <p className="text-xs font-bold text-slate-500">Debug logs</p>
+            <p className="font-black text-ink dark:text-white">{import.meta.env.DEV ? debugLogs.length : "Dev only"}</p>
+          </div>
+        </div>
+        {pwaStatus.error ? <p className="rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{pwaStatus.error}</p> : null}
+        {import.meta.env.DEV ? (
+          <details className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
+            <summary className="cursor-pointer font-black text-ink dark:text-white">View local debug log</summary>
+            <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+              {debugLogs.length ? debugLogs.map((entry) => (
+                <div key={entry.id} className="rounded-lg bg-white p-2 dark:bg-slate-900">
+                  <p className="font-black">{new Date(entry.timestamp).toLocaleTimeString()} | {entry.type} | {entry.message}</p>
+                  {entry.details ? <pre className="mt-1 whitespace-pre-wrap break-words text-[11px]">{entry.details}</pre> : null}
+                </div>
+              )) : <p>No debug logs yet.</p>}
+            </div>
+          </details>
+        ) : null}
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">

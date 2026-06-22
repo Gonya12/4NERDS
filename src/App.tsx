@@ -19,6 +19,8 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
 import { listCalendarFeeds, seedDefaultCalendarFeed, syncCalendarFeed } from "./services/database/calendarFeedRepository";
 import { canRunAction, markActionRun } from "./utils/supabase";
+import { addDebugLog, appVersion } from "./services/debug/debugLog";
+import { applyPwaUpdate, getPwaStatus, subscribePwaStatus } from "./services/pwa/registerPwa";
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   return (
@@ -57,7 +59,15 @@ function ScrollToTop({ containerRef }: { containerRef: React.RefObject<HTMLEleme
 
 export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [pwaStatus, setPwaStatus] = useState(getPwaStatus());
   const mainRef = useRef<HTMLElement | null>(null);
+  const location = useLocation();
+
+  useEffect(() => subscribePwaStatus(() => setPwaStatus(getPwaStatus())), []);
+
+  useEffect(() => {
+    addDebugLog("route", "Route changed", { route: location.pathname, version: appVersion });
+  }, [location.pathname]);
 
   useEffect(() => {
     async function boot() {
@@ -106,6 +116,13 @@ export default function App() {
         </Routes>
       </main>
       <BottomNav />
+      {pwaStatus.needRefresh ? (
+        <div className="fixed inset-x-4 bottom-24 z-50 rounded-2xl border border-coral/30 bg-ink p-3 text-white shadow-2xl lg:bottom-6 lg:left-auto lg:max-w-sm dark:bg-slate-900">
+          <p className="text-sm font-black">Update Available</p>
+          <p className="mt-1 text-xs text-slate-300">A newer 4 Nerds build is ready. Reload to avoid stale PWA cache.</p>
+          <button onClick={applyPwaUpdate} className="mt-3 min-h-10 w-full rounded-xl bg-coral text-sm font-black text-white">Reload</button>
+        </div>
+      ) : null}
       {showOnboarding ? <Onboarding onClose={closeOnboarding} /> : null}
     </div>
   );

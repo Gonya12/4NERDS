@@ -37,6 +37,7 @@ import {
   type FlyerPromptOptions,
   type InstagramCaptionOptions
 } from "../services/prompts/flyerPromptService";
+import { copyTextToClipboard, safeDateFromDateOnly } from "../utils/browserCompat";
 
 function Accordion({ title, summary, icon, children }: { title: string; summary: string; icon?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -142,7 +143,7 @@ function PaymentModal({ event, workers, payment, onClose, onSave }: { event: Eve
       eventId: event.id,
       workerId,
       amountPaid: Number(amountPaid || 0),
-      paidAt: paidAt ? new Date(`${paidAt}T12:00`).toISOString() : undefined,
+      paidAt: paidAt ? safeDateFromDateOnly(paidAt).toISOString() : undefined,
       note,
       createdAt: payment?.createdAt || timestamp,
       updatedAt: timestamp
@@ -188,8 +189,8 @@ function FlyerPromptModal({ event, workers, onClose }: { event: Event; workers: 
   const instagramCaption = generateInstagramCaptionText(event, workers, defaults, captionOptions);
 
   async function copy(text: string, label: string) {
-    await navigator.clipboard.writeText(text);
-    setCopied(`${label} copied.`);
+    const ok = await copyTextToClipboard(text);
+    setCopied(ok ? `${label} copied.` : "Could not copy automatically. Select the text and copy it.");
     window.setTimeout(() => setCopied(""), 1800);
   }
 
@@ -796,7 +797,7 @@ export function EventDetailPage() {
           <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>
         </div>
         <textarea value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Generate a caption to edit and copy." className="min-h-32 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
-        <button onClick={() => navigator.clipboard.writeText(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
+        <button onClick={() => void copyTextToClipboard(caption)} disabled={!caption} className="min-h-11 w-full rounded-xl bg-slate-100 text-sm font-bold text-ink disabled:opacity-50 dark:bg-slate-800 dark:text-white">Copy Caption</button>
       </section>
 
       <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-2 dark:bg-slate-900">

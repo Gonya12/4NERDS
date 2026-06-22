@@ -47,6 +47,7 @@ import { listPlannerEvents } from "../services/planner/plannerRepository";
 import type { CalendarFeed, CalendarImportCandidate, Event } from "../types/models";
 import { displayDateTime } from "../utils/dateUtils";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
+import { safeDateFromLocalInput } from "../utils/browserCompat";
 
 type Tab = "feed" | "review" | "saved";
 type DateFilter = "upcoming" | "week" | "month";
@@ -506,8 +507,8 @@ function EditSheet({ candidate, saving, onChange, onClose, onSave }: {
         </div>
         <div className="mt-5 space-y-3">
           <input value={candidate.title} onChange={(event) => onChange({ ...candidate, title: event.target.value })} placeholder="Event name" className={inputClass} />
-          <input type="datetime-local" value={toLocalInput(candidate.start)} onChange={(event) => onChange({ ...candidate, start: new Date(event.target.value).toISOString() })} className={inputClass} />
-          <input type="datetime-local" value={candidate.end ? toLocalInput(candidate.end) : ""} onChange={(event) => onChange({ ...candidate, end: event.target.value ? new Date(event.target.value).toISOString() : undefined })} className={inputClass} />
+          <input type="datetime-local" value={toLocalInput(candidate.start)} onChange={(event) => onChange({ ...candidate, start: safeDateFromLocalInput(event.target.value).toISOString() })} className={inputClass} />
+          <input type="datetime-local" value={candidate.end ? toLocalInput(candidate.end) : ""} onChange={(event) => onChange({ ...candidate, end: event.target.value ? safeDateFromLocalInput(event.target.value).toISOString() : undefined })} className={inputClass} />
           <input value={candidate.location || ""} onChange={(event) => onChange({ ...candidate, location: event.target.value })} placeholder="Location" className={inputClass} />
           <textarea value={candidate.description || ""} onChange={(event) => onChange({ ...candidate, description: event.target.value })} placeholder="Notes" className={`${inputClass} min-h-28`} />
         </div>

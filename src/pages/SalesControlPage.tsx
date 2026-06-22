@@ -13,6 +13,8 @@ import { eventDays, shortScheduleSummary } from "../utils/eventSchedule";
 import { formatMoney, roundMoney } from "../utils/paymentMath";
 import { useLocation } from "react-router-dom";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
+import { safeDateFromLocalInput } from "../utils/browserCompat";
+import { addDebugLog } from "../services/debug/debugLog";
 
 type SortMode = "recent" | "oldest" | "highest_sold" | "highest_profit" | "lowest_profit" | "missing";
 type DateFilter = "all" | "today" | "week" | "month" | "custom";
@@ -154,6 +156,7 @@ export function SalesControlPage() {
     setCameraError("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Camera is unavailable. You can still upload or paste an image.");
+      addDebugLog("error", "Camera API unavailable", { userAgent: navigator.userAgent });
       return;
     }
     try {
@@ -167,7 +170,8 @@ export function SalesControlPage() {
         await videoRef.current.play();
       }
       setCameraReady(true);
-    } catch {
+    } catch (error) {
+      addDebugLog("error", "Camera permission or preview failed", error);
       setCameraError("Camera permission denied. You can still upload or paste an image.");
       setCameraReady(false);
     }
@@ -238,7 +242,7 @@ export function SalesControlPage() {
         boughtPrice: form.boughtPrice === "" ? undefined : Number(form.boughtPrice),
         boughtFrom: form.boughtFrom.trim() || undefined,
         notes: form.notes.trim() || undefined,
-        soldAt: form.soldAt ? new Date(form.soldAt).toISOString() : new Date().toISOString(),
+        soldAt: form.soldAt ? safeDateFromLocalInput(form.soldAt).toISOString() : new Date().toISOString(),
         createdAt: editing?.createdAt
       };
       if (editing && !imageFile) {
