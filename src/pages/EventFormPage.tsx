@@ -5,6 +5,7 @@ import { EventImageUploader } from "../components/EventImageUploader";
 import { listLocations } from "../services/database/locationRepository";
 import { getPlannerEvent, savePlannerEvent } from "../services/planner/plannerRepository";
 import type { Event, EventDay, EventPriceOption, Location, PricingType, RegistrationStatus } from "../types/models";
+import { safeDateFromLocalInput } from "../utils/browserCompat";
 import { id, nowIso } from "../utils/normalize";
 
 const statuses: RegistrationStatus[] = ["open", "closed", "unknown", "sold_out", "waitlist"];
@@ -141,7 +142,7 @@ export function EventFormPage() {
     const event: Event = {
       id: existing?.id || draftEventId,
       name: form.name.trim(),
-      startDate: new Date(`${firstDay.date}T${firstDay.startTime || "12:00"}`).toISOString(),
+      startDate: safeDateFromLocalInput(`${firstDay.date}T${firstDay.startTime || "12:00"}`).toISOString(),
       startTime: firstDay.startTime,
       endTime: firstDay.endTime,
       venueName: form.venueName,

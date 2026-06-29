@@ -17,7 +17,7 @@ export const appBuildTime = __APP_BUILD_TIME__;
 export function addDebugLog(type: DebugLogEntry["type"], message: string, details?: unknown) {
   if (!import.meta.env.DEV) return;
   entries.unshift({
-    id: crypto.randomUUID(),
+    id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     timestamp: new Date().toISOString(),
     type,
     message,
