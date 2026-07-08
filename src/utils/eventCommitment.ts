@@ -5,7 +5,22 @@ import { calculatePaymentSummary } from "./paymentMath";
 const plannedLabels = new Set(["applied", "registered", "reserved", "confirmed", "paid"]);
 
 function normalizedStatus(value: unknown) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+  return String(value || "").trim().toLowerCase();
+}
+
+function statusTokens(value: unknown) {
+  return normalizedStatus(value).split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function hasPlannedLabel(value: unknown) {
+  const normalized = normalizedStatus(value);
+  if (!normalized || normalized === "new" || normalized.includes("not applied") || normalized === "not_applied") return false;
+  return statusTokens(value).some((token) => plannedLabels.has(token));
+}
+
+function isExplicitlyNotPlanned(value: unknown) {
+  const normalized = normalizedStatus(value);
+  return normalized === "new" || normalized.includes("not applied") || normalized === "not_applied";
 }
 
 export function isPaidEvent(event: Event, workers: Worker[]) {
@@ -28,11 +43,11 @@ export function isPaidOrConfirmedEvent(event: Event, workers: Worker[]) {
 export function isPlannedEvent(event: Event, workers: Worker[]) {
   const status = normalizedStatus(event.status);
   const eventStage = normalizedStatus(event.eventStage);
-  const registrationStatus = normalizedStatus(event.registrationStatus);
   if (status === "skipped") return false;
-  if (eventStage === "new" || eventStage === "past") return false;
-  if (event.importedFromCalendar && !plannedLabels.has(eventStage) && !plannedLabels.has(registrationStatus) && !plannedLabels.has(status)) return false;
-  if (plannedLabels.has(eventStage) || plannedLabels.has(registrationStatus) || plannedLabels.has(status)) return true;
+  if (eventStage === "past") return false;
+  if (hasPlannedLabel(event.eventStage) || hasPlannedLabel(event.registrationStatus) || hasPlannedLabel(event.status)) return true;
+  if (event.importedFromCalendar) return false;
+  if (isExplicitlyNotPlanned(event.eventStage) || isExplicitlyNotPlanned(event.registrationStatus) || isExplicitlyNotPlanned(event.status)) return false;
   const payment = calculatePaymentSummary(event, workers);
   return payment.totalCost > 0 && payment.totalPaid >= payment.totalCost;
 }

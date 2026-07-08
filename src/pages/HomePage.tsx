@@ -16,7 +16,7 @@ import { eventTimingStatus } from "../utils/eventStatus";
 import { eventDays } from "../utils/eventSchedule";
 import { calculateEventProfit } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
-import { eventStageAccentClasses, eventStageDescriptions } from "../utils/eventStage";
+import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } from "../utils/eventStage";
 import { isPlannedEvent, nextUpcomingEventDayDate } from "../utils/eventCommitment";
 import { actionCooldownRemainingSeconds, canRunAction, getSupabaseStatus, markActionRun, recordPageLoad } from "../utils/supabase";
 
@@ -96,12 +96,17 @@ export function HomePage() {
                 : "not applied/registered/reserved/confirmed/paid and payment is incomplete";
       if (import.meta.env.DEV) console.info("Dashboard planned event check", {
         name: event.name,
+        imported_from_calendar: event.importedFromCalendar,
         event_stage: event.eventStage,
         registration_status: event.registrationStatus,
         status: event.status,
+        displayChipLabel: eventStageLabels[event.eventStage || "new"] || String(event.eventStage || "Unknown"),
+        event_date: event.startDate,
+        start_date: event.startDate,
         totalPaid: payment.totalPaid,
         totalCost: payment.totalCost,
         nextUpcomingDate: nextDate,
+        isUpcoming: Boolean(nextDate),
         isPlanned: planned,
         reason
       });
