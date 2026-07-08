@@ -381,7 +381,7 @@ export async function listHomeEvents(limit = 10) {
     .select("*")
     .gte("start_date", today)
     .order("start_date")
-    .limit(limit * 3);
+    .limit(Math.max(limit, 250));
   recordSupabaseRequest("events", "listHomeEvents", data?.length || 0);
   queryCount += 1;
   if (error) {
