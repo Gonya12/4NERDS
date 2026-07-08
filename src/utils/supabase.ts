@@ -19,6 +19,7 @@ let lastQueryCount = 0;
 let cacheStatus = "Not checked";
 let sessionRequestCount = 0;
 let lastPageLoaded = "";
+let lastFailedQuery = "";
 const actionCooldowns = new Map<string, number>();
 
 type SupabaseRequestLog = {
@@ -52,6 +53,7 @@ export function getSupabaseStatus() {
     lastQueryCount,
     sessionRequestCount,
     lastPageLoaded,
+    lastFailedQuery,
     recentRequests: recentRequests.slice(-10).reverse(),
     cacheStatus,
     mode: isSupabaseConfigured ? "Team Sync" : "Local Mode",
@@ -59,6 +61,34 @@ export function getSupabaseStatus() {
     urlDetected: Boolean(supabaseUrl),
     publishableKeyDetected: Boolean(supabasePublishableKey)
   };
+}
+
+export function formatSupabaseError(context: { functionName: string; table: string; error: unknown; route?: string }) {
+  const error = context.error as { message?: string; code?: string; details?: string; hint?: string; status?: number; statusText?: string };
+  const route = context.route || (typeof window !== "undefined" ? window.location.pathname : "server");
+  const timestamp = new Date().toISOString();
+  const message = error?.message || String(context.error || "Unknown Supabase error");
+  const lines = [
+    `${context.functionName} query failed on ${context.table}: ${message}`,
+    `table: ${context.table}`,
+    `function: ${context.functionName}`,
+    `route: ${route}`,
+    `timestamp: ${timestamp}`
+  ];
+  if (error?.code) lines.push(`code: ${error.code}`);
+  if (error?.details) lines.push(`details: ${error.details}`);
+  if (error?.hint) lines.push(`hint: ${error.hint}`);
+  if (error?.status) lines.push(`status: ${error.status}`);
+  if (error?.statusText) lines.push(`statusText: ${error.statusText}`);
+  return lines.join("\n");
+}
+
+export function recordSupabaseError(context: { functionName: string; table: string; error: unknown; connected?: boolean }) {
+  const details = formatSupabaseError(context);
+  lastFailedQuery = details;
+  setSupabaseStatus({ connected: context.connected ?? false, error: details });
+  console.error("[Supabase Error]", details, context.error);
+  return details;
 }
 
 export function recordSupabaseRequest(table: string, functionName: string, rows?: number) {

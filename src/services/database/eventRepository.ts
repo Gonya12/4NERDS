@@ -2,7 +2,7 @@ import type { Event, EventDay, EventStage, EventStatus, RegistrationStatus, Spli
 import { isPastPaidOrAttendedEvent } from "../../utils/eventCommitment";
 import { id, nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { deletePaymentRecord, listPaymentRecords, savePaymentRecord } from "./paymentRepository";
 import { getFinance } from "./financeRepository";
 import { defaultChecklistItems, listChecklistItems, seedChecklistIfEmpty } from "./checklistRepository";
@@ -378,20 +378,24 @@ export async function listHomeEvents(limit = 10) {
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("events")
-    .select("id,name,start_date,end_date,start_time,end_time,venue_name,address,city,state,registration_status,image_url,image_path,status,event_stage,split_mode,event_cost,external_source,external_source_id,calendar_feed_id,imported_from_calendar,manually_edited,created_at,updated_at")
+    .select("*")
     .gte("start_date", today)
-    .neq("status", "completed")
-    .neq("status", "skipped")
     .order("start_date")
-    .limit(limit);
+    .limit(limit * 3);
   recordSupabaseRequest("events", "listHomeEvents", data?.length || 0);
   queryCount += 1;
   if (error) {
-    setSupabaseStatus({ connected: false, error: error.message, durationMs: Math.round(performance.now() - startedAt), queryCount });
-    throw error;
+    const details = recordSupabaseError({ functionName: "listHomeEvents", table: "events", error });
+    setSupabaseStatus({ durationMs: Math.round(performance.now() - startedAt), queryCount });
+    throw new Error(details);
   }
 
-  const rows = (data || []).filter((row) => (row as EventRow).name && (row as EventRow).start_date) as EventRow[];
+  const rows = (data || [])
+    .filter((row) => {
+      const eventRow = row as EventRow;
+      return Boolean(eventRow.name && eventRow.start_date && eventRow.status !== "completed" && eventRow.status !== "skipped");
+    })
+    .slice(0, limit) as EventRow[];
   const ids = rows.map((row) => row.id);
   if (!ids.length) {
     cacheHomeEvents([]);
@@ -399,47 +403,53 @@ export async function listHomeEvents(limit = 10) {
     return [] as Event[];
   }
 
-  const [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult] = await Promise.all([
-    supabase.from("event_days").select("*").in("event_id", ids).order("date"),
-    supabase.from("event_workers").select("event_id, worker_id").in("event_id", ids),
-    supabase.from("event_day_workers").select("*").in("event_id", ids),
-    supabase.from("event_price_options").select("*").in("event_id", ids),
-    supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids)
-  ]);
-  recordSupabaseRequest("event_days", "listHomeEvents:days", daysResult.data?.length || 0);
-  recordSupabaseRequest("event_workers", "listHomeEvents:workers", workersResult.data?.length || 0);
-  recordSupabaseRequest("event_day_workers", "listHomeEvents:dayWorkers", dayWorkersResult.data?.length || 0);
-  recordSupabaseRequest("event_price_options", "listHomeEvents:prices", pricesResult.data?.length || 0);
-  recordSupabaseRequest("payment_records", "listHomeEvents:payments", paymentsResult.data?.length || 0);
+  const relatedQueries = [
+    { table: "event_days", functionName: "listHomeEvents:days", query: supabase.from("event_days").select("*").in("event_id", ids).order("date") },
+    { table: "event_workers", functionName: "listHomeEvents:workers", query: supabase.from("event_workers").select("event_id, worker_id").in("event_id", ids) },
+    { table: "event_day_workers", functionName: "listHomeEvents:dayWorkers", query: supabase.from("event_day_workers").select("*").in("event_id", ids) },
+    { table: "event_price_options", functionName: "listHomeEvents:prices", query: supabase.from("event_price_options").select("*").in("event_id", ids) },
+    { table: "payment_records", functionName: "listHomeEvents:payments", query: supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids) }
+  ];
+  const settledResults = await Promise.allSettled(relatedQueries.map((item) => item.query));
+  const relatedWarnings: string[] = [];
+  const relatedData = relatedQueries.map((item, index) => {
+    const result = settledResults[index];
+    if (result.status === "rejected") {
+      relatedWarnings.push(recordSupabaseError({ functionName: item.functionName, table: item.table, error: result.reason, connected: true }));
+      return [] as unknown[];
+    }
+    recordSupabaseRequest(item.table, item.functionName, result.value.data?.length || 0);
+    if (result.value.error) {
+      relatedWarnings.push(recordSupabaseError({ functionName: item.functionName, table: item.table, error: result.value.error, connected: true }));
+      return [] as unknown[];
+    }
+    return result.value.data || [];
+  });
+  const [dayRows, workerRows, dayWorkerRows, priceRows, paymentRows] = relatedData;
   queryCount += 5;
-  const relatedError = [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult].find((result) => result.error)?.error;
-  if (relatedError) {
-    setSupabaseStatus({ connected: false, error: relatedError.message, durationMs: Math.round(performance.now() - startedAt), queryCount });
-    throw relatedError;
-  }
 
   const daysByEvent = new Map<string, EventDay[]>();
-  (daysResult.data || []).forEach((row) => {
+  dayRows.forEach((row) => {
     const day = fromDayRow(row as EventDayRow);
     daysByEvent.set(day.eventId, [...(daysByEvent.get(day.eventId) || []), day]);
   });
   const workersByEvent = new Map<string, string[]>();
-  (workersResult.data || []).forEach((row) => {
+  workerRows.forEach((row) => {
     const typed = row as EventWorkerRow;
     workersByEvent.set(typed.event_id, [...(workersByEvent.get(typed.event_id) || []), typed.worker_id]);
   });
   const dayWorkersByEvent = new Map<string, ReturnType<typeof fromDayWorkerRow>[]>();
-  (dayWorkersResult.data || []).forEach((row) => {
+  dayWorkerRows.forEach((row) => {
     const item = fromDayWorkerRow(row as EventDayWorkerRow);
     dayWorkersByEvent.set(item.eventId, [...(dayWorkersByEvent.get(item.eventId) || []), item]);
   });
   const pricesByEvent = new Map<string, ReturnType<typeof fromPriceOptionRow>[]>();
-  (pricesResult.data || []).forEach((row) => {
+  priceRows.forEach((row) => {
     const item = fromPriceOptionRow(row as PriceOptionRow);
     pricesByEvent.set(item.eventId, [...(pricesByEvent.get(item.eventId) || []), item]);
   });
   const paymentsByEvent = new Map<string, ReturnType<typeof fromPaymentRow>[]>();
-  (paymentsResult.data || []).forEach((row) => {
+  paymentRows.forEach((row) => {
     const item = fromPaymentRow(row as PaymentRow);
     paymentsByEvent.set(item.eventId, [...(paymentsByEvent.get(item.eventId) || []), item]);
   });
@@ -452,7 +462,7 @@ export async function listHomeEvents(limit = 10) {
     }));
 
   cacheHomeEvents(events);
-  setSupabaseStatus({ connected: true, error: "", synced: true, durationMs: Math.round(performance.now() - startedAt), eventsLoaded: events.length, queryCount });
+  setSupabaseStatus({ connected: true, error: relatedWarnings.join("\n\n"), synced: true, durationMs: Math.round(performance.now() - startedAt), eventsLoaded: events.length, queryCount });
   return events;
 }
 

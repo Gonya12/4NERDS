@@ -9,6 +9,7 @@ import { LoadingScreen } from "../components/LoadingScreen";
 import { SkeletonEventCard } from "../components/SkeletonEventCard";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { getCachedPlannerHomeEvents, listPlannerHomeEvents, listWorkers } from "../services/planner/plannerRepository";
+import { appBuildTime, appVersion } from "../services/debug/debugLog";
 import type { Event, Worker } from "../types/models";
 import { effectiveConfirmedWorkerIds } from "../utils/availability";
 import { eventTimingStatus } from "../utils/eventStatus";
@@ -17,7 +18,7 @@ import { calculateEventProfit } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { eventStageAccentClasses, eventStageDescriptions } from "../utils/eventStage";
 import { isPlannedEvent } from "../utils/eventCommitment";
-import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
+import { actionCooldownRemainingSeconds, canRunAction, getSupabaseStatus, markActionRun, recordPageLoad } from "../utils/supabase";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -42,19 +43,29 @@ export function HomePage() {
     setSyncing(true);
     setSyncMessage("Syncing...");
     setSyncError("");
-    try {
-      const [allEvents, allWorkers] = await Promise.all([listPlannerHomeEvents(100), listWorkers()]);
-      setEvents(allEvents);
-      setWorkers(allWorkers);
-      setSyncMessage("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Sync failed.";
-      setSyncMessage("");
-      setSyncError(message);
-    } finally {
-      setLoading(false);
-      setSyncing(false);
+    const [eventsResult, workersResult] = await Promise.allSettled([listPlannerHomeEvents(100), listWorkers()]);
+    const failures: string[] = [];
+
+    if (eventsResult.status === "fulfilled") {
+      setEvents(eventsResult.value);
+    } else {
+      failures.push(formatDashboardFailure("listPlannerHomeEvents", "events", eventsResult.reason));
     }
+
+    if (workersResult.status === "fulfilled") {
+      setWorkers(workersResult.value);
+    } else {
+      failures.push(formatDashboardFailure("listWorkers", "workers", workersResult.reason));
+    }
+
+    const supabaseStatus = getSupabaseStatus();
+    if (supabaseStatus.error && !failures.some((failure) => failure.includes(supabaseStatus.error))) {
+      failures.push(`Partial sync warning:\n${supabaseStatus.error}`);
+    }
+    setSyncMessage("");
+    setSyncError(failures.length ? buildDashboardErrorDetails(failures) : "");
+    setLoading(false);
+    setSyncing(false);
   }
 
   useEffect(() => {
@@ -241,4 +252,37 @@ export function HomePage() {
       ) : null}
     </div>
   );
+}
+
+function formatDashboardFailure(functionName: string, table: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown failure");
+  if (message.includes("query failed")) return message;
+  return [
+    `${functionName} query failed on ${table}: ${message}`,
+    `table: ${table}`,
+    `function: ${functionName}`,
+    `route: ${typeof window !== "undefined" ? window.location.pathname : "unknown"}`,
+    `timestamp: ${new Date().toISOString()}`
+  ].join("\n");
+}
+
+function buildDashboardErrorDetails(failures: string[]) {
+  const status = getSupabaseStatus();
+  const browser = typeof navigator !== "undefined" ? navigator.userAgent : "unknown";
+  const recentRequests = status.recentRequests
+    .slice(0, 5)
+    .map((entry) => `${entry.timestamp} | ${entry.route} | ${entry.functionName} | ${entry.table} | rows=${entry.rows ?? "n/a"}`)
+    .join("\n");
+  return [
+    failures.join("\n\n"),
+    "",
+    "Dashboard debug",
+    `app version: ${appVersion}`,
+    `build: ${appBuildTime}`,
+    `browser: ${browser}`,
+    `mode: ${status.appMode}`,
+    `connected: ${status.connected ? "yes" : "no"}`,
+    `last failed query: ${status.lastFailedQuery || "none recorded"}`,
+    recentRequests ? `recent requests:\n${recentRequests}` : "recent requests: none"
+  ].join("\n");
 }

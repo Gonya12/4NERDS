@@ -1,7 +1,7 @@
 import type { Worker } from "../../types/models";
 import { nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 
 const defaultWorkerNames = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Slave 1", "Slave 2", "Slave 3"];
 const workerCacheKey = "4nerds_workers_cache_v1";
@@ -43,9 +43,7 @@ export async function seedSupabaseWorkers() {
   const { data, error } = await supabase.from("workers").select("id, name");
   recordSupabaseRequest("workers", "seedSupabaseWorkers:select", data?.length || 0);
   if (error) {
-    setSupabaseStatus({ connected: false, error: error.message });
-    console.error("Supabase error:", error.message);
-    throw error;
+    throw new Error(recordSupabaseError({ functionName: "seedSupabaseWorkers:select", table: "workers", error }));
   }
 
   const existingNames = new Set((data || []).map((worker) => String((worker as { name: string }).name).toLowerCase()));
@@ -66,9 +64,7 @@ export async function seedSupabaseWorkers() {
   recordSupabaseRequest("workers", "seedSupabaseWorkers:insert", inserted?.length || 0);
   void inserted;
   if (insertError) {
-    setSupabaseStatus({ connected: false, error: insertError.message });
-    console.error("Supabase error:", insertError.message);
-    throw insertError;
+    throw new Error(recordSupabaseError({ functionName: "seedSupabaseWorkers:insert", table: "workers", error: insertError }));
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
   workersSeedChecked = true;
@@ -118,9 +114,7 @@ export async function listWorkers(force = false) {
   const { data, error } = await supabase.from("workers").select("*").order("name");
   recordSupabaseRequest("workers", "listWorkers", data?.length || 0);
   if (error) {
-    setSupabaseStatus({ connected: false, error: error.message });
-    console.error("Supabase error:", error.message);
-    throw error;
+    throw new Error(recordSupabaseError({ functionName: "listWorkers", table: "workers", error }));
   }
   setSupabaseStatus({ connected: true, error: "", synced: true });
   const workers = (data || []).map((row) => fromRow(row as WorkerRow));
