@@ -43,7 +43,7 @@ export function HomePage() {
     setSyncing(true);
     setSyncMessage("Syncing...");
     setSyncError("");
-    const [eventsResult, workersResult] = await Promise.allSettled([listPlannerHomeEvents(100), listWorkers()]);
+    const [eventsResult, workersResult] = await Promise.allSettled([listPlannerHomeEvents(1000), listWorkers()]);
     const failures: string[] = [];
 
     if (eventsResult.status === "fulfilled") {
@@ -96,6 +96,7 @@ export function HomePage() {
                 : "not applied/registered/reserved/confirmed/paid and payment is incomplete";
       if (import.meta.env.DEV) console.info("Dashboard planned event check", {
         name: event.name,
+        id: event.id,
         imported_from_calendar: event.importedFromCalendar,
         event_stage: event.eventStage,
         registration_status: event.registrationStatus,
@@ -103,11 +104,13 @@ export function HomePage() {
         displayChipLabel: eventStageLabels[event.eventStage || "new"] || String(event.eventStage || "Unknown"),
         event_date: event.startDate,
         start_date: event.startDate,
+        event_days: event.eventDays,
         totalPaid: payment.totalPaid,
         totalCost: payment.totalCost,
         nextUpcomingDate: nextDate,
         isUpcoming: Boolean(nextDate),
         isPlanned: planned,
+        includedOnDashboard: planned,
         reason
       });
       return { event, nextDate, planned };
@@ -219,6 +222,7 @@ export function HomePage() {
             ))}
           </div>
         )}
+        <Link to="/events?filter=planned" className="mt-3 inline-flex min-h-10 items-center rounded-full bg-white px-4 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">View All Planned Events</Link>
       </section>
 
       {highlighted.length > 0 ? (

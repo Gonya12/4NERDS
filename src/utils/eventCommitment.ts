@@ -55,8 +55,18 @@ export function isPlannedEvent(event: Event, workers: Worker[]) {
 export function nextUpcomingEventDayDate(event: Event) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  return eventDays(event)
-    .map((day) => day.date.slice(0, 10))
+  const dynamicEvent = event as Event & { eventDate?: string; event_date?: string; start?: string; start_date?: string };
+  const dates = [
+    ...eventDays(event).map((day) => day.date),
+    event.startDate,
+    dynamicEvent.start_date,
+    dynamicEvent.eventDate,
+    dynamicEvent.event_date,
+    dynamicEvent.start
+  ];
+  return dates
+    .filter(Boolean)
+    .map((date) => String(date).slice(0, 10))
     .filter((date) => new Date(`${date}T23:59:59`).getTime() >= today.getTime())
     .sort()[0];
 }

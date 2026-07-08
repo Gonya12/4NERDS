@@ -27,7 +27,7 @@ import {
   subMonths
 } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { EventImageFrame } from "../components/EventImageFrame";
@@ -41,14 +41,14 @@ import {
 import { getCachedPlannerHomeEvents, listPlannerEventOptions, listWorkers } from "../services/planner/plannerRepository";
 import type { CalendarImportCandidate, Event, EventDay, EventStage, Worker } from "../types/models";
 import { effectiveConfirmedWorkerIds, workersForDay } from "../utils/availability";
-import { isPaidOrConfirmedEvent } from "../utils/eventCommitment";
+import { isPaidOrConfirmedEvent, isPlannedEvent } from "../utils/eventCommitment";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
 import { eventStageAccentClasses, eventStageLabels } from "../utils/eventStage";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
 type CalendarView = "month" | "agenda";
-type CalendarFilter = "all" | "paid" | "new" | "applied" | "imported" | "manual" | "week" | "month";
+type CalendarFilter = "all" | "planned" | "paid" | "new" | "applied" | "imported" | "manual" | "week" | "month";
 type SavedEntry = { kind: "saved"; id: string; date: string; event: Event; day: EventDay };
 type ImportEntry = { kind: "import"; id: string; date: string; candidate: CalendarImportCandidate };
 type CalendarEntry = SavedEntry | ImportEntry;
@@ -56,12 +56,13 @@ type CalendarEntry = SavedEntry | ImportEntry;
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function CalendarPage() {
+  const [searchParams] = useSearchParams();
   const cached = getCachedPlannerHomeEvents();
   const [events, setEvents] = useState<Event[]>(cached);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [imports, setImports] = useState<CalendarImportCandidate[]>(() => pendingImports());
   const [view, setView] = useState<CalendarView>("month");
-  const [filter, setFilter] = useState<CalendarFilter>("all");
+  const [filter, setFilter] = useState<CalendarFilter>(() => searchParams.get("filter") === "planned" ? "planned" : "all");
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(startOfDay(new Date()));
   const [loading, setLoading] = useState(cached.length === 0);
@@ -96,6 +97,10 @@ export function CalendarPage() {
   }
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    if (searchParams.get("filter") === "planned") setFilter("planned");
+  }, [searchParams]);
 
   const entries = useMemo<CalendarEntry[]>(() => [
     ...events.flatMap((event) => eventDays(event).map((day): SavedEntry => ({
@@ -176,7 +181,7 @@ export function CalendarPage() {
           </div>
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["all", "paid", "new", "applied", "imported", "manual", "week", "month"] as CalendarFilter[]).map((value) => (
+          {(["all", "planned", "paid", "new", "applied", "imported", "manual", "week", "month"] as CalendarFilter[]).map((value) => (
             <button key={value} onClick={() => setFilter(value)} className={filterButtonClass(filter === value)}>
               {filterLabel(value)}
             </button>
@@ -350,6 +355,7 @@ function matchesFilter(entry: CalendarEntry, filter: CalendarFilter, workers: Wo
   }
   if (filter === "month") return date >= startOfMonth(today) && date <= endOfMonth(today);
   if (entry.kind === "import") return false;
+  if (filter === "planned") return date >= today && isPlannedEvent(entry.event, workers);
   if (filter === "paid") return isPaidOrConfirmedEvent(entry.event, workers);
   if (filter === "new") return (entry.event.eventStage || "new") === "new";
   return entry.event.eventStage === "applied";
@@ -387,6 +393,7 @@ function parseLocalDate(value: string) {
 function filterLabel(filter: CalendarFilter) {
   const labels: Record<CalendarFilter, string> = {
     all: "All",
+    planned: "Planned",
     paid: "Paid / Confirmed",
     new: "Not Applied",
     applied: "Applied / Reserved",

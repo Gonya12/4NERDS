@@ -16,7 +16,9 @@ const homeCacheKey = "4nerds_home_events_cache_v1";
 type EventRow = {
   id: string;
   name: string;
-  start_date: string;
+  start_date?: string | null;
+  event_date?: string | null;
+  start?: string | null;
   end_date?: string | null;
   start_time?: string | null;
   end_time?: string | null;
@@ -152,10 +154,11 @@ function fallbackEventDay(event: Event): EventDay {
 }
 
 function fromRow(row: EventRow, confirmedWorkerIds: string[], paymentRecords = [] as Event["paymentRecords"], eventDays: EventDay[] = []): Event {
+  const startDate = row.start_date || row.event_date || row.start || row.created_at;
   return {
     id: row.id,
     name: row.name,
-    startDate: row.start_date,
+    startDate,
     endDate: row.end_date || undefined,
     startTime: row.start_time || undefined,
     endTime: row.end_time || undefined,
@@ -375,13 +378,11 @@ export async function listHomeEvents(limit = 10) {
     return events;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("events")
     .select("*")
-    .gte("start_date", today)
     .order("start_date")
-    .limit(Math.max(limit, 250));
+    .limit(Math.max(limit, 1000));
   recordSupabaseRequest("events", "listHomeEvents", data?.length || 0);
   queryCount += 1;
   if (error) {
@@ -393,9 +394,8 @@ export async function listHomeEvents(limit = 10) {
   const rows = (data || [])
     .filter((row) => {
       const eventRow = row as EventRow;
-      return Boolean(eventRow.name && eventRow.start_date && eventRow.status !== "completed" && eventRow.status !== "skipped");
-    })
-    .slice(0, limit) as EventRow[];
+      return Boolean(eventRow.name && (eventRow.start_date || eventRow.event_date || eventRow.start || eventRow.created_at) && eventRow.status !== "completed" && eventRow.status !== "skipped");
+    }) as EventRow[];
   const ids = rows.map((row) => row.id);
   if (!ids.length) {
     cacheHomeEvents([]);
