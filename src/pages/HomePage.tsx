@@ -78,8 +78,8 @@ export function HomePage() {
   }, []);
 
   const upcoming = useMemo(() => events.filter((event) => Boolean(nextUpcomingEventDayDate(event))), [events]);
-  const plannedUpcoming = useMemo(() => upcoming
-    .map((event) => {
+  const plannedUpcoming = useMemo(() => {
+    const checked = upcoming.map((event) => {
       const nextDate = nextUpcomingEventDayDate(event);
       const planned = Boolean(nextDate) && isPlannedEvent(event, workers);
       const payment = calculatePaymentSummary(event, workers);
@@ -94,30 +94,36 @@ export function HomePage() {
               : event.importedFromCalendar
                 ? "imported event is not marked applied/registered/reserved/confirmed/paid"
                 : "not applied/registered/reserved/confirmed/paid and payment is incomplete";
+      return { event, nextDate, payment, planned, reason };
+    });
+    const sortedPlanned = checked
+      .filter((entry): entry is { event: Event; nextDate: string; payment: ReturnType<typeof calculatePaymentSummary>; planned: true; reason: string } => entry.planned && Boolean(entry.nextDate))
+      .sort((a, b) => a.nextDate.localeCompare(b.nextDate));
+
+    if (import.meta.env.DEV) checked.forEach((entry) => {
+      const plannedIndex = sortedPlanned.findIndex((plannedEntry) => plannedEntry.event.id === entry.event.id);
       if (import.meta.env.DEV) console.info("Dashboard planned event check", {
-        name: event.name,
-        id: event.id,
-        imported_from_calendar: event.importedFromCalendar,
-        event_stage: event.eventStage,
-        registration_status: event.registrationStatus,
-        status: event.status,
-        displayChipLabel: eventStageLabels[event.eventStage || "new"] || String(event.eventStage || "Unknown"),
-        event_date: event.startDate,
-        start_date: event.startDate,
-        event_days: event.eventDays,
-        totalPaid: payment.totalPaid,
-        totalCost: payment.totalCost,
-        nextUpcomingDate: nextDate,
-        isUpcoming: Boolean(nextDate),
-        isPlanned: planned,
-        includedOnDashboard: planned,
-        reason
+        name: entry.event.name,
+        id: entry.event.id,
+        imported_from_calendar: entry.event.importedFromCalendar,
+        event_stage: entry.event.eventStage,
+        registration_status: entry.event.registrationStatus,
+        status: entry.event.status,
+        displayChipLabel: eventStageLabels[entry.event.eventStage || "new"] || String(entry.event.eventStage || "Unknown"),
+        event_date: entry.event.startDate,
+        start_date: entry.event.startDate,
+        event_days: entry.event.eventDays,
+        totalPaid: entry.payment.totalPaid,
+        totalCost: entry.payment.totalCost,
+        nextUpcomingDate: entry.nextDate,
+        isUpcoming: Boolean(entry.nextDate),
+        isPlanned: entry.planned,
+        includedOnDashboard: plannedIndex >= 0 && plannedIndex < 5,
+        exclusionReason: plannedIndex >= 5 ? "planned but outside first 5 planned events" : entry.reason
       });
-      return { event, nextDate, planned };
-    })
-    .filter((entry): entry is { event: Event; nextDate: string; planned: true } => entry.planned && Boolean(entry.nextDate))
-    .sort((a, b) => a.nextDate.localeCompare(b.nextDate))
-    .map((entry) => entry.event), [upcoming, workers]);
+    });
+    return sortedPlanned.map((entry) => entry.event);
+  }, [upcoming, workers]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = plannedUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const now = new Date();

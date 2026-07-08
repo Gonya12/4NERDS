@@ -381,7 +381,7 @@ export async function listHomeEvents(limit = 10) {
   const { data, error } = await supabase
     .from("events")
     .select("*")
-    .order("start_date")
+    .order("start_date", { ascending: false })
     .limit(Math.max(limit, 1000));
   recordSupabaseRequest("events", "listHomeEvents", data?.length || 0);
   queryCount += 1;
