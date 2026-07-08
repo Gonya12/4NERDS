@@ -20,6 +20,15 @@ import { eventStageAccentClasses, eventStageDescriptions, eventStageLabels } fro
 import { isPlannedEvent, nextUpcomingEventDayDate } from "../utils/eventCommitment";
 import { actionCooldownRemainingSeconds, canRunAction, getSupabaseStatus, markActionRun, recordPageLoad } from "../utils/supabase";
 
+type PlannedFilter = "all" | "applied" | "paid" | "needs_payment";
+type PlannedEntry = {
+  event: Event;
+  nextDate: string;
+  payment: ReturnType<typeof calculatePaymentSummary>;
+  planned: boolean;
+  reason: string;
+};
+
 export function HomePage() {
   const navigate = useNavigate();
   const [events, setEvents] = useState<Event[]>([]);
@@ -29,6 +38,7 @@ export function HomePage() {
   const [syncMessage, setSyncMessage] = useState("");
   const [syncError, setSyncError] = useState("");
   const [showLegend, setShowLegend] = useState(false);
+  const [plannedFilter, setPlannedFilter] = useState<PlannedFilter>("all");
 
   async function load(manual = false) {
     recordPageLoad("Home");
@@ -78,7 +88,7 @@ export function HomePage() {
   }, []);
 
   const upcoming = useMemo(() => events.filter((event) => Boolean(nextUpcomingEventDayDate(event))), [events]);
-  const plannedUpcoming = useMemo(() => {
+  const plannedEntries = useMemo(() => {
     const checked = upcoming.map((event) => {
       const nextDate = nextUpcomingEventDayDate(event);
       const planned = Boolean(nextDate) && isPlannedEvent(event, workers);
@@ -97,7 +107,7 @@ export function HomePage() {
       return { event, nextDate, payment, planned, reason };
     });
     const sortedPlanned = checked
-      .filter((entry): entry is { event: Event; nextDate: string; payment: ReturnType<typeof calculatePaymentSummary>; planned: true; reason: string } => entry.planned && Boolean(entry.nextDate))
+      .filter((entry): entry is PlannedEntry & { nextDate: string; planned: true } => entry.planned && Boolean(entry.nextDate))
       .sort((a, b) => a.nextDate.localeCompare(b.nextDate));
 
     if (import.meta.env.DEV) checked.forEach((entry) => {
@@ -118,12 +128,16 @@ export function HomePage() {
         nextUpcomingDate: entry.nextDate,
         isUpcoming: Boolean(entry.nextDate),
         isPlanned: entry.planned,
-        includedOnDashboard: plannedIndex >= 0 && plannedIndex < 5,
-        exclusionReason: plannedIndex >= 5 ? "planned but outside first 5 planned events" : entry.reason
+        includedOnDashboard: plannedIndex >= 0,
+        exclusionReason: entry.reason
       });
     });
-    return sortedPlanned.map((entry) => entry.event);
+    return sortedPlanned;
   }, [upcoming, workers]);
+  const filteredPlannedEntries = useMemo(() => plannedEntries.filter((entry) => matchesPlannedFilter(entry, plannedFilter)), [plannedEntries, plannedFilter]);
+  const plannedUpcoming = useMemo(() => filteredPlannedEntries.map((entry) => entry.event), [filteredPlannedEntries]);
+  const plannedGroups = useMemo(() => groupPlannedEntriesByMonth(filteredPlannedEntries), [filteredPlannedEntries]);
+  const plannedSummary = useMemo(() => plannedTotals(filteredPlannedEntries), [filteredPlannedEntries]);
   const completedEvents = useMemo(() => events.filter((event) => event.status === "completed" || eventTimingStatus(event.startDate) === "Past"), [events]);
   const highlighted = plannedUpcoming.filter((event) => ["Today", "Tomorrow", "This Week"].includes(eventTimingStatus(event.startDate)));
   const now = new Date();
@@ -210,25 +224,50 @@ export function HomePage() {
       </section>
 
       <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xl font-black text-ink dark:text-white">Next 5 Planned Events</h2>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-xl font-black text-ink dark:text-white">Upcoming Planned Events</h2>
+            <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
+              {plannedSummary.count} planned{plannedSummary.totalCost > 0 ? ` · ${formatMoney(plannedSummary.totalCost)} total · ${formatMoney(plannedSummary.totalPaid)} paid · ${formatMoney(plannedSummary.totalRemaining)} left` : ""}
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={() => void load(true)} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
-            <Link to="/events" className="text-sm font-bold text-coral">View All Upcoming Events</Link>
+            <Link to="/events" className="text-sm font-bold text-coral">Open Full Calendar</Link>
           </div>
+        </div>
+        <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+          {(["all", "applied", "paid", "needs_payment"] as PlannedFilter[]).map((filter) => (
+            <button key={filter} onClick={() => setPlannedFilter(filter)} className={`min-h-9 shrink-0 rounded-full px-3 text-xs font-black ${plannedFilter === filter ? "bg-ink text-white dark:bg-coral" : "bg-white text-slate-600 shadow-soft dark:bg-slate-900 dark:text-slate-300"}`}>
+              {plannedFilterLabel(filter)}
+            </button>
+          ))}
         </div>
         {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : plannedUpcoming.length === 0 ? (
           <EmptyState title="No planned events yet." action={<Link to="/events" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">View All Upcoming Events</Link>} />
         ) : (
-          <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 scroll-smooth lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0 xl:grid-cols-5">
-            {plannedUpcoming.slice(0, 5).map((event) => (
-              <div key={event.id} className="w-[84vw] max-w-[380px] shrink-0 snap-start sm:w-[360px] lg:w-auto lg:max-w-none">
-                <EventCard event={event} workers={workers} compact />
-              </div>
+          <div className="space-y-3">
+            {plannedGroups.map((group, index) => (
+              <details key={group.monthKey} open={index < 2} className="rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900">
+                <summary className="cursor-pointer list-none">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-black text-ink dark:text-white">{group.label}</h3>
+                      <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">{group.summary.count} events{group.summary.totalCost > 0 ? ` · ${formatMoney(group.summary.totalCost)} total · ${formatMoney(group.summary.totalPaid)} paid · ${formatMoney(group.summary.totalRemaining)} left` : ""}</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500 dark:bg-slate-800 dark:text-slate-300">{group.entries.length}</span>
+                  </div>
+                </summary>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {group.entries.map((entry) => (
+                    <EventCard key={entry.event.id} event={entry.event} workers={workers} compact />
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         )}
-        <Link to="/events?filter=planned" className="mt-3 inline-flex min-h-10 items-center rounded-full bg-white px-4 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">View All Planned Events</Link>
+        <Link to="/events" className="mt-3 inline-flex min-h-10 items-center rounded-full bg-white px-4 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">Open Full Calendar</Link>
       </section>
 
       {highlighted.length > 0 ? (
@@ -283,6 +322,64 @@ export function HomePage() {
       ) : null}
     </div>
   );
+}
+
+function plannedFilterLabel(filter: PlannedFilter) {
+  const labels: Record<PlannedFilter, string> = {
+    all: "All Planned",
+    applied: "Applied / Reserved",
+    paid: "Paid Only",
+    needs_payment: "Needs Payment"
+  };
+  return labels[filter];
+}
+
+function normalizedTokens(value: unknown) {
+  return String(value || "").toLowerCase().trim().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function eventHasAnyStatus(event: Event, statuses: string[]) {
+  const wanted = new Set(statuses);
+  return [
+    event.eventStage,
+    event.registrationStatus,
+    event.status
+  ].some((value) => normalizedTokens(value).some((token) => wanted.has(token)));
+}
+
+function matchesPlannedFilter(entry: PlannedEntry, filter: PlannedFilter) {
+  if (filter === "all") return true;
+  if (filter === "paid") return eventHasAnyStatus(entry.event, ["paid"]) || (entry.payment.totalCost > 0 && entry.payment.totalPaid >= entry.payment.totalCost);
+  if (filter === "needs_payment") return entry.payment.totalCost > 0 && entry.payment.totalPaid < entry.payment.totalCost;
+  return eventHasAnyStatus(entry.event, ["applied", "reserved", "registered", "confirmed"]);
+}
+
+function plannedTotals(entries: PlannedEntry[]) {
+  return entries.reduce((totals, entry) => {
+    const totalCost = entry.payment.totalCost > 0 ? entry.payment.totalCost : 0;
+    const totalPaid = entry.payment.totalPaid;
+    const totalRemaining = totalCost > 0 ? Math.max(totalCost - totalPaid, 0) : 0;
+    return {
+      count: totals.count + 1,
+      totalCost: totals.totalCost + totalCost,
+      totalPaid: totals.totalPaid + totalPaid,
+      totalRemaining: totals.totalRemaining + totalRemaining
+    };
+  }, { count: 0, totalCost: 0, totalPaid: 0, totalRemaining: 0 });
+}
+
+function groupPlannedEntriesByMonth(entries: PlannedEntry[]) {
+  const groups = new Map<string, PlannedEntry[]>();
+  entries.forEach((entry) => {
+    const monthKey = entry.nextDate.slice(0, 7);
+    groups.set(monthKey, [...(groups.get(monthKey) || []), entry]);
+  });
+  return Array.from(groups.entries()).map(([monthKey, groupEntries]) => ({
+    monthKey,
+    label: new Date(`${monthKey}-01T12:00:00`).toLocaleDateString([], { month: "long", year: "numeric" }),
+    entries: groupEntries,
+    summary: plannedTotals(groupEntries)
+  }));
 }
 
 function formatDashboardFailure(functionName: string, table: string, error: unknown) {

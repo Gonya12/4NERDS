@@ -62,9 +62,15 @@ function EventCardBase({ event, workers = [], compact = false }: { event: Event;
         {!compact && event.packingNotes ? <p className="mt-1 text-xs font-bold text-coral">Packing notes added</p> : null}
       </div>
       <div className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
-        <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> {payment.selectedPriceOption ? payment.selectedPriceOption.label : "Event cost"}: {formatMoney(payment.totalCost)}</p>
-        <p className="mt-1 text-slate-700 dark:text-slate-300">Paid: {formatMoney(payment.totalPaid)} / {formatMoney(payment.totalCost)}</p>
-        <p className={`mt-1 text-xs font-bold ${payment.totalRemaining > 0 ? "text-amber-700" : "text-emerald-700"}`}>{paymentStatus}</p>
+        {payment.totalCost > 0 ? (
+          <>
+            <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> {payment.selectedPriceOption ? payment.selectedPriceOption.label : "Event cost"}: {formatMoney(payment.totalCost)}</p>
+            <p className="mt-1 text-slate-700 dark:text-slate-300">Paid: {formatMoney(payment.totalPaid)} / {formatMoney(payment.totalCost)}</p>
+            <p className={`mt-1 text-xs font-bold ${payment.totalRemaining > 0 ? "text-amber-700" : "text-emerald-700"}`}>{paymentStatus}</p>
+          </>
+        ) : (
+          <p className="flex items-center gap-2 font-bold text-ink dark:text-white"><DollarSign size={16} /> No event cost set</p>
+        )}
         {!compact && payment.perWorkerSummary.slice(0, 2).map((worker) => (
           <p key={worker.workerId} className="mt-1 text-xs text-slate-600 dark:text-slate-400">
             {worker.workerName}: {worker.status === "owes" ? `owes ${formatMoney(worker.balance)}` : `paid ${formatMoney(worker.amountPaid)}, covered ${worker.percentOfTotalPaid.toFixed(0)}%`}
