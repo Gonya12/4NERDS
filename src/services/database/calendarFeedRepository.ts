@@ -1,7 +1,7 @@
 import type { CalendarFeed, CalendarFeedEvent, CalendarImportCandidate, Event, EventDay } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { db } from "../storage/localDb";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { saveEvent } from "./eventRepository";
 import { njPokemonCalendar } from "../../data/njPokemonSources";
 
@@ -98,7 +98,7 @@ export async function listCalendarFeeds() {
   if (!isSupabaseConfigured || !supabase) return readLocalFeeds();
   const { data, error } = await supabase.from("calendar_feeds").select("*").order("name");
   recordSupabaseRequest("calendar_feeds", "listCalendarFeeds", data?.length || 0);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(recordSupabaseError({ functionName: "listCalendarFeeds", table: "calendar_feeds", error }));
   setSupabaseStatus({ connected: true, error: "", synced: true });
   return (data || []).map((row) => fromRow(row as CalendarFeedRow));
 }
@@ -127,10 +127,11 @@ export async function saveCalendarFeed(feed: CalendarFeed) {
     writeLocalFeeds([saved, ...readLocalFeeds().filter((item) => item.id !== saved.id)]);
     return saved;
   }
-  const { data, error } = await supabase.from("calendar_feeds").upsert(toRow(saved)).select("*").single();
-  recordSupabaseRequest("calendar_feeds", "saveCalendarFeed", data ? 1 : 0);
-  if (error) throw new Error(error.message);
-  return fromRow(data as CalendarFeedRow);
+  const { data, error } = await supabase.from("calendar_feeds").upsert(toRow(saved)).select("*");
+  recordSupabaseRequest("calendar_feeds", "saveCalendarFeed", data?.length || 0);
+  if (error) throw new Error(recordSupabaseError({ functionName: "saveCalendarFeed", table: "calendar_feeds", error }));
+  const row = (data || []).find((item) => (item as CalendarFeedRow).id === saved.id) || data?.[0];
+  return row ? fromRow(row as CalendarFeedRow) : saved;
 }
 
 export async function deleteCalendarFeed(feedId: string) {
@@ -139,7 +140,7 @@ export async function deleteCalendarFeed(feedId: string) {
   } else {
     const { error } = await supabase.from("calendar_feeds").delete().eq("id", feedId);
     recordSupabaseRequest("calendar_feeds", "deleteCalendarFeed");
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(recordSupabaseError({ functionName: "deleteCalendarFeed", table: "calendar_feeds", error }));
   }
   saveCalendarCandidates(listCalendarCandidates().filter((candidate) => candidate.calendarFeedId !== feedId));
 }
@@ -167,7 +168,7 @@ async function existingExternalIds() {
   }
   const { data, error } = await supabase.from("events").select("external_source_id").not("external_source_id", "is", null);
   recordSupabaseRequest("events", "existingExternalIds", data?.length || 0);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(recordSupabaseError({ functionName: "existingExternalIds", table: "events", error }));
   return new Set((data || []).map((row) => String((row as { external_source_id: string }).external_source_id)));
 }
 
