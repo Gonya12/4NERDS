@@ -15,6 +15,7 @@ import { njPokemonEventsMap } from "../data/njPokemonSources";
 import { loadFlyerBrandDefaults, saveFlyerBrandDefaults } from "../services/prompts/flyerPromptService";
 import { appBuildTime, appVersion, getDebugLogs, subscribeDebugLogs } from "../services/debug/debugLog";
 import { getPwaStatus, subscribePwaStatus } from "../services/pwa/registerPwa";
+import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -42,6 +43,8 @@ export function SettingsPage() {
   const [flyerMessage, setFlyerMessage] = useState("");
   const [pwaStatus, setPwaStatus] = useState(getPwaStatus());
   const [debugLogs, setDebugLogs] = useState(() => getDebugLogs());
+  const [rawBuyPercentage, setRawBuyPercentage] = useState(() => String(loadDefaultRawBuyPercentage()));
+  const [salesPreferenceMessage, setSalesPreferenceMessage] = useState("");
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -259,6 +262,22 @@ export function SettingsPage() {
           <Link to="/nj-calendar" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">View NJ Calendar</Link>
         </div>
         <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><MapPinned size={17} /> Open NJ Pokémon Events Map</a>
+      </section>
+
+      <section className="surface-card space-y-3 p-4">
+        <div>
+          <p className="text-sm font-bold text-coral">Sales Control</p>
+          <h2 className="font-black text-ink dark:text-white">Raw Card Buying Default</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Used as the starting recommendation for raw Pokémon card purchases. Actual cost always remains editable.</p>
+        </div>
+        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400">
+          Default buy percentage
+          <div className="mt-1 flex gap-2">
+            <input type="number" min="1" max="100" value={rawBuyPercentage} onChange={(event) => setRawBuyPercentage(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
+            <button onClick={() => { const value = saveDefaultRawBuyPercentage(Number(rawBuyPercentage)); setRawBuyPercentage(String(value)); setSalesPreferenceMessage("Sales default saved."); }} className="rounded-xl bg-ink px-4 text-sm font-black text-white dark:bg-coral">Save</button>
+          </div>
+        </label>
+        {salesPreferenceMessage ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{salesPreferenceMessage}</p> : null}
       </section>
 
       <section className="surface-card space-y-3 p-4">

@@ -221,6 +221,52 @@ create table if not exists public.sales_records (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.inventory_purchases (
+  id uuid primary key default gen_random_uuid(),
+  image_url text,
+  image_path text,
+  item_name text not null,
+  category text not null default 'other_pokemon_product',
+  quantity integer not null default 1,
+  quantity_sold integer not null default 0,
+  purchase_date timestamptz not null default now(),
+  total_cost numeric(10, 2) not null default 0,
+  market_value numeric(10, 2),
+  is_raw_card boolean not null default false,
+  buy_percentage numeric(5, 2),
+  target_buy_price numeric(10, 2),
+  purchase_source text,
+  seller text,
+  event_id uuid references public.events(id) on delete set null,
+  purchased_by_worker_id uuid references public.workers(id) on delete set null,
+  notes text,
+  status text not null default 'in_stock',
+  sold_price numeric(10, 2),
+  sold_date timestamptz,
+  sold_by_worker_id uuid references public.workers(id) on delete set null,
+  sold_event_id uuid references public.events(id) on delete set null,
+  sold_payment_method text,
+  buyer_note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.business_expenses (
+  id uuid primary key default gen_random_uuid(),
+  expense_date timestamptz not null default now(),
+  amount numeric(10, 2) not null default 0,
+  category text not null default 'other',
+  description text not null default '',
+  event_id uuid references public.events(id) on delete set null,
+  paid_by_worker_id uuid references public.workers(id) on delete set null,
+  vendor text,
+  receipt_image_url text,
+  receipt_image_path text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.buy_items (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -272,6 +318,23 @@ alter table public.event_sales_categories add column if not exists updated_at ti
 alter table public.event_reviews add column if not exists updated_at timestamptz not null default now();
 alter table public.sales_records add column if not exists updated_at timestamptz not null default now();
 alter table public.sales_records add column if not exists pending_upload boolean not null default false;
+alter table public.sales_records add column if not exists category text;
+alter table public.sales_records add column if not exists quantity integer not null default 1;
+alter table public.sales_records add column if not exists market_value numeric(10, 2);
+alter table public.sales_records add column if not exists purchase_source text;
+alter table public.sales_records add column if not exists payment_method text;
+alter table public.sales_records add column if not exists sold_by_worker_id uuid references public.workers(id) on delete set null;
+alter table public.sales_records add column if not exists is_raw_card boolean not null default false;
+alter table public.sales_records add column if not exists buy_percentage numeric(5, 2);
+alter table public.sales_records add column if not exists target_buy_price numeric(10, 2);
+alter table public.sales_records add column if not exists inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null;
+alter table public.inventory_purchases add column if not exists quantity_sold integer not null default 0;
+alter table public.inventory_purchases add column if not exists sold_price numeric(10, 2);
+alter table public.inventory_purchases add column if not exists sold_date timestamptz;
+alter table public.inventory_purchases add column if not exists sold_by_worker_id uuid references public.workers(id) on delete set null;
+alter table public.inventory_purchases add column if not exists sold_event_id uuid references public.events(id) on delete set null;
+alter table public.inventory_purchases add column if not exists sold_payment_method text;
+alter table public.inventory_purchases add column if not exists buyer_note text;
 alter table public.buy_items add column if not exists updated_at timestamptz not null default now();
 alter table public.buy_items add column if not exists purchased boolean not null default false;
 alter table public.buy_items add column if not exists purchased_by text;
@@ -306,6 +369,8 @@ alter table public.event_sales_categories replica identity full;
 alter table public.event_reviews replica identity full;
 alter table public.sales_records replica identity full;
 alter table public.buy_items replica identity full;
+alter table public.inventory_purchases replica identity full;
+alter table public.business_expenses replica identity full;
 
 alter table public.workers enable row level security;
 alter table public.events enable row level security;
@@ -322,6 +387,8 @@ alter table public.event_sales_categories enable row level security;
 alter table public.event_reviews enable row level security;
 alter table public.sales_records enable row level security;
 alter table public.buy_items enable row level security;
+alter table public.inventory_purchases enable row level security;
+alter table public.business_expenses enable row level security;
 alter table public.calendar_feeds enable row level security;
 
 drop policy if exists "private MVP anon read workers" on public.workers;
@@ -354,6 +421,10 @@ drop policy if exists "private MVP anon read sales records" on public.sales_reco
 drop policy if exists "private MVP anon write sales records" on public.sales_records;
 drop policy if exists "private MVP anon read buy items" on public.buy_items;
 drop policy if exists "private MVP anon write buy items" on public.buy_items;
+drop policy if exists "private MVP anon read inventory purchases" on public.inventory_purchases;
+drop policy if exists "private MVP anon write inventory purchases" on public.inventory_purchases;
+drop policy if exists "private MVP anon read business expenses" on public.business_expenses;
+drop policy if exists "private MVP anon write business expenses" on public.business_expenses;
 drop policy if exists "private MVP anon read calendar feeds" on public.calendar_feeds;
 drop policy if exists "private MVP anon write calendar feeds" on public.calendar_feeds;
 
@@ -387,6 +458,10 @@ create policy "private MVP anon read sales records" on public.sales_records for 
 create policy "private MVP anon write sales records" on public.sales_records for all to anon using (true) with check (true);
 create policy "private MVP anon read buy items" on public.buy_items for select to anon using (true);
 create policy "private MVP anon write buy items" on public.buy_items for all to anon using (true) with check (true);
+create policy "private MVP anon read inventory purchases" on public.inventory_purchases for select to anon using (true);
+create policy "private MVP anon write inventory purchases" on public.inventory_purchases for all to anon using (true) with check (true);
+create policy "private MVP anon read business expenses" on public.business_expenses for select to anon using (true);
+create policy "private MVP anon write business expenses" on public.business_expenses for all to anon using (true) with check (true);
 create policy "private MVP anon read calendar feeds" on public.calendar_feeds for select to anon using (true);
 create policy "private MVP anon write calendar feeds" on public.calendar_feeds for all to anon using (true) with check (true);
 
@@ -500,6 +575,18 @@ end $$;
 
 do $$
 begin
+  alter publication supabase_realtime add table public.inventory_purchases;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.business_expenses;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
   alter publication supabase_realtime add table public.calendar_feeds;
 exception when duplicate_object then null;
 end $$;
@@ -524,6 +611,16 @@ create index if not exists idx_sales_records_event_id on public.sales_records(ev
 create index if not exists idx_sales_records_event_day_id on public.sales_records(event_day_id);
 create index if not exists idx_sales_records_sold_at on public.sales_records(sold_at);
 create index if not exists idx_sales_records_pending_upload on public.sales_records(pending_upload);
+create index if not exists idx_sales_records_category on public.sales_records(category);
+create index if not exists idx_sales_records_sold_by_worker_id on public.sales_records(sold_by_worker_id);
+create index if not exists idx_sales_records_inventory_purchase_id on public.sales_records(inventory_purchase_id);
+create index if not exists idx_inventory_purchases_purchase_date on public.inventory_purchases(purchase_date);
+create index if not exists idx_inventory_purchases_event_id on public.inventory_purchases(event_id);
+create index if not exists idx_inventory_purchases_status on public.inventory_purchases(status);
+create index if not exists idx_inventory_purchases_sold_date on public.inventory_purchases(sold_date);
+create index if not exists idx_business_expenses_expense_date on public.business_expenses(expense_date);
+create index if not exists idx_business_expenses_event_id on public.business_expenses(event_id);
+create index if not exists idx_business_expenses_category on public.business_expenses(category);
 create index if not exists idx_buy_items_created_at on public.buy_items(created_at);
 create index if not exists idx_buy_items_purchased on public.buy_items(purchased);
 create index if not exists idx_buy_items_priority on public.buy_items(priority);

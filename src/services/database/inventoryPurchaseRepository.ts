@@ -1,0 +1,189 @@
+import type { InventoryPurchase, InventoryStatus, PokemonProductCategory, PurchaseSource } from "../../types/models";
+import { id, nowIso } from "../../utils/normalize";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { fileToDataUrl, uploadFinancialImage } from "../images/saleImageService";
+
+const localKey = "4nerds_inventory_purchases_local_v1";
+const cacheKey = "4nerds_inventory_purchases_cache_v1";
+
+type PurchaseRow = {
+  id: string;
+  image_url?: string | null;
+  image_path?: string | null;
+  item_name: string;
+  category: PokemonProductCategory;
+  quantity: number;
+  quantity_sold?: number | null;
+  purchase_date: string;
+  total_cost: number;
+  market_value?: number | null;
+  is_raw_card: boolean;
+  buy_percentage?: number | null;
+  target_buy_price?: number | null;
+  purchase_source?: PurchaseSource | null;
+  seller?: string | null;
+  event_id?: string | null;
+  purchased_by_worker_id?: string | null;
+  notes?: string | null;
+  status: InventoryStatus;
+  sold_price?: number | null;
+  sold_date?: string | null;
+  sold_by_worker_id?: string | null;
+  sold_event_id?: string | null;
+  sold_payment_method?: InventoryPurchase["soldPaymentMethod"] | null;
+  buyer_note?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function fromRow(row: PurchaseRow): InventoryPurchase {
+  return {
+    id: row.id,
+    imageUrl: row.image_url || undefined,
+    imagePath: row.image_path || undefined,
+    itemName: row.item_name,
+    category: row.category || "other_pokemon_product",
+    quantity: Number(row.quantity || 1),
+    quantitySold: Math.max(0, Number(row.quantity_sold || 0)),
+    purchaseDate: row.purchase_date,
+    totalCost: Number(row.total_cost || 0),
+    marketValue: row.market_value === null || row.market_value === undefined ? undefined : Number(row.market_value),
+    isRawCard: Boolean(row.is_raw_card),
+    buyPercentage: row.buy_percentage === null || row.buy_percentage === undefined ? undefined : Number(row.buy_percentage),
+    targetBuyPrice: row.target_buy_price === null || row.target_buy_price === undefined ? undefined : Number(row.target_buy_price),
+    purchaseSource: row.purchase_source || undefined,
+    seller: row.seller || undefined,
+    eventId: row.event_id || undefined,
+    purchasedByWorkerId: row.purchased_by_worker_id || undefined,
+    notes: row.notes || undefined,
+    status: row.status || "in_stock",
+    soldPrice: row.sold_price === null || row.sold_price === undefined ? undefined : Number(row.sold_price),
+    soldDate: row.sold_date || undefined,
+    soldByWorkerId: row.sold_by_worker_id || undefined,
+    soldEventId: row.sold_event_id || undefined,
+    soldPaymentMethod: row.sold_payment_method || undefined,
+    buyerNote: row.buyer_note || undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toRow(value: InventoryPurchase): PurchaseRow {
+  return {
+    id: value.id,
+    image_url: value.imageUrl || null,
+    image_path: value.imagePath || null,
+    item_name: value.itemName,
+    category: value.category,
+    quantity: Number(value.quantity || 1),
+    quantity_sold: Math.max(0, Number(value.quantitySold || 0)),
+    purchase_date: value.purchaseDate,
+    total_cost: Number(value.totalCost || 0),
+    market_value: value.marketValue ?? null,
+    is_raw_card: Boolean(value.isRawCard),
+    buy_percentage: value.buyPercentage ?? null,
+    target_buy_price: value.targetBuyPrice ?? null,
+    purchase_source: value.purchaseSource || null,
+    seller: value.seller || null,
+    event_id: value.eventId || null,
+    purchased_by_worker_id: value.purchasedByWorkerId || null,
+    notes: value.notes || null,
+    status: value.status,
+    sold_price: value.soldPrice ?? null,
+    sold_date: value.soldDate || null,
+    sold_by_worker_id: value.soldByWorkerId || null,
+    sold_event_id: value.soldEventId || null,
+    sold_payment_method: value.soldPaymentMethod || null,
+    buyer_note: value.buyerNote || null,
+    created_at: value.createdAt,
+    updated_at: value.updatedAt
+  };
+}
+
+function read(key: string) {
+  try { return JSON.parse(localStorage.getItem(key) || "[]") as InventoryPurchase[]; } catch { return []; }
+}
+
+function write(key: string, values: InventoryPurchase[]) {
+  try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* Cache is optional. */ }
+}
+
+export function getCachedInventoryPurchases() {
+  return read(cacheKey);
+}
+
+export async function listInventoryPurchases(limit = 100) {
+  if (!isSupabaseConfigured || !supabase) return read(localKey);
+  const { data, error } = await supabase.from("inventory_purchases").select("*").order("purchase_date", { ascending: false }).limit(limit);
+  recordSupabaseRequest("inventory_purchases", "listInventoryPurchases", data?.length || 0);
+  if (error) throw new Error(error.message);
+  const values = (data || []).map((row) => fromRow(row as PurchaseRow));
+  write(cacheKey, values);
+  setSupabaseStatus({ connected: true, error: "", synced: true });
+  return values;
+}
+
+export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, imageFile?: File) {
+  const timestamp = nowIso();
+  const recordId = input.id || id("purchase");
+  let imageUrl = input.imageUrl;
+  let imagePath = input.imagePath;
+  if (imageFile) {
+    if (isSupabaseConfigured && supabase) {
+      const uploaded = await uploadFinancialImage(imageFile, "purchases", recordId);
+      imageUrl = uploaded.imageUrl;
+      imagePath = uploaded.imagePath;
+    } else {
+      imageUrl = await fileToDataUrl(imageFile);
+      imagePath = undefined;
+    }
+  }
+  const value: InventoryPurchase = {
+    id: recordId,
+    imageUrl,
+    imagePath,
+    itemName: input.itemName?.trim() || "Untitled Pokemon item",
+    category: input.category || "other_pokemon_product",
+    quantity: Math.max(1, Number(input.quantity || 1)),
+    quantitySold: Math.min(Math.max(0, Number(input.quantitySold || 0)), Math.max(1, Number(input.quantity || 1))),
+    purchaseDate: input.purchaseDate || timestamp,
+    totalCost: Number(input.totalCost || 0),
+    marketValue: input.marketValue,
+    isRawCard: Boolean(input.isRawCard),
+    buyPercentage: input.buyPercentage,
+    targetBuyPrice: input.targetBuyPrice,
+    purchaseSource: input.purchaseSource,
+    seller: input.seller?.trim() || undefined,
+    eventId: input.eventId,
+    purchasedByWorkerId: input.purchasedByWorkerId,
+    notes: input.notes?.trim() || undefined,
+    status: input.status || "in_stock",
+    soldPrice: input.soldPrice,
+    soldDate: input.soldDate,
+    soldByWorkerId: input.soldByWorkerId,
+    soldEventId: input.soldEventId,
+    soldPaymentMethod: input.soldPaymentMethod,
+    buyerNote: input.buyerNote?.trim() || undefined,
+    createdAt: input.createdAt || timestamp,
+    updatedAt: timestamp
+  };
+  if (!isSupabaseConfigured || !supabase) {
+    const values = [value, ...read(localKey).filter((item) => item.id !== value.id)];
+    write(localKey, values);
+    write(cacheKey, values);
+    return value;
+  }
+  const { data, error } = await supabase.from("inventory_purchases").upsert(toRow(value)).select("*").single();
+  recordSupabaseRequest("inventory_purchases", "saveInventoryPurchase", data ? 1 : 0);
+  if (error) throw new Error(error.message);
+  return fromRow(data as PurchaseRow);
+}
+
+export async function deleteInventoryPurchase(recordId: string) {
+  write(localKey, read(localKey).filter((item) => item.id !== recordId));
+  write(cacheKey, read(cacheKey).filter((item) => item.id !== recordId));
+  if (!isSupabaseConfigured || !supabase) return;
+  const { error } = await supabase.from("inventory_purchases").delete().eq("id", recordId);
+  recordSupabaseRequest("inventory_purchases", "deleteInventoryPurchase");
+  if (error) throw new Error(error.message);
+}

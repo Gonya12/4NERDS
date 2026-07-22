@@ -10,6 +10,11 @@ export type EventStage = "new" | "applied" | "paid" | "past";
 export type SplitMode = "equal" | "weighted_by_days";
 export type PricingType = "flat" | "per_day" | "package";
 export type BuyItemPriority = "low" | "medium" | "high";
+export type PokemonProductCategory = "raw_card" | "graded_card" | "sealed_product" | "pokemon_accessory" | "bulk_lot" | "other_pokemon_product";
+export type PurchaseSource = "card_show" | "online" | "local" | "trade" | "personal_inventory" | "other";
+export type SalePaymentMethod = "cash" | "zelle" | "venmo" | "cash_app" | "paypal" | "card" | "trade" | "other";
+export type InventoryStatus = "in_stock" | "partially_sold" | "sold" | "personal";
+export type BusinessExpenseCategory = "event_table_fee" | "gas" | "tolls" | "parking" | "food" | "supplies" | "shipping" | "packaging" | "card_show_equipment" | "software_subscription" | "advertising" | "other";
 
 export interface Organizer {
   id: string;
@@ -133,12 +138,68 @@ export interface SalesRecord {
   imageUrl?: string;
   imagePath?: string;
   itemName?: string;
+  category?: PokemonProductCategory;
+  quantity: number;
   soldPrice?: number;
   boughtPrice?: number;
+  marketValue?: number;
   boughtFrom?: string;
+  purchaseSource?: PurchaseSource;
+  paymentMethod?: SalePaymentMethod;
+  soldByWorkerId?: string;
+  isRawCard: boolean;
+  buyPercentage?: number;
+  targetBuyPrice?: number;
+  inventoryPurchaseId?: string;
   notes?: string;
   soldAt: string;
   pendingUpload: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InventoryPurchase {
+  id: string;
+  imageUrl?: string;
+  imagePath?: string;
+  itemName: string;
+  category: PokemonProductCategory;
+  quantity: number;
+  quantitySold: number;
+  purchaseDate: string;
+  totalCost: number;
+  marketValue?: number;
+  isRawCard: boolean;
+  buyPercentage?: number;
+  targetBuyPrice?: number;
+  purchaseSource?: PurchaseSource;
+  seller?: string;
+  eventId?: string;
+  purchasedByWorkerId?: string;
+  notes?: string;
+  status: InventoryStatus;
+  soldPrice?: number;
+  soldDate?: string;
+  soldByWorkerId?: string;
+  soldEventId?: string;
+  soldPaymentMethod?: SalePaymentMethod;
+  buyerNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessExpense {
+  id: string;
+  expenseDate: string;
+  amount: number;
+  category: BusinessExpenseCategory;
+  description: string;
+  eventId?: string;
+  paidByWorkerId?: string;
+  vendor?: string;
+  receiptImageUrl?: string;
+  receiptImagePath?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }

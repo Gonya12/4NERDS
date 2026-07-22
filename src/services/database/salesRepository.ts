@@ -1,4 +1,4 @@
-import type { SalesRecord } from "../../types/models";
+import type { PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
 import { fileToDataUrl, uploadSaleImage } from "../images/saleImageService";
@@ -13,9 +13,19 @@ type SalesRow = {
   image_url?: string | null;
   image_path?: string | null;
   item_name?: string | null;
+  category?: PokemonProductCategory | null;
+  quantity?: number | null;
   sold_price?: number | null;
   bought_price?: number | null;
+  market_value?: number | null;
   bought_from?: string | null;
+  purchase_source?: PurchaseSource | null;
+  payment_method?: SalePaymentMethod | null;
+  sold_by_worker_id?: string | null;
+  is_raw_card?: boolean | null;
+  buy_percentage?: number | null;
+  target_buy_price?: number | null;
+  inventory_purchase_id?: string | null;
   notes?: string | null;
   sold_at: string;
   pending_upload: boolean;
@@ -31,9 +41,19 @@ function fromRow(row: SalesRow): SalesRecord {
     imageUrl: row.image_url || undefined,
     imagePath: row.image_path || undefined,
     itemName: row.item_name || undefined,
+    category: row.category || undefined,
+    quantity: Number(row.quantity || 1),
     soldPrice: row.sold_price === null || row.sold_price === undefined ? undefined : Number(row.sold_price),
     boughtPrice: row.bought_price === null || row.bought_price === undefined ? undefined : Number(row.bought_price),
+    marketValue: row.market_value === null || row.market_value === undefined ? undefined : Number(row.market_value),
     boughtFrom: row.bought_from || undefined,
+    purchaseSource: row.purchase_source || undefined,
+    paymentMethod: row.payment_method || undefined,
+    soldByWorkerId: row.sold_by_worker_id || undefined,
+    isRawCard: Boolean(row.is_raw_card),
+    buyPercentage: row.buy_percentage === null || row.buy_percentage === undefined ? undefined : Number(row.buy_percentage),
+    targetBuyPrice: row.target_buy_price === null || row.target_buy_price === undefined ? undefined : Number(row.target_buy_price),
+    inventoryPurchaseId: row.inventory_purchase_id || undefined,
     notes: row.notes || undefined,
     soldAt: row.sold_at,
     pendingUpload: Boolean(row.pending_upload),
@@ -50,9 +70,19 @@ function toRow(sale: SalesRecord): SalesRow {
     image_url: sale.imageUrl || null,
     image_path: sale.imagePath || null,
     item_name: sale.itemName || null,
+    category: sale.category || null,
+    quantity: Number(sale.quantity || 1),
     sold_price: sale.soldPrice ?? null,
     bought_price: sale.boughtPrice ?? null,
+    market_value: sale.marketValue ?? null,
     bought_from: sale.boughtFrom || null,
+    purchase_source: sale.purchaseSource || null,
+    payment_method: sale.paymentMethod || null,
+    sold_by_worker_id: sale.soldByWorkerId || null,
+    is_raw_card: Boolean(sale.isRawCard),
+    buy_percentage: sale.buyPercentage ?? null,
+    target_buy_price: sale.targetBuyPrice ?? null,
+    inventory_purchase_id: sale.inventoryPurchaseId || null,
     notes: sale.notes || null,
     sold_at: sale.soldAt,
     pending_upload: sale.pendingUpload,
@@ -94,12 +124,24 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
-  const { data, error } = await supabase
+  const extended = await supabase
     .from("sales_records")
-    .select("id,event_id,event_day_id,image_url,image_path,item_name,sold_price,bought_price,bought_from,notes,sold_at,pending_upload,created_at,updated_at")
+    .select("id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at")
     .order("sold_at", { ascending: false })
     .range(from, to);
+  let data = extended.data as unknown as SalesRow[] | null;
+  let error = extended.error;
   recordSupabaseRequest("sales_records", "listSalesRecordsPage", data?.length || 0);
+  if (error && (error.code === "42703" || error.code === "PGRST204")) {
+    const legacy = await supabase
+      .from("sales_records")
+      .select("id,event_id,event_day_id,image_url,image_path,item_name,sold_price,bought_price,bought_from,notes,sold_at,pending_upload,created_at,updated_at")
+      .order("sold_at", { ascending: false })
+      .range(from, to);
+    data = legacy.data as unknown as SalesRow[] | null;
+    error = legacy.error;
+    recordSupabaseRequest("sales_records", "listSalesRecordsPage:legacyFallback", data?.length || 0);
+  }
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
   const remote = (data || []).map((row) => fromRow(row as SalesRow));
@@ -159,9 +201,19 @@ export async function createSaleRecord(input: Partial<SalesRecord>, imageFile?: 
     imageUrl,
     imagePath,
     itemName: input.itemName,
+    category: input.category,
+    quantity: Number(input.quantity || 1),
     soldPrice: input.soldPrice,
     boughtPrice: input.boughtPrice,
+    marketValue: input.marketValue,
     boughtFrom: input.boughtFrom,
+    purchaseSource: input.purchaseSource,
+    paymentMethod: input.paymentMethod,
+    soldByWorkerId: input.soldByWorkerId,
+    isRawCard: Boolean(input.isRawCard),
+    buyPercentage: input.buyPercentage,
+    targetBuyPrice: input.targetBuyPrice,
+    inventoryPurchaseId: input.inventoryPurchaseId,
     notes: input.notes,
     soldAt: input.soldAt || timestamp,
     pendingUpload,

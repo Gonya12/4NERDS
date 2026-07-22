@@ -56,9 +56,13 @@ export async function compressSaleImage(file: File) {
 }
 
 export async function uploadSaleImage(file: File, saleId: string) {
+  return uploadFinancialImage(file, "sales", saleId);
+}
+
+export async function uploadFinancialImage(file: File, folder: "sales" | "purchases" | "expenses", recordId: string) {
   if (!isSupabaseConfigured || !supabase) throw new Error("Supabase Storage is not configured.");
   const compressed = await compressSaleImage(file);
-  const imagePath = `sales/${saleId}/${Date.now()}.jpg`;
+  const imagePath = `${folder}/${recordId}/${Date.now()}.jpg`;
   const { error } = await supabase.storage.from(bucketName).upload(imagePath, compressed, {
     cacheControl: "31536000",
     upsert: true,
