@@ -32,7 +32,7 @@ export function EventImageUploader({
   }
 
   return (
-    <section className="space-y-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950/70">
+    <section className="surface-muted space-y-3 p-3 sm:p-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-black text-ink dark:text-white">Event Image</h2>
         {busy ? <span className="text-xs font-bold text-coral">Uploading...</span> : null}
@@ -51,11 +51,11 @@ export function EventImageUploader({
           event.preventDefault();
           void handleFile(event.dataTransfer.files[0]);
         }}
-        className="flex min-h-48 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-white text-center text-sm text-slate-500 outline-none transition focus:border-coral focus:ring-2 focus:ring-coral/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+        className="flex min-h-48 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-white/80 text-center text-sm text-slate-500 outline-none transition duration-240 hover:border-orange-300 hover:bg-orange-50/40 focus:border-coral focus:ring-2 focus:ring-coral/20 dark:border-slate-700 dark:bg-night-850 dark:text-slate-400 dark:hover:border-orange-500/50 dark:hover:bg-orange-950/10"
         onClick={() => inputRef.current?.click()}
       >
         {imageUrl ? (
-          <img src={imageUrl} alt="" className="h-full max-h-72 w-full object-cover" />
+          <img src={imageUrl} alt="Event preview" className="h-full max-h-72 w-full bg-night-950/5 object-contain p-2 dark:bg-night-950/50" />
         ) : (
           <div className="space-y-2 p-6">
             <ImagePlus className="mx-auto text-coral" size={34} />
@@ -65,10 +65,10 @@ export function EventImageUploader({
         )}
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => inputRef.current?.click()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral">
+        <button type="button" onClick={() => inputRef.current?.click()} className="btn-primary">
           <Upload size={16} /> {imageUrl ? "Replace image" : "Choose Image"}
         </button>
-        <button type="button" onClick={() => onChange({ imageUrl: undefined, imagePath: undefined })} disabled={!imageUrl} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-50 text-sm font-bold text-rose-700 disabled:opacity-50">
+        <button type="button" onClick={() => onChange({ imageUrl: undefined, imagePath: undefined })} disabled={!imageUrl} className="btn-danger">
           <Trash2 size={16} /> Remove
         </button>
       </div>

@@ -44,7 +44,7 @@ export function CalendarImportsPage() {
   }
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-6xl">
+    <div className="page-shell lg:max-w-6xl">
       <header className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-bold text-coral">Review</p>

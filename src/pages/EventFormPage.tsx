@@ -197,7 +197,7 @@ export function EventFormPage() {
   }
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-6xl">
+    <div className="page-shell lg:max-w-6xl">
       <header>
         <p className="text-sm font-bold text-coral">Manual Event Mode</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">{eventId && eventId !== "new" ? "Edit Event" : "Add Event"}</h1>

@@ -635,7 +635,7 @@ export function EventDetailPage() {
 
   return (
     <div className="space-y-4 lg:mx-auto lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-5 lg:space-y-0">
-      <header className="overflow-hidden rounded-3xl bg-ink text-white shadow-soft lg:col-start-1 dark:bg-slate-900">
+      <header className="overflow-hidden rounded-panel border border-white/10 bg-gradient-to-br from-night-800 to-night-950 text-white shadow-elevated lg:col-start-1">
         <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[4/5] max-h-[72vh] rounded-none" />
         <div className="space-y-3 p-4">
           <div className="flex flex-wrap gap-2">
@@ -654,14 +654,14 @@ export function EventDetailPage() {
         </div>
       </header>
 
-      <nav className="sticky top-0 z-20 -mx-4 border-y border-slate-200 bg-paper/95 px-4 py-2 backdrop-blur lg:top-6 lg:col-start-2 lg:row-span-2 lg:mx-0 lg:rounded-2xl lg:border lg:bg-white/90 lg:p-3 lg:shadow-soft dark:border-slate-800 dark:bg-slate-950/95 lg:dark:bg-slate-900">
+      <nav aria-label="Event quick actions" className="sticky top-0 z-20 -mx-4 border-y border-slate-200/80 bg-white/90 px-4 py-2 shadow-sm backdrop-blur-xl lg:top-6 lg:col-start-2 lg:row-span-2 lg:mx-0 lg:rounded-panel lg:border lg:p-3 lg:shadow-card dark:border-slate-800/90 dark:bg-night-950/90 lg:dark:bg-night-850/95">
         <div className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-2 lg:overflow-visible lg:pb-0">
-          <Link to={`/events/${event.id}/edit`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Edit size={15} /> Edit</Link>
+          <Link to={`/events/${event.id}/edit`} className="btn-secondary min-h-10 shrink-0 rounded-full px-3"><Edit size={15} /> Edit</Link>
           {destination ? <a href={googleMapsDirectionsLink(destination)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> Map</a> : event.importedFromCalendar ? <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Map size={15} /> NJ Events Map</a> : null}
           <button onClick={() => jump(captionRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><MessageSquare size={15} /> IG Caption</button>
-          <button onClick={() => setShowFlyerPrompt(true)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><Sparkles size={15} /> Flyer Prompt</button>
+          <button onClick={() => setShowFlyerPrompt(true)} className="btn-secondary min-h-10 shrink-0 rounded-full px-3"><Sparkles size={15} /> Flyer Prompt</button>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-coral px-3 text-sm font-bold text-white shadow-soft"><DollarSign size={15} /> Add Payment</button>
-          <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-sm font-bold text-white shadow-soft dark:bg-coral"><Camera size={15} /> Quick Sale</Link>
+          <Link to={`/sales?mode=sale&eventId=${encodeURIComponent(event.id)}`} className="btn-primary min-h-10 shrink-0 rounded-full px-3"><Camera size={15} /> Quick Sale</Link>
           <button onClick={() => jump(qrRef)} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><QrCode size={15} /> QR</button>
           <button onClick={duplicateEvent} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-white px-3 text-sm font-bold shadow-soft dark:bg-slate-900 dark:text-white"><CopyPlus size={15} /> Duplicate</button>
         </div>
@@ -669,7 +669,7 @@ export function EventDetailPage() {
 
       {errorMessage ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700 lg:col-span-2 dark:bg-rose-950/40 dark:text-rose-200">{errorMessage}</p> : null}
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4 lg:col-start-1">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-black text-ink dark:text-white">Event Stage</h2>
@@ -687,7 +687,7 @@ export function EventDetailPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-soft lg:col-start-1 dark:bg-slate-900 dark:text-slate-300">
+      <section className="surface-card space-y-3 p-4 text-sm text-slate-700 lg:col-start-1 dark:text-slate-300">
         <h2 className="font-black text-ink dark:text-white">Schedule</h2>
         <div className="space-y-1">{eventDays(event).map((day) => <p key={day.id}>{formatEventDay(day)}</p>)}</div>
         <div className="grid gap-1 pt-2">
@@ -696,7 +696,7 @@ export function EventDetailPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
+      <section className="surface-card p-4 lg:col-start-1">
         <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><Users size={18} /> Confirmed Workers</h2>
         <div className="mt-3 space-y-3">
           {eventDays(event).map((day) => {
@@ -729,7 +729,7 @@ export function EventDetailPage() {
         </div>
       </section>
 
-      <section ref={paymentRef} className="scroll-mt-20 space-y-4 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
+      <section ref={paymentRef} className="surface-card scroll-mt-20 space-y-4 p-4 lg:col-start-1">
         <div className="flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 font-black text-ink dark:text-white"><DollarSign size={18} /> Payment Split</h2>
           <button onClick={() => setEditingPayment("new")} className="inline-flex min-h-9 items-center gap-1 rounded-xl bg-ink px-3 text-xs font-bold text-white dark:bg-coral"><Plus size={14} /> Add</button>
@@ -791,7 +791,7 @@ export function EventDetailPage() {
         ) : null}
       </section>
 
-      <section ref={captionRef} className="scroll-mt-20 space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft lg:col-start-1 dark:bg-slate-900">
+      <section ref={captionRef} className="surface-card scroll-mt-20 space-y-3 p-4 lg:col-start-1">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-black text-ink dark:text-white">Instagram Caption</h2>
           <button onClick={() => setCaption(generateInstagramCaption(event))} className="rounded-xl bg-ink px-3 py-2 text-xs font-bold text-white dark:bg-coral">Generate</button>

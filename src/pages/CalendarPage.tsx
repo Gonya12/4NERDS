@@ -159,7 +159,7 @@ export function CalendarPage() {
   }
 
   return (
-    <div className="space-y-4 lg:mx-auto lg:max-w-7xl">
+    <div className="page-shell space-y-4">
       <header className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-bold text-coral">All Upcoming Events</p>

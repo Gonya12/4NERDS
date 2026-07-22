@@ -72,7 +72,7 @@ export function PastEventsPage() {
   }
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
+    <div className="page-shell">
       <header>
         <p className="text-sm font-bold text-coral">Insights</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Past Events</h1>

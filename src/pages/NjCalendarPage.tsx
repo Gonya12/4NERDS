@@ -194,7 +194,7 @@ export function NjCalendarPage() {
     .sort((a, b) => a.startDate.localeCompare(b.startDate)), [savedEvents]);
 
   return (
-    <div className="space-y-4 lg:mx-auto lg:max-w-6xl">
+    <div className="page-shell space-y-4 lg:max-w-6xl">
       <header className="rounded-3xl bg-ink p-5 text-white shadow-soft dark:bg-slate-900">
         <div className="flex items-start justify-between gap-3">
           <div>

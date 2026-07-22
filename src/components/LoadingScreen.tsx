@@ -11,8 +11,8 @@ export function LoadingScreen({ label = "Loading data...", children }: { label?:
 
   return (
     <div className="min-w-0 max-w-full space-y-4" aria-busy="true">
-      <div className="flex min-w-0 items-center gap-2 text-sm font-bold text-slate-500 dark:text-slate-400">
-        <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-coral" />
+      <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-sm font-bold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-night-850/80 dark:text-slate-400">
+        <span className="relative h-2.5 w-2.5 shrink-0 rounded-full bg-coral before:absolute before:inset-0 before:animate-ping before:rounded-full before:bg-coral/50" />
         <span className="min-w-0 break-words">{slow ? "Still loading data..." : label}</span>
       </div>
       {children || (

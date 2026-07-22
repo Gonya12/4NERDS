@@ -11,18 +11,21 @@ const items = [
 
 export function BottomNav() {
   return (
-    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-2 pt-2 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-950/95">
-      <div className="mx-auto grid max-w-md grid-cols-5">
+    <nav aria-label="Primary navigation" className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200/80 bg-white/90 px-2 pt-1.5 shadow-[0_-12px_36px_-24px_rgba(15,23,42,0.45)] backdrop-blur-xl lg:hidden dark:border-slate-800/90 dark:bg-night-950/92">
+      <div className="mx-auto grid max-w-md grid-cols-5 gap-1">
         {items.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-medium ${isActive ? "text-ink dark:text-white" : "text-slate-500 dark:text-slate-400"}`
-            }
+            className={({ isActive }) => `group relative flex min-h-[54px] min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-[11px] font-bold transition duration-180 ease-premium active:scale-95 ${isActive ? "text-orange-600 dark:text-orange-300" : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-night-850"}`}
           >
-            <Icon size={21} strokeWidth={2.2} />
-            {label}
+            {({ isActive }) => (
+              <>
+                <span className={`absolute inset-x-3 top-0 h-0.5 origin-center rounded-full bg-coral transition-transform duration-240 ${isActive ? "scale-x-100" : "scale-x-0"}`} />
+                <Icon size={21} strokeWidth={isActive ? 2.6 : 2.1} className={`transition-transform duration-180 ${isActive ? "-translate-y-0.5" : "group-hover:-translate-y-0.5"}`} />
+                <span className="max-w-full truncate">{label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </div>

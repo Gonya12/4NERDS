@@ -210,20 +210,20 @@ export function NeedsToBuyPage() {
   }, [items, query, sort, filter, buyerFilter]);
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
+    <div className="page-shell">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-bold text-coral">Supplies</p>
+          <p className="eyebrow">Supplies</p>
           <h1 className="text-3xl font-black text-ink dark:text-white">Needs to Buy</h1>
         </div>
-        <button onClick={() => openForm()} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Plus size={18} /> Add Item</button>
+        <button onClick={() => openForm()} className="btn-primary"><Plus size={18} /> Add Item</button>
       </header>
       <SyncStatusBadge syncing={syncing && items.length > 0} />
 
       {message ? <p className="rounded-2xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">{message}</p> : null}
       {error ? <ErrorState message="Needs to Buy could not be refreshed." details={error} onRetry={load} onSync={load} /> : null}
 
-      <section className="grid gap-3 rounded-2xl bg-white/90 p-3 shadow-soft md:grid-cols-[1fr_160px_160px_180px] dark:bg-slate-900">
+      <section className="surface-card grid gap-3 p-3 md:grid-cols-[1fr_160px_160px_180px]">
         <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
           <Search size={17} className="text-slate-400" />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search items" className="min-w-0 flex-1 bg-transparent outline-none" />
@@ -249,9 +249,9 @@ export function NeedsToBuyPage() {
 
       {loading ? <LoadingScreen label="Loading items..."><section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} compact />)}</section></LoadingScreen> : null}
       {!loading && filtered.length === 0 ? <EmptyState title="No buy items yet." /> : null}
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="stagger-list grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {filtered.map((item) => (
-          <article key={item.id} onClick={() => openForm(item)} className={`cursor-pointer overflow-hidden rounded-2xl border p-3 shadow-soft transition hover:-translate-y-0.5 ${item.purchased ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/25" : "border-white/70 bg-white/90 dark:border-slate-800 dark:bg-slate-900"}`}>
+          <article key={item.id} onClick={() => openForm(item)} className={`interactive-card cursor-pointer overflow-hidden rounded-panel border p-3 shadow-card ${item.purchased ? "border-emerald-300 bg-gradient-to-br from-white to-emerald-50 dark:border-emerald-800 dark:from-night-850 dark:to-emerald-950/25" : "border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-night-850"}`}>
             <div className="relative">
               {item.imageUrl ? <img src={item.imageUrl} loading="lazy" decoding="async" alt="" className="aspect-[4/3] w-full rounded-xl bg-slate-100 object-contain dark:bg-slate-950" /> : <div className="flex aspect-[4/3] items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-950"><Package size={30} /></div>}
               <button onClick={(event) => { event.stopPropagation(); void togglePurchased(item); }} className={`absolute right-2 top-2 inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-xs font-black shadow-soft ${item.purchased ? "bg-emerald-600 text-white" : "bg-white text-slate-700 dark:bg-slate-800 dark:text-white"}`} aria-label={item.purchased ? "Mark as needed" : "Mark as purchased"}>
@@ -273,13 +273,13 @@ export function NeedsToBuyPage() {
 
       {editing ? (
         <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
-          <section className="mx-auto max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+          <section role="dialog" aria-modal="true" aria-labelledby="buy-item-title" className="mx-auto max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-panel border border-slate-200 bg-white p-5 shadow-elevated dark:border-slate-800 dark:bg-night-850">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-bold text-coral">Needs to Buy</p>
-                <h2 className="text-2xl font-black text-ink dark:text-white">{editing === "new" ? "Add Item" : "Edit Item"}</h2>
+                <p className="eyebrow">Needs to Buy</p>
+                <h2 id="buy-item-title" className="text-2xl font-black text-ink dark:text-white">{editing === "new" ? "Add Item" : "Edit Item"}</h2>
               </div>
-              <button onClick={() => setEditing(null)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+              <button onClick={() => setEditing(null)} className="icon-button h-10 w-10 rounded-full" aria-label="Close item editor"><X size={18} /></button>
             </div>
             <div className="mt-4 space-y-3">
               <div className="flex gap-2">
@@ -313,23 +313,23 @@ export function NeedsToBuyPage() {
               </label>
             </div>
             <div className="mt-5 grid grid-cols-3 gap-2">
-              <button onClick={() => setEditing(null)} className="min-h-11 rounded-xl bg-slate-100 font-bold dark:bg-slate-800">Cancel</button>
-              {editing !== "new" ? <button onClick={async () => { await deleteBuyItem(editing.id); setEditing(null); await load(); }} className="min-h-11 rounded-xl bg-rose-50 font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"><Trash2 className="mx-auto" size={17} /></button> : null}
-              <button onClick={saveDraft} disabled={saving} className="col-span-1 min-h-11 rounded-xl bg-coral font-black text-white disabled:opacity-60">{saving ? "Saving..." : "Save"}</button>
+              <button onClick={() => setEditing(null)} className="btn-secondary">Cancel</button>
+              {editing !== "new" ? <button onClick={async () => { await deleteBuyItem(editing.id); setEditing(null); await load(); }} className="btn-danger" aria-label="Delete item"><Trash2 className="mx-auto" size={17} /></button> : null}
+              <button onClick={saveDraft} disabled={saving} className="btn-primary col-span-1">{saving ? "Saving..." : "Save"}</button>
             </div>
           </section>
         </div>
       ) : null}
       {buyerTarget ? (
         <div className="fixed inset-0 z-50 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
-          <section className="mx-auto w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+          <section role="dialog" aria-modal="true" aria-labelledby="buyer-title" className="mx-auto w-full max-w-sm rounded-panel border border-slate-200 bg-white p-5 shadow-elevated dark:border-slate-800 dark:bg-night-850">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-bold text-coral">Purchase</p>
-                <h2 className="text-2xl font-black text-ink dark:text-white">Who bought this?</h2>
+                <p className="eyebrow">Purchase</p>
+                <h2 id="buyer-title" className="text-2xl font-black text-ink dark:text-white">Who bought this?</h2>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{buyerTarget.title}</p>
               </div>
-              <button onClick={() => setBuyerTarget(null)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+              <button onClick={() => setBuyerTarget(null)} className="icon-button h-10 w-10 rounded-full" aria-label="Close buyer selection"><X size={18} /></button>
             </div>
             <div className="mt-5 grid gap-2">
               {workers.map((worker) => (

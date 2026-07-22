@@ -315,27 +315,27 @@ export function SalesControlPage() {
   const selectedEvent = events.find((event) => event.id === form.eventId);
 
   return (
-    <div className="w-full min-w-0 max-w-full space-y-5 overflow-x-hidden lg:mx-auto lg:max-w-7xl">
+    <div className="page-shell w-full min-w-0 max-w-full overflow-x-hidden">
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-bold text-coral">Sales</p>
+          <p className="eyebrow">Sales</p>
           <h1 className="text-3xl font-black text-ink dark:text-white">Sales Control</h1>
         </div>
-        <button onClick={() => { resetForm(); setMode("sale"); }} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-coral px-4 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
+        <button onClick={() => { resetForm(); setMode("sale"); }} className="btn-primary shrink-0"><Camera size={18} /> Add Sale</button>
       </header>
       <SyncStatusBadge syncing={syncing && sales.length > 0} />
       {loadError ? <ErrorState message="Sales could not be refreshed." details={loadError} onRetry={() => void load(0, false)} onSync={() => void load(0, false)} /> : null}
 
       <section className="grid min-w-0 grid-cols-3 gap-2 sm:gap-3">
-        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Total sales</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.sold)}</p></div>
-        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Total cost</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.bought)}</p></div>
-        <div className="min-w-0 rounded-2xl bg-white/90 p-3 shadow-soft sm:p-4 dark:bg-slate-900"><p className="text-xs text-slate-500">Profit</p><p className={`truncate text-sm font-black sm:text-base ${totals.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(totals.profit)}</p></div>
+        <div className="surface-card min-w-0 p-3 sm:p-4"><p className="text-xs text-slate-500">Total sales</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.sold)}</p></div>
+        <div className="surface-card min-w-0 p-3 sm:p-4"><p className="text-xs text-slate-500">Total cost</p><p className="truncate text-sm font-black sm:text-base">{formatMoney(totals.bought)}</p></div>
+        <div className="surface-card min-w-0 p-3 sm:p-4"><p className="text-xs text-slate-500">Profit</p><p className={`truncate text-sm font-black sm:text-base ${totals.profit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(totals.profit)}</p></div>
       </section>
 
       {message ? <p className="rounded-2xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{message}</p> : null}
 
       {mode === "sale" ? (
-        <section className="grid w-full min-w-0 max-w-full gap-4 overflow-hidden rounded-3xl bg-white/90 p-4 shadow-soft lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.55fr)] dark:bg-slate-900">
+        <section className="surface-card grid w-full min-w-0 max-w-full gap-4 overflow-hidden p-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.55fr)]">
           <div
             tabIndex={0}
             onPaste={(event) => {
@@ -411,7 +411,7 @@ export function SalesControlPage() {
         </section>
       ) : (
         <>
-          <section className="w-full min-w-0 max-w-full overflow-hidden rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900">
+          <section className="surface-card w-full min-w-0 max-w-full overflow-hidden p-3">
             <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <label className="flex w-full min-w-0 max-w-full items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-950/70">
               <Search size={17} className="text-slate-400" />
@@ -455,11 +455,11 @@ export function SalesControlPage() {
           </section>
           {loading ? <LoadingScreen label="Loading sales..."><section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{[1, 2, 3].map((item) => <SkeletonEventCard key={item} />)}</section></LoadingScreen> : null}
           {!loading && filtered.length === 0 ? <EmptyState title="No sales yet." /> : null}
-          <section className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="stagger-list grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {filtered.map((sale) => {
               const event = sale.eventId ? eventMap.get(sale.eventId) : undefined;
               return (
-                <article key={sale.id} onClick={() => editSale(sale)} className="min-w-0 max-w-full cursor-pointer overflow-hidden rounded-2xl bg-white/90 p-3 shadow-soft transition hover:-translate-y-0.5 dark:bg-slate-900">
+                <article key={sale.id} onClick={() => editSale(sale)} className="surface-card interactive-card min-w-0 max-w-full cursor-pointer overflow-hidden p-3">
                   {sale.imageUrl ? <img src={sale.imageUrl} loading="lazy" decoding="async" alt="" className="aspect-[4/5] w-full rounded-xl object-contain bg-slate-100 dark:bg-slate-950" /> : <div className="flex aspect-[4/5] items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-950">No image</div>}
                   <div className="mt-3 space-y-1 text-sm">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">

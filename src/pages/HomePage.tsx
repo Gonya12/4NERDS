@@ -1,4 +1,4 @@
-import { CalendarDays, CalendarSync, Camera, CheckCircle2, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
+import { CalendarDays, CalendarSync, Camera, CheckCircle2, ChevronDown, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
@@ -168,17 +168,20 @@ export function HomePage() {
   const checklistPercent = checklistItems.length ? Math.round((checklistItems.filter((item) => item.completed).length / checklistItems.length) * 100) : 0;
 
   return (
-    <div className="space-y-4 lg:mx-auto lg:max-w-7xl">
-      <header className="flex items-center justify-between gap-3 rounded-2xl bg-white/90 px-4 py-3 shadow-soft dark:bg-slate-900">
+    <div className="page-shell space-y-4">
+      <header className="surface-card flex items-center justify-between gap-3 px-4 py-3 sm:px-5">
         <div className="min-w-0">
-          <h1 className="text-xl font-black leading-tight text-ink dark:text-white">4 Nerds</h1>
-          <p className="truncate text-xs font-bold text-slate-400 dark:text-slate-500">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-coral shadow-[0_0_0_5px_rgba(249,115,22,0.12)]" />
+            <h1 className="text-xl font-black leading-tight text-ink dark:text-white">4 Nerds</h1>
+          </div>
+          <p className="mt-1 truncate pl-[18px] text-xs font-bold text-slate-400 dark:text-slate-500">
             {syncing || syncMessage ? syncMessage || "Syncing..." : "Dashboard"}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button onClick={() => setShowLegend(true)} className="inline-flex min-h-10 items-center gap-1 rounded-full bg-slate-100 px-3 text-xs font-bold text-ink dark:bg-slate-800 dark:text-white"><HelpCircle size={15} /> Legend</button>
-          <Link to="/settings" className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-ink dark:bg-slate-800 dark:text-white" aria-label="Settings"><Settings size={18} /></Link>
+          <button onClick={() => setShowLegend(true)} className="btn-secondary min-h-10 rounded-full px-3 text-xs"><HelpCircle size={15} /> Legend</button>
+          <Link to="/settings" className="icon-button h-10 w-10 rounded-full" aria-label="Settings"><Settings size={18} /></Link>
         </div>
       </header>
 
@@ -186,38 +189,38 @@ export function HomePage() {
       <SyncStatusBadge syncing={syncing && events.length > 0} />
       {syncError ? <ErrorState message="Dashboard data could not be refreshed." details={syncError} onRetry={() => void load(true)} onSync={() => void load(true)} /> : null}
 
-      <section className="grid grid-cols-3 gap-2">
-        <div className="rounded-2xl bg-sky-50 p-3 shadow-soft dark:bg-sky-950/30">
-          <CalendarDays className="text-sky-600 dark:text-sky-300" size={18} />
+      <section aria-label="Dashboard summary" className="stagger-list grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="relative overflow-hidden rounded-panel border border-sky-200/70 bg-gradient-to-br from-white to-sky-50 p-3 shadow-card dark:border-sky-900/60 dark:from-night-850 dark:to-sky-950/25 sm:p-4">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-sky-100 text-sky-600 dark:bg-sky-950/60 dark:text-sky-300"><CalendarDays size={17} /></span>
           {loading && !events.length ? <div className="mt-3 h-6 w-10 animate-pulse rounded bg-sky-200 dark:bg-sky-900" /> : <p className="mt-2 text-xl font-black text-ink dark:text-white">{plannedDayKeys.size}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Planned</p>
         </div>
-        <div className="rounded-2xl bg-emerald-50 p-3 shadow-soft dark:bg-emerald-950/30">
-          <CheckCircle2 className="text-emerald-600 dark:text-emerald-300" size={18} />
+        <div className="relative overflow-hidden rounded-panel border border-emerald-200/70 bg-gradient-to-br from-white to-emerald-50 p-3 shadow-card dark:border-emerald-900/60 dark:from-night-850 dark:to-emerald-950/25 sm:p-4">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300"><CheckCircle2 size={17} /></span>
           {loading && !events.length ? <div className="mt-3 h-6 w-10 animate-pulse rounded bg-emerald-200 dark:bg-emerald-900" /> : <p className="mt-2 text-xl font-black text-ink dark:text-white">{confirmedDayKeys.size}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Days Confirmed</p>
         </div>
-        <div className="rounded-2xl bg-orange-50 p-3 shadow-soft dark:bg-orange-950/30">
-          <DollarSign className="text-orange-600 dark:text-orange-300" size={18} />
+        <div className="relative overflow-hidden rounded-panel border border-orange-200/70 bg-gradient-to-br from-white to-orange-50 p-3 shadow-card dark:border-orange-900/60 dark:from-night-850 dark:to-orange-950/25 sm:p-4">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-300"><DollarSign size={17} /></span>
           {loading && !events.length ? <div className="mt-3 h-6 w-16 animate-pulse rounded bg-orange-200 dark:bg-orange-900" /> : <p className="mt-2 text-base font-black text-ink dark:text-white">{formatMoney(projectedCosts)}</p>}
           <p className="text-[11px] font-bold leading-tight text-slate-500 dark:text-slate-400">Upcoming Cost</p>
         </div>
       </section>
 
-      <section aria-label="Quick actions" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <Link to="/events/new" className="flex min-h-16 items-center gap-3 rounded-2xl bg-coral p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98]">
+      <section aria-label="Quick actions" className="stagger-list grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+        <Link to="/events/new" className="group flex min-h-16 items-center gap-3 rounded-panel bg-gradient-to-br from-brand-500 to-brand-600 p-3 text-white shadow-glow transition duration-240 ease-premium hover:-translate-y-1 hover:brightness-105 active:scale-[0.98]">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><Plus size={20} /></span>
           <span className="text-sm font-black leading-tight">Add Event</span>
         </Link>
-        <Link to="/sales" className="flex min-h-16 items-center gap-3 rounded-2xl bg-ink p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98] dark:bg-slate-900">
+        <Link to="/sales" className="group flex min-h-16 items-center gap-3 rounded-panel bg-gradient-to-br from-night-800 to-night-950 p-3 text-white shadow-card transition duration-240 ease-premium hover:-translate-y-1 hover:shadow-elevated active:scale-[0.98]">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10"><Camera size={20} /></span>
           <span className="text-sm font-black leading-tight">Sales Control</span>
         </Link>
-        <Link to="/buy" className="flex min-h-16 items-center gap-3 rounded-2xl bg-white p-3 text-ink shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98] dark:bg-slate-900 dark:text-white">
+        <Link to="/buy" className="surface-card interactive-card flex min-h-16 items-center gap-3 p-3 text-ink dark:text-white">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600 dark:bg-orange-950/50 dark:text-orange-300"><Package size={20} /></span>
           <span className="text-sm font-black leading-tight">Needs to Buy</span>
         </Link>
-        <Link to="/nj-calendar" className="flex min-h-16 items-center gap-3 rounded-2xl bg-sky-600 p-3 text-white shadow-soft transition hover:-translate-y-0.5 active:scale-[0.98]">
+        <Link to="/nj-calendar" className="group flex min-h-16 items-center gap-3 rounded-panel bg-gradient-to-br from-sky-500 to-cyan-700 p-3 text-white shadow-card transition duration-240 ease-premium hover:-translate-y-1 hover:shadow-elevated active:scale-[0.98]">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><CalendarSync size={20} /></span>
           <span className="text-sm font-black leading-tight">NJ Calendar</span>
         </Link>
@@ -226,19 +229,20 @@ export function HomePage() {
       <section>
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
+            <p className="eyebrow">Your schedule</p>
             <h2 className="text-xl font-black text-ink dark:text-white">Upcoming Planned Events</h2>
             <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
               {plannedSummary.count} planned{plannedSummary.totalCost > 0 ? ` · ${formatMoney(plannedSummary.totalCost)} total · ${formatMoney(plannedSummary.totalPaid)} paid · ${formatMoney(plannedSummary.totalRemaining)} left` : ""}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => void load(true)} disabled={syncing} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-ink shadow-soft disabled:opacity-60 dark:bg-slate-900 dark:text-white">Sync</button>
-            <Link to="/events" className="text-sm font-bold text-coral">Open Full Calendar</Link>
+            <button onClick={() => void load(true)} disabled={syncing} className="btn-secondary min-h-10 rounded-full px-3 text-xs">Sync</button>
+            <Link to="/events" className="hidden text-sm font-bold text-coral sm:inline">Full Calendar</Link>
           </div>
         </div>
-        <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+        <div className="scrollbar-none mb-3 flex gap-2 overflow-x-auto pb-1">
           {(["all", "applied", "paid", "needs_payment"] as PlannedFilter[]).map((filter) => (
-            <button key={filter} onClick={() => setPlannedFilter(filter)} className={`min-h-9 shrink-0 rounded-full px-3 text-xs font-black ${plannedFilter === filter ? "bg-ink text-white dark:bg-coral" : "bg-white text-slate-600 shadow-soft dark:bg-slate-900 dark:text-slate-300"}`}>
+            <button key={filter} onClick={() => setPlannedFilter(filter)} className={`min-h-10 shrink-0 rounded-full border px-3 text-xs font-black transition duration-180 active:scale-95 ${plannedFilter === filter ? "border-orange-500 bg-coral text-white shadow-glow" : "border-slate-200 bg-white/90 text-slate-600 shadow-sm hover:border-orange-300 dark:border-slate-800 dark:bg-night-850 dark:text-slate-300"}`}>
               {plannedFilterLabel(filter)}
             </button>
           ))}
@@ -246,19 +250,19 @@ export function HomePage() {
         {loading ? <LoadingScreen label="Loading dashboard events...">{skeletonCards}</LoadingScreen> : plannedUpcoming.length === 0 ? (
           <EmptyState title="No planned events yet." action={<Link to="/events" className="rounded-lg bg-ink px-4 py-3 text-sm font-bold text-white dark:bg-coral">View All Upcoming Events</Link>} />
         ) : (
-          <div className="space-y-3">
+          <div className="stagger-list space-y-3">
             {plannedGroups.map((group, index) => (
-              <details key={group.monthKey} open={index < 2} className="rounded-2xl bg-white/90 p-3 shadow-soft dark:bg-slate-900">
-                <summary className="cursor-pointer list-none">
+              <details key={group.monthKey} open={index < 2} className="group/month surface-card overflow-hidden p-3 transition duration-240 open:shadow-elevated sm:p-4">
+                <summary className="cursor-pointer list-none rounded-xl outline-none transition hover:bg-slate-50/80 focus-visible:ring-2 focus-visible:ring-coral/30 dark:hover:bg-night-800/70">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-black text-ink dark:text-white">{group.label}</h3>
                       <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">{group.summary.count} events{group.summary.totalCost > 0 ? ` · ${formatMoney(group.summary.totalCost)} total · ${formatMoney(group.summary.totalPaid)} paid · ${formatMoney(group.summary.totalRemaining)} left` : ""}</p>
                     </div>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500 dark:bg-slate-800 dark:text-slate-300">{group.entries.length}</span>
+                    <span className="inline-flex h-8 items-center gap-1 rounded-full bg-slate-100 px-3 text-xs font-black text-slate-500 dark:bg-night-800 dark:text-slate-300">{group.entries.length}<ChevronDown size={14} className="transition-transform duration-240 group-open/month:rotate-180" /></span>
                   </div>
                 </summary>
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div className={`stagger-list mt-3 grid gap-3 ${group.entries.length === 1 ? "max-w-2xl" : group.entries.length === 2 ? "md:grid-cols-2" : "md:grid-cols-2 xl:grid-cols-3"}`}>
                   {group.entries.map((entry) => (
                     <EventCard key={entry.event.id} event={entry.event} workers={workers} compact />
                   ))}
@@ -267,7 +271,7 @@ export function HomePage() {
             ))}
           </div>
         )}
-        <Link to="/events" className="mt-3 inline-flex min-h-10 items-center rounded-full bg-white px-4 text-xs font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white">Open Full Calendar</Link>
+        <Link to="/events" className="btn-secondary mt-3 min-h-10 rounded-full px-4 text-xs">Open Full Calendar</Link>
       </section>
 
       {highlighted.length > 0 ? (
@@ -277,37 +281,37 @@ export function HomePage() {
         </section>
       ) : null}
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="stagger-list grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="surface-card p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">Upcoming events</p>
           <p className="mt-2 text-xl font-black text-ink dark:text-white">{upcoming.length}</p>
         </div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="surface-card p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">Workers scheduled</p>
           <p className="mt-2 text-xl font-black text-ink dark:text-white">{workersScheduled}</p>
         </div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="surface-card p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">Profit this month</p>
           <p className={`mt-2 text-xl font-black ${monthlyProfit >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(monthlyProfit)}</p>
         </div>
-        <div className="rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+        <div className="surface-card p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">Checklist completion</p>
           <p className="mt-2 text-xl font-black text-ink dark:text-white">{checklistPercent}%</p>
         </div>
       </section>
 
-      <button onClick={() => navigate("/sales?mode=sale")} className="fixed bottom-24 right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-full bg-coral text-white shadow-2xl transition active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale">
+      <button onClick={() => navigate("/sales?mode=sale")} className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-glow transition duration-180 hover:-translate-y-1 hover:brightness-105 active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale">
         <Camera size={24} />
       </button>
       {showLegend ? (
         <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
-          <section className="mx-auto w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+          <section role="dialog" aria-modal="true" aria-labelledby="legend-title" className="mx-auto w-full max-w-sm rounded-panel border border-slate-200 bg-white p-5 shadow-elevated dark:border-slate-800 dark:bg-night-850">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-bold text-coral">Guide</p>
-                <h2 className="text-2xl font-black text-ink dark:text-white">Event Stage Legend</h2>
+                <p className="eyebrow">Guide</p>
+                <h2 id="legend-title" className="text-2xl font-black text-ink dark:text-white">Event Stage Legend</h2>
               </div>
-              <button onClick={() => setShowLegend(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+              <button onClick={() => setShowLegend(false)} className="icon-button h-10 w-10 rounded-full" aria-label="Close legend"><X size={18} /></button>
             </div>
             <div className="mt-4 space-y-2 text-sm font-bold text-slate-600 dark:text-slate-300">
               {(["new", "applied", "paid", "past"] as const).map((stage) => (

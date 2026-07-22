@@ -20,7 +20,7 @@ export function FlyerGalleryPage() {
     .sort((a, b) => b.startDate.localeCompare(a.startDate)), [events, query]);
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-7xl">
+    <div className="page-shell">
       <header>
         <p className="text-sm font-bold text-coral">Archive</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">Past Flyers</h1>

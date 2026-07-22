@@ -230,13 +230,13 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-5 lg:mx-auto lg:max-w-6xl">
+    <div className="page-shell lg:max-w-6xl">
       <header>
-        <p className="text-sm font-bold text-coral">Settings</p>
+        <p className="eyebrow">Settings</p>
         <h1 className="text-3xl font-black text-ink dark:text-white">4 Nerds Planner</h1>
       </header>
 
-      <section className="rounded-2xl bg-ink p-4 text-white shadow-soft dark:bg-slate-900">
+      <section className="relative overflow-hidden rounded-panel border border-white/10 bg-gradient-to-br from-night-800 to-night-950 p-5 text-white shadow-elevated">
         <p className="text-sm text-slate-300">App mode</p>
         <p className="mt-1 text-xl font-black">{syncStatus.appMode}</p>
         <p className="mt-2 inline-flex rounded-full bg-white/10 px-3 py-1 text-xs font-bold">
@@ -248,7 +248,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="text-sm font-bold text-coral">Imports</p>
           <h2 className="font-black text-ink dark:text-white">Calendar Feeds</h2>
@@ -261,7 +261,7 @@ export function SettingsPage() {
         <a href={njPokemonEventsMap.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><MapPinned size={17} /> Open NJ Pokémon Events Map</a>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-bold text-coral">Team Sync</p>
@@ -330,7 +330,7 @@ export function SettingsPage() {
         <SyncStatusBadge syncing={syncBusy} label={syncMessage || "Syncing..."} />
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="text-sm font-bold text-coral">Developer Debug</p>
           <h2 className="font-black text-ink dark:text-white">iPhone / PWA Status</h2>
@@ -370,7 +370,7 @@ export function SettingsPage() {
         ) : null}
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="text-sm font-bold text-coral">Appearance</p>
           <h2 className="font-black text-ink dark:text-white">Theme</h2>
@@ -388,7 +388,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="text-sm font-bold text-coral">Tools</p>
           <h2 className="font-black text-ink dark:text-white">Planner Utilities</h2>
@@ -399,7 +399,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="inline-flex items-center gap-1 text-sm font-bold text-coral"><Sparkles size={16} /> Flyer Prompts</p>
           <h2 className="font-black text-ink dark:text-white">Brand Defaults</h2>
@@ -419,7 +419,7 @@ export function SettingsPage() {
         <button onClick={saveFlyerDefaults} className="min-h-11 w-full rounded-xl bg-coral text-sm font-black text-white">Save Flyer Defaults</button>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div>
           <p className="text-sm font-bold text-coral">Smart Notifications</p>
           <h2 className="font-black text-ink dark:text-white">Local Reminders</h2>
@@ -429,7 +429,7 @@ export function SettingsPage() {
         <button onClick={scheduleSmartReminders} className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><Bell size={16} /> Schedule Smart Reminders</button>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <h2 className="font-black text-ink dark:text-white">Manage Workers</h2>
         <div className="flex gap-2">
           <input value={newWorker} onChange={(e) => setNewWorker(e.target.value)} placeholder="Add worker" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3" />
@@ -453,7 +453,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-2xl bg-white/90 p-4 shadow-soft dark:bg-slate-900">
+      <section className="surface-card space-y-3 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-bold text-coral">Common Locations</p>

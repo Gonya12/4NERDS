@@ -24,7 +24,7 @@ const labels: Record<string, string> = {
 
 export function StatusChip({ value }: { value: RegistrationStatus | AttendanceStatus | Confidence | "review" }) {
   return (
-    <span className={`inline-flex min-h-7 items-center rounded-full px-3 text-xs font-semibold ${styles[value] || styles.unknown}`}>
+    <span className={`status-pill ${styles[value] || styles.unknown}`}>
       {labels[value] || value.charAt(0).toUpperCase() + value.slice(1)}
     </span>
   );
