@@ -1,6 +1,6 @@
 import type { BusinessExpense, Event, InventoryPurchase, SalesRecord } from "../types/models";
 
-export type FinancialDateRange = "this_week" | "last_week" | "this_month" | "last_month" | "last_3_months" | "this_year" | "custom";
+export type FinancialDateRange = "this_week" | "last_week" | "this_month" | "last_month" | "last_3_months" | "this_year" | "all_time" | "custom";
 
 export const financialDateRangeLabels: Record<FinancialDateRange, string> = {
   this_week: "This Week",
@@ -9,6 +9,7 @@ export const financialDateRangeLabels: Record<FinancialDateRange, string> = {
   last_month: "Last Month",
   last_3_months: "Last 3 Months",
   this_year: "This Year",
+  all_time: "All Time",
   custom: "Custom Range"
 };
 
@@ -40,6 +41,9 @@ export function financialDateBounds(range: FinancialDateRange, customStart: stri
     end = now;
   } else if (range === "this_year") {
     start = new Date(now.getFullYear(), 0, 1);
+    end = now;
+  } else if (range === "all_time") {
+    start = new Date(0);
     end = now;
   } else {
     start = new Date(`${customStart}T00:00:00`);

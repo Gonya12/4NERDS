@@ -1,4 +1,4 @@
-import { BarChart3, Camera, ChartArea, ChartBarStacked, ChartPie, FileSpreadsheet, LineChart, PackagePlus, Plus, Receipt, TrendingUp } from "lucide-react";
+import { BarChart3, Camera, ChartArea, ChartBarStacked, ChartPie, FileSpreadsheet, LineChart, Maximize2, PackagePlus, Plus, Receipt, TrendingUp, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, Worker } from "../../types/models";
 import { filterFinancialRecords, financialDateRangeLabels, type FinancialDateRange } from "../../utils/financialDateRange";
@@ -48,6 +48,7 @@ export function SalesAnalyticsPanel(props: Props) {
   const [chartGrouping, setChartGrouping] = useState<ChartGrouping>("daily");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("line");
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
+  const [chartExpanded, setChartExpanded] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string }>();
   const filtered = useMemo(() => filterFinancialRecords(props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd), [props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd]);
   const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events), [filtered]);
@@ -149,6 +150,24 @@ export function SalesAnalyticsPanel(props: Props) {
   useEffect(() => {
     if (!availableStyles.includes(chartStyle)) setChartStyle(availableStyles[0]);
   }, [availableStyles, chartStyle]);
+  const metricLabels: Record<ChartMetric, string> = {
+    revenue: "Revenue", gross_profit: "Gross Profit", net_profit: "Net Profit", expenses: "Expenses",
+    inventory: "Inventory Purchases", unsold_inventory: "Unsold Inventory Cost", items_sold: "Items Sold",
+    average_sale: "Average Sale", owner_profit: "Profit by Owner"
+  };
+  const groupingOptions: [ChartGrouping, string][] = chartMetric === "expenses" || chartMetric === "inventory" || chartMetric === "unsold_inventory"
+    ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["category", "By Category"]]
+    : chartMetric === "owner_profit"
+      ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["owner", "By Owner"]]
+      : [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["category", "By Category"], ["owner", "By Owner"], ["payment", "By Payment Method"]];
+  useEffect(() => {
+    if (!groupingOptions.some(([value]) => value === chartGrouping)) setChartGrouping(groupingOptions[0][0]);
+  }, [chartMetric, chartGrouping]);
+  const chartRecordCount = chartMetric === "expenses" ? filtered.expenses.length : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? filtered.purchases.length : filtered.sales.length;
+  const chartTotal = chartMetric === "average_sale"
+    ? (filtered.sales.length ? filtered.sales.reduce((sum, sale) => sum + Number(sale.soldPrice || 0), 0) / filtered.sales.length : 0)
+    : chartRows.reduce((sum, row) => sum + row.value, 0);
+  const compactValue = (value: number) => chartMetric === "items_sold" ? value.toFixed(1) : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: Math.abs(value) >= 1000 ? "compact" : "standard", maximumFractionDigits: Math.abs(value) >= 1000 ? 1 : 2 }).format(value);
 
   const recentRecords = useMemo(() => {
     const rows = [
@@ -173,6 +192,23 @@ export function SalesAnalyticsPanel(props: Props) {
     ["Unsold inventory cost", overview.unsoldInventoryCost, "text-cyan-600"], ["Net profit", overview.netProfit, overview.netProfit >= 0 ? "text-emerald-600" : "text-rose-600"]
   ] as const;
 
+  function renderChart(expanded = false) {
+    const heightClass = expanded ? "h-[55vh] min-h-80" : "h-64 sm:h-72";
+    if (!chartRows.length) {
+      const action = chartMetric === "expenses" ? { label: "Add Expense", run: props.onAddExpense }
+        : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? { label: "Add Purchase", run: props.onAddPurchase }
+          : { label: "Add Sale", run: props.onAddSale };
+      return <div className={`flex ${heightClass} flex-col items-center justify-center rounded-xl bg-slate-50 p-5 text-center dark:bg-slate-950/70`}><BarChart3 size={32} className="text-slate-400" /><p className="mt-2 font-black text-ink dark:text-white">No records in this date range</p><p className="mt-1 max-w-sm text-xs text-slate-500">Add a matching record or choose a broader date range to populate this chart.</p><button onClick={action.run} className="mt-3 min-h-11 rounded-xl bg-coral px-4 text-sm font-black text-white">{action.label}</button></div>;
+    }
+    if (chartRows.length === 1) {
+      const row = chartRows[0];
+      return <div className={`flex ${heightClass} items-center justify-center rounded-xl bg-slate-50 p-4 dark:bg-slate-950/70`}><div className="w-full max-w-sm text-center"><p className="text-xs font-black uppercase tracking-wide text-slate-500">{row.label}</p><p className="mt-2 text-3xl font-black text-coral">{compactValue(row.value)}</p><div title={`${row.label}: ${compactValue(row.value)}`} className="mx-auto mt-4 h-24 w-16 rounded-t-xl bg-coral shadow-lg shadow-orange-950/10" /><p className="mt-3 text-xs text-slate-500">{chartRecordCount} recorded {chartRecordCount === 1 ? "record" : "records"} · Add more records to see a trend.</p></div></div>;
+    }
+    if (visibleChartStyle === "line" || visibleChartStyle === "area") return <div className="overflow-hidden rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70"><svg viewBox="0 0 600 180" className={`${heightClass} w-full`} role="img" aria-label={`${chartMetric} chart`}>{[40, 80, 120, 160].map((y) => <line key={y} x1="20" y1={y} x2="580" y2={y} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeWidth="1" />)}{visibleChartStyle === "area" ? <polygon points={`20,160 ${linePoints} 580,160`} fill="#F45D1333" /> : null}<polyline points={linePoints} fill="none" stroke="#F45D13" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />{chartRows.map((row, index) => { const [x, y] = linePoints.split(" ")[index].split(","); return <circle key={row.key} cx={x} cy={y} r="6" fill="#F45D13"><title>{row.label}: {compactValue(row.value)}</title></circle>; })}</svg><div className="flex justify-between gap-2 overflow-hidden px-2 text-[10px] text-slate-500">{chartRows.slice(-6).map((row) => <span className="truncate" key={row.key}>{row.label}</span>)}</div></div>;
+    if (visibleChartStyle === "donut") return <div className={`grid ${heightClass} items-center gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-950/70`}><div className="mx-auto flex size-40 items-center justify-center rounded-full" style={{ background: `conic-gradient(${donutGradient})` }}><div className="flex size-24 items-center justify-center rounded-full bg-white text-center text-sm font-black dark:bg-slate-900">{compactValue(donutTotal)}<br />Total</div></div><div className="max-h-52 space-y-2 overflow-y-auto">{chartRows.map((row, index) => <div key={row.key} title={`${row.label}: ${compactValue(row.value)}`} className="flex items-center gap-2 text-xs"><span className="size-3 rounded-full" style={{ backgroundColor: donutColors[index % donutColors.length] }} /><span className="min-w-0 flex-1 truncate font-bold">{row.label}</span><span>{donutTotal ? `${(Math.max(0, row.value) / donutTotal * 100).toFixed(1)}%` : "0%"}</span><span>{compactValue(row.value)}</span></div>)}</div></div>;
+    return <div className={`flex ${heightClass} items-end justify-center gap-3 overflow-x-auto rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70`}>{chartRows.map((row, index) => <div key={row.key} title={`${row.label}: ${compactValue(row.value)}`} className="flex min-w-14 max-w-24 flex-1 flex-col items-center justify-end gap-1"><span className="text-[10px] font-bold">{compactValue(row.value)}</span>{visibleChartStyle === "stacked" && row.segments.length ? <div className="flex w-12 flex-col-reverse overflow-hidden rounded-t-lg" style={{ height: `${Math.max(6, Math.abs(row.value) / maxChart * (expanded ? 260 : 170))}px` }}>{row.segments.map((segment, segmentIndex) => <div key={segment.label} title={`${segment.label}: ${compactValue(segment.value)}`} style={{ height: `${Math.abs(segment.value) / Math.max(0.01, Math.abs(row.value)) * 100}%`, backgroundColor: donutColors[segmentIndex % donutColors.length] }} />)}</div> : <div className="w-12 rounded-t-lg" style={{ height: `${Math.max(6, Math.abs(row.value) / maxChart * (expanded ? 260 : 170))}px`, backgroundColor: donutColors[index % donutColors.length] }} />}<span className="max-w-20 truncate text-[10px] text-slate-500">{row.label}</span></div>)}</div>;
+  }
+
   return (
     <div className="space-y-4">
       <section className="surface-card space-y-3 p-3 sm:p-4">
@@ -184,11 +220,13 @@ export function SalesAnalyticsPanel(props: Props) {
       </section>
 
       <section className="surface-card space-y-3 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><BarChart3 className="text-coral" size={20} /></div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><button onClick={() => setChartExpanded(true)} className="inline-flex min-h-9 items-center gap-1 rounded-lg bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Maximize2 size={15} /> Expand</button></div>
+        <div className="grid gap-2 sm:grid-cols-3">
           <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["daily","Daily"],["weekly","Weekly"],["monthly","Monthly"],["event","Event"],["category","Category"],["owner","Owner"],["payment","Payment Method"]] as [ChartGrouping,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{groupingOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Date range<select value={props.dateRange} onChange={(event) => props.onDateRange(event.target.value as FinancialDateRange)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{Object.entries(financialDateRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         </div>
+        {props.dateRange === "custom" ? <div className="grid grid-cols-2 gap-2"><input type="date" aria-label="Custom start date" value={props.customStart} onChange={(event) => props.onCustomStart(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 bg-white p-2 text-sm dark:border-slate-800 dark:bg-slate-950" /><input type="date" aria-label="Custom end date" value={props.customEnd} onChange={(event) => props.onCustomEnd(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 bg-white p-2 text-sm dark:border-slate-800 dark:bg-slate-950" /></div> : null}
         <div>
           <p className="mb-1 text-xs font-black text-slate-500">Chart type</p>
           <div className="flex max-w-full flex-wrap gap-2" role="group" aria-label="Chart type">
@@ -204,17 +242,18 @@ export function SalesAnalyticsPanel(props: Props) {
             })}
           </div>
         </div>
-        {chartRows.length ? visibleChartStyle === "line" || visibleChartStyle === "area" ? <div className="overflow-hidden rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70"><svg viewBox="0 0 600 180" className="h-44 w-full" role="img" aria-label={`${chartMetric} chart`}>{visibleChartStyle === "area" ? <polygon points={`20,160 ${linePoints} 580,160`} fill="#F45D1333" /> : null}<line x1="20" y1="160" x2="580" y2="160" stroke="currentColor" className="text-slate-300 dark:text-slate-700" /><polyline points={linePoints} fill="none" stroke="#F45D13" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />{chartRows.map((row, index) => { const [x, y] = linePoints.split(" ")[index].split(","); return <circle key={row.key} cx={x} cy={y} r="6" fill="#F45D13"><title>{row.label}: {formatMoney(row.value)}</title></circle>; })}</svg><div className="flex justify-between gap-1 text-[10px] text-slate-500">{chartRows.slice(-6).map((row) => <span key={row.key}>{row.label}</span>)}</div></div>
-          : visibleChartStyle === "donut" ? <div className="grid items-center gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-950/70"><div className="mx-auto flex size-44 items-center justify-center rounded-full" style={{ background: `conic-gradient(${donutGradient})` }}><div className="flex size-24 items-center justify-center rounded-full bg-white text-center text-sm font-black dark:bg-slate-900">{formatMoney(donutTotal)}<br />Total</div></div><div className="space-y-2">{chartRows.map((row, index) => <div key={row.key} className="flex items-center gap-2 text-xs"><span className="size-3 rounded-full" style={{ backgroundColor: donutColors[index % donutColors.length] }} /><span className="min-w-0 flex-1 truncate font-bold">{row.label}</span><span>{formatMoney(row.value)}</span></div>)}</div></div>
-          : <div className="flex h-56 items-end gap-2 overflow-x-auto rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">{chartRows.map((row, index) => <div key={row.key} className="flex min-w-16 flex-1 flex-col items-center justify-end gap-1"><span className="text-[10px] font-bold">{chartMetric === "items_sold" ? row.value.toFixed(1) : formatMoney(row.value)}</span>{visibleChartStyle === "stacked" && row.segments.length ? <div className="flex w-full max-w-14 flex-col-reverse overflow-hidden rounded-t-lg" style={{ height: `${Math.max(4, Math.abs(row.value) / maxChart * 150)}px` }}>{row.segments.map((segment, segmentIndex) => <div key={segment.label} title={`${segment.label}: ${formatMoney(segment.value)}`} style={{ height: `${Math.abs(segment.value) / Math.max(0.01, Math.abs(row.value)) * 100}%`, backgroundColor: donutColors[segmentIndex % donutColors.length] }} />)}</div> : <div className="w-full max-w-14 rounded-t-lg bg-coral" style={{ height: `${Math.max(4, Math.abs(row.value) / maxChart * 150)}px`, backgroundColor: donutColors[index % donutColors.length] }} />}<span className="max-w-20 truncate text-[10px] text-slate-500">{row.label}</span></div>)}</div>
-          : <div className="flex h-44 items-center justify-center rounded-xl bg-slate-50 text-sm text-slate-500 dark:bg-slate-950/70">No records in this date range.</div>}
+        <div className="flex items-end justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800"><div><p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Total {metricLabels[chartMetric]}</p><p className="text-2xl font-black text-ink dark:text-white">{compactValue(chartTotal)}</p></div><p className="text-right text-xs text-slate-500">{chartRecordCount} recorded {chartRecordCount === 1 ? "record" : "records"}</p></div>
+        {renderChart()}
       </section>
 
-      <section className="grid grid-cols-2 gap-2">
-        <button onClick={props.onAddSale} className="btn-primary min-h-14"><Camera size={18} /> Add Sale</button>
-        <button onClick={props.onAddPurchase} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-sky-600 text-sm font-black text-white"><PackagePlus size={18} /> Add Purchase</button>
-        <button onClick={props.onAddExpense} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-amber-500 text-sm font-black text-white"><Receipt size={18} /> Add Expense</button>
-        <button onClick={props.onOpenSpreadsheet} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-ink text-sm font-black text-white dark:bg-slate-100 dark:text-ink"><FileSpreadsheet size={18} /> Spreadsheet</button>
+      <section className="surface-card space-y-2 p-3">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Quick Actions</p>
+        <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+          <button onClick={props.onAddSale} className="btn-primary min-h-11 px-2"><Camera size={17} /> Add Sale</button>
+          <button onClick={props.onAddPurchase} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-2 text-sm font-black text-white"><PackagePlus size={17} /> Add Purchase</button>
+          <button onClick={props.onAddExpense} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-500 px-2 text-sm font-black text-white"><Receipt size={17} /> Add Expense</button>
+          <button onClick={props.onOpenSpreadsheet} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-800 px-2 text-sm font-black text-white dark:bg-slate-100 dark:text-ink"><FileSpreadsheet size={17} /> Spreadsheet</button>
+        </div>
       </section>
 
       <section onClickCapture={(event) => {
@@ -233,6 +272,7 @@ export function SalesAnalyticsPanel(props: Props) {
           return <button key={row.id} onClick={() => props.onEditExpense(row.expense)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt={row.expense.description || "Expense receipt"} loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-700"><Receipt size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.expense.description}</p><p className="text-xs text-slate-500">{expenseCategoryLabels[row.expense.category]}</p><p className="text-xs font-black text-rose-600">-{formatMoney(row.expense.amount)}</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>;
         }) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-950/70">No matching records yet.</p>}</div>
       </section>
+      {chartExpanded ? <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm"><section role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" className="max-h-[95dvh] w-full max-w-5xl space-y-3 overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl dark:bg-slate-900"><div className="flex items-center justify-between gap-3"><div><p className="eyebrow">Expanded chart</p><h2 id="expanded-chart-title" className="text-xl font-black text-ink dark:text-white">{metricLabels[chartMetric]}</h2><p className="text-xs text-slate-500">{financialDateRangeLabels[props.dateRange]} · {chartRecordCount} records</p></div><button onClick={() => setChartExpanded(false)} aria-label="Close expanded chart" className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>{renderChart(true)}</section></div> : null}
       <ImageLightbox imageUrl={previewImage?.url} title={previewImage?.title || "Sales Control image"} onClose={() => setPreviewImage(undefined)} />
     </div>
   );
