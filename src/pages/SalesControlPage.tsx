@@ -271,6 +271,7 @@ export function SalesControlPage() {
 
   async function saveSale() {
     if (saleForm.soldPrice === "" || !saleForm.soldAt) { setMessage("Sold price and date sold are required."); return; }
+    if ([saleForm.soldPrice, saleForm.boughtPrice, saleForm.marketValue].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
     setBusy(true); setMessage("");
     try {
       const market = saleForm.marketValue === "" ? undefined : Number(saleForm.marketValue);
@@ -317,6 +318,7 @@ export function SalesControlPage() {
 
   async function savePurchase() {
     if (!purchaseForm.itemName.trim() || purchaseForm.totalCost === "") { setMessage("Item name and total cost are required."); return; }
+    if ([purchaseForm.totalCost, purchaseForm.marketValue, purchaseForm.soldPrice].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
     const quantity = Math.max(1, Number(purchaseForm.quantity || 1));
     const requestedSoldQuantity = Math.max(0, Number(purchaseForm.quantitySold || 0));
     if (requestedSoldQuantity > quantity) { setMessage("Quantity sold cannot be greater than the quantity purchased."); return; }
@@ -384,6 +386,7 @@ export function SalesControlPage() {
 
   async function saveExpense() {
     if (expenseForm.amount === "" || !expenseForm.expenseDate) { setMessage("Amount and date are required."); return; }
+    if (Number(expenseForm.amount) < 0) { setMessage("Expense amount cannot be negative."); return; }
     setBusy(true); setMessage("");
     try {
       const duplicate = expenseForm.category === "event_table_fee" && expenseForm.eventId && selectedEventCost(events.find((event) => event.id === expenseForm.eventId) as Event) > 0;
@@ -578,6 +581,7 @@ export function SalesControlPage() {
             onOpenExpense={openExpense}
             onDelete={deleteSpreadsheetRecord}
             onDuplicate={duplicateSpreadsheetRecord}
+            onAddRow={(type) => type === "sale" ? openSale() : type === "purchase" ? openPurchase() : openExpense()}
           />
         </div>
       </div>
