@@ -32,6 +32,23 @@ type PurchaseRow = {
   sold_event_id?: string | null;
   sold_payment_method?: InventoryPurchase["soldPaymentMethod"] | null;
   buyer_note?: string | null;
+  card_name?: string | null;
+  collector_number?: string | null;
+  card_set?: string | null;
+  card_language?: string | null;
+  card_condition?: InventoryPurchase["cardCondition"] | null;
+  sticker_price?: number | null;
+  grading_company?: string | null;
+  grade?: string | null;
+  certificate_number?: string | null;
+  front_image_url?: string | null;
+  front_image_path?: string | null;
+  back_image_url?: string | null;
+  back_image_path?: string | null;
+  scan_confidence?: InventoryPurchase["scanConfidence"] | null;
+  scan_status?: InventoryPurchase["scanStatus"] | null;
+  image_hash?: string | null;
+  scan_result?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -63,6 +80,23 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     soldEventId: row.sold_event_id || undefined,
     soldPaymentMethod: row.sold_payment_method || undefined,
     buyerNote: row.buyer_note || undefined,
+    cardName: row.card_name || undefined,
+    collectorNumber: row.collector_number || undefined,
+    cardSet: row.card_set || undefined,
+    cardLanguage: row.card_language || undefined,
+    cardCondition: row.card_condition || undefined,
+    stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
+    gradingCompany: row.grading_company || undefined,
+    grade: row.grade || undefined,
+    certificateNumber: row.certificate_number || undefined,
+    frontImageUrl: row.front_image_url || undefined,
+    frontImagePath: row.front_image_path || undefined,
+    backImageUrl: row.back_image_url || undefined,
+    backImagePath: row.back_image_path || undefined,
+    scanConfidence: row.scan_confidence || undefined,
+    scanStatus: row.scan_status || "not_scanned",
+    imageHash: row.image_hash || undefined,
+    scanResult: row.scan_result || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -95,6 +129,23 @@ function toRow(value: InventoryPurchase): PurchaseRow {
     sold_event_id: value.soldEventId || null,
     sold_payment_method: value.soldPaymentMethod || null,
     buyer_note: value.buyerNote || null,
+    card_name: value.cardName || null,
+    collector_number: value.collectorNumber || null,
+    card_set: value.cardSet || null,
+    card_language: value.cardLanguage || null,
+    card_condition: value.cardCondition || null,
+    sticker_price: value.stickerPrice ?? null,
+    grading_company: value.gradingCompany || null,
+    grade: value.grade || null,
+    certificate_number: value.certificateNumber || null,
+    front_image_url: value.frontImageUrl || value.imageUrl || null,
+    front_image_path: value.frontImagePath || value.imagePath || null,
+    back_image_url: value.backImageUrl || null,
+    back_image_path: value.backImagePath || null,
+    scan_confidence: value.scanConfidence || null,
+    scan_status: value.scanStatus || "not_scanned",
+    image_hash: value.imageHash || null,
+    scan_result: value.scanResult || null,
     created_at: value.createdAt,
     updated_at: value.updatedAt
   };
@@ -123,11 +174,13 @@ export async function listInventoryPurchases(limit = 100) {
   return values;
 }
 
-export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, imageFile?: File) {
+export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, imageFile?: File, backImageFile?: File) {
   const timestamp = nowIso();
   const recordId = input.id || id("purchase");
   let imageUrl = input.imageUrl;
   let imagePath = input.imagePath;
+  let backImageUrl = input.backImageUrl;
+  let backImagePath = input.backImagePath;
   if (imageFile) {
     if (isSupabaseConfigured && supabase) {
       const uploaded = await uploadFinancialImage(imageFile, "purchases", recordId);
@@ -136,6 +189,16 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     } else {
       imageUrl = await fileToDataUrl(imageFile);
       imagePath = undefined;
+    }
+  }
+  if (backImageFile) {
+    if (isSupabaseConfigured && supabase) {
+      const uploaded = await uploadFinancialImage(backImageFile, "purchases", `${recordId}-back`);
+      backImageUrl = uploaded.imageUrl;
+      backImagePath = uploaded.imagePath;
+    } else {
+      backImageUrl = await fileToDataUrl(backImageFile);
+      backImagePath = undefined;
     }
   }
   const value: InventoryPurchase = {
@@ -164,6 +227,23 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     soldEventId: input.soldEventId,
     soldPaymentMethod: input.soldPaymentMethod,
     buyerNote: input.buyerNote?.trim() || undefined,
+    cardName: input.cardName?.trim() || undefined,
+    collectorNumber: input.collectorNumber?.trim() || undefined,
+    cardSet: input.cardSet?.trim() || undefined,
+    cardLanguage: input.cardLanguage?.trim() || undefined,
+    cardCondition: input.cardCondition,
+    stickerPrice: input.stickerPrice,
+    gradingCompany: input.gradingCompany?.trim() || undefined,
+    grade: input.grade?.trim() || undefined,
+    certificateNumber: input.certificateNumber?.trim() || undefined,
+    frontImageUrl: input.frontImageUrl || imageUrl,
+    frontImagePath: input.frontImagePath || imagePath,
+    backImageUrl,
+    backImagePath,
+    scanConfidence: input.scanConfidence,
+    scanStatus: input.scanStatus || "not_scanned",
+    imageHash: input.imageHash,
+    scanResult: input.scanResult,
     createdAt: input.createdAt || timestamp,
     updatedAt: timestamp
   };

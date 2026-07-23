@@ -14,6 +14,8 @@ export type PokemonProductCategory = "raw_card" | "graded_card" | "sealed_produc
 export type PurchaseSource = "card_show" | "online" | "local" | "trade" | "personal_inventory" | "other";
 export type SalePaymentMethod = "cash" | "zelle" | "venmo" | "cash_app" | "paypal" | "card" | "trade" | "other";
 export type InventoryStatus = "in_stock" | "partially_sold" | "sold" | "personal";
+export type CardCondition = "Mint" | "Near Mint / NM" | "Lightly Played / LP" | "Moderately Played / MP" | "Heavily Played / HP" | "Damaged";
+export type CardScanStatus = "not_scanned" | "analyzing" | "needs_review" | "ready_to_import" | "imported" | "failed";
 export type BusinessExpenseCategory = "event_table_fee" | "gas" | "tolls" | "parking" | "food" | "supplies" | "shipping" | "packaging" | "card_show_equipment" | "software_subscription" | "advertising" | "other";
 
 export interface Organizer {
@@ -184,6 +186,23 @@ export interface InventoryPurchase {
   soldEventId?: string;
   soldPaymentMethod?: SalePaymentMethod;
   buyerNote?: string;
+  cardName?: string;
+  collectorNumber?: string;
+  cardSet?: string;
+  cardLanguage?: string;
+  cardCondition?: CardCondition;
+  stickerPrice?: number;
+  gradingCompany?: string;
+  grade?: string;
+  certificateNumber?: string;
+  frontImageUrl?: string;
+  frontImagePath?: string;
+  backImageUrl?: string;
+  backImagePath?: string;
+  scanConfidence?: "high" | "medium" | "low";
+  scanStatus?: CardScanStatus;
+  imageHash?: string;
+  scanResult?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

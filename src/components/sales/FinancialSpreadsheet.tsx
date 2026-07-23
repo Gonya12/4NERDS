@@ -7,7 +7,7 @@ import { ImageLightbox } from "./ImageLightbox";
 
 type RecordType = "sale" | "purchase" | "expense";
 type SortKey = "date" | "item" | "type" | "status" | "bought" | "sold" | "profit";
-type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "actions";
+type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "actions";
 
 type Props = {
   sales: SalesRecord[];
@@ -49,6 +49,8 @@ type UnifiedRow = {
   event: string;
   payment: string;
   notes: string;
+  cardName?: string; collectorNumber?: string; cardSet?: string; condition?: string; stickerPrice?: number;
+  gradingCompany?: string; grade?: string; certificateNumber?: string; scanConfidence?: string; scanStatus?: string;
   original: SalesRecord | InventoryPurchase | BusinessExpense;
 };
 
@@ -59,7 +61,11 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "target", label: "Target Buy Price" }, { key: "bought", label: "Bought Price" }, { key: "sold", label: "Sold Price" },
   { key: "profit", label: "Gross Profit" }, { key: "margin", label: "Margin" }, { key: "date", label: "Date" },
   { key: "source", label: "Source" }, { key: "worker", label: "Worker" }, { key: "event", label: "Event" },
-  { key: "payment", label: "Payment" }, { key: "notes", label: "Notes" }, { key: "actions", label: "Actions" }
+  { key: "payment", label: "Payment" }, { key: "notes", label: "Notes" },
+  { key: "cardName", label: "Card Name" }, { key: "collectorNumber", label: "Collector #" }, { key: "cardSet", label: "Set" },
+  { key: "condition", label: "Condition" }, { key: "stickerPrice", label: "Sticker Price" }, { key: "gradingCompany", label: "Grading Co." },
+  { key: "grade", label: "Grade" }, { key: "certificateNumber", label: "Certificate #" }, { key: "scanConfidence", label: "Scan Confidence" },
+  { key: "scanStatus", label: "Scan Status" }, { key: "actions", label: "Actions" }
 ];
 
 const defaultVisible = new Set<ColumnKey>(["photo", "item", "type", "quantity", "status", "bought", "sold", "profit", "date", "actions"]);
@@ -174,6 +180,12 @@ export function FinancialSpreadsheet(props: Props) {
     if (key === "event") return editing ? <select value={draft.eventId} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, eventId: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}><option value="">No event</option>{props.events.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : row.event;
     if (key === "payment") return editing && row.type !== "expense" ? <select value={draft.payment} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, payment: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}><option value="">Not set</option>{["cash", "zelle", "venmo", "cash_app", "paypal", "card", "trade", "other"].map((value) => <option key={value} value={value}>{value.replace("_", " ")}</option>)}</select> : row.payment;
     if (key === "notes") return editing ? <input value={draft.notes} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, notes: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : <span className="block max-w-44 truncate">{row.notes}</span>;
+    if (["cardName", "collectorNumber", "cardSet", "condition", "stickerPrice", "gradingCompany", "grade", "certificateNumber", "scanConfidence", "scanStatus"].includes(key)) {
+      if (row.type !== "purchase") return "—";
+      const purchase = row.original as InventoryPurchase;
+      const values: Record<string, string | number | undefined> = { cardName: purchase.cardName, collectorNumber: purchase.collectorNumber, cardSet: purchase.cardSet, condition: purchase.cardCondition, stickerPrice: purchase.stickerPrice, gradingCompany: purchase.gradingCompany, grade: purchase.grade, certificateNumber: purchase.certificateNumber, scanConfidence: purchase.scanConfidence, scanStatus: purchase.scanStatus?.replace(/_/g, " ") };
+      return key === "stickerPrice" && values[key] !== undefined ? formatMoney(Number(values[key])) : values[key] || "—";
+    }
     return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Check size={15} /></button>}<button onClick={() => row.type === "sale" ? props.onOpenSale(row.original as SalesRecord) : row.type === "purchase" ? props.onOpenPurchase(row.original as InventoryPurchase) : props.onOpenExpense(row.original as BusinessExpense)} title="Full editor" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
   }
 

@@ -7,6 +7,8 @@ import { useLocation } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { FinancialSpreadsheet } from "../components/sales/FinancialSpreadsheet";
+import { CardScanPanel } from "../components/sales/CardScanPanel";
+import { BatchInventoryImporter } from "../components/sales/BatchInventoryImporter";
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
@@ -97,6 +99,8 @@ export function SalesControlPage() {
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [imageFile, setImageFile] = useState<File>();
+  const [backImageFile, setBackImageFile] = useState<File>();
+  const [backPreviewUrl, setBackPreviewUrl] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [cameraError, setCameraError] = useState("");
   const [cameraReady, setCameraReady] = useState(false);
@@ -114,6 +118,7 @@ export function SalesControlPage() {
   const [exportScope, setExportScope] = useState<ExcelExportScope>("all");
   const [exportEventId, setExportEventId] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -132,7 +137,9 @@ export function SalesControlPage() {
     totalCost: "", marketValue: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
     purchaseSource: "" as PurchaseSource | "", seller: "", eventId: "", purchasedByWorkerId: "",
     notes: "", status: "in_stock" as InventoryStatus, quantitySold: "0", soldPrice: "", soldDate: "",
-    soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: ""
+    soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: "",
+    cardName: "", collectorNumber: "", cardSet: "", cardLanguage: "", cardCondition: "", stickerPrice: "",
+    gradingCompany: "", grade: "", certificateNumber: "", scanConfidence: "", scanStatus: "not_scanned", imageHash: "", scanResult: undefined as Record<string, unknown> | undefined
   });
   const blankExpense = () => ({
     expenseDate: localDateTime(), amount: "", category: "other" as BusinessExpenseCategory,
@@ -176,6 +183,9 @@ export function SalesControlPage() {
     if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     setImageFile(undefined);
+    if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl);
+    setBackImageFile(undefined);
+    setBackPreviewUrl("");
     setCameraError("");
     setImageStatus("");
     setImageRemoved(false);
@@ -220,8 +230,13 @@ export function SalesControlPage() {
       quantitySold: String(purchase.quantitySold || 0), soldPrice: purchase.soldPrice === undefined ? "" : String(purchase.soldPrice),
       soldDate: purchase.soldDate?.slice(0, 16) || "", soldByWorkerId: purchase.soldByWorkerId || "", soldEventId: purchase.soldEventId || "",
       soldPaymentMethod: purchase.soldPaymentMethod || "cash", buyerNote: purchase.buyerNote || ""
+      , cardName: purchase.cardName || "", collectorNumber: purchase.collectorNumber || "", cardSet: purchase.cardSet || "",
+      cardLanguage: purchase.cardLanguage || "", cardCondition: purchase.cardCondition || "", stickerPrice: purchase.stickerPrice === undefined ? "" : String(purchase.stickerPrice),
+      gradingCompany: purchase.gradingCompany || "", grade: purchase.grade || "", certificateNumber: purchase.certificateNumber || "",
+      scanConfidence: purchase.scanConfidence || "", scanStatus: purchase.scanStatus || "not_scanned", imageHash: purchase.imageHash || "", scanResult: purchase.scanResult
     } : blankPurchase());
     setPreviewUrl(purchase?.imageUrl || "");
+    setBackPreviewUrl(purchase?.backImageUrl || "");
     setEditor("purchase");
   }
 
@@ -374,6 +389,8 @@ export function SalesControlPage() {
 
   async function savePurchase() {
     if (!purchaseForm.itemName.trim() || purchaseForm.totalCost === "") { setMessage("Item name and total cost are required."); return; }
+    const duplicateCertificate = purchaseForm.certificateNumber.trim() && purchases.some((purchase) => purchase.id !== editingPurchase?.id && purchase.certificateNumber?.trim().toLowerCase() === purchaseForm.certificateNumber.trim().toLowerCase());
+    if (duplicateCertificate && !window.confirm("Possible duplicate slab certificate. Save anyway?")) return;
     if ([purchaseForm.totalCost, purchaseForm.marketValue, purchaseForm.soldPrice].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
     const quantity = Math.max(1, Number(purchaseForm.quantity || 1));
     const requestedSoldQuantity = Math.max(0, Number(purchaseForm.quantitySold || 0));
@@ -399,7 +416,14 @@ export function SalesControlPage() {
         soldDate: quantitySold && purchaseForm.soldDate ? safeDateFromLocalInput(purchaseForm.soldDate).toISOString() : linkedSales[0]?.soldAt,
         soldByWorkerId: purchaseForm.soldByWorkerId || undefined, soldEventId: purchaseForm.soldEventId || undefined,
         soldPaymentMethod: quantitySold ? purchaseForm.soldPaymentMethod : undefined, buyerNote: purchaseForm.buyerNote || undefined
-      }, imageFile);
+        , cardName: purchaseForm.cardName || undefined, collectorNumber: purchaseForm.collectorNumber || undefined,
+        cardSet: purchaseForm.cardSet || undefined, cardLanguage: purchaseForm.cardLanguage || undefined,
+        cardCondition: purchaseForm.cardCondition as InventoryPurchase["cardCondition"] || undefined,
+        stickerPrice: purchaseForm.stickerPrice === "" ? undefined : Number(purchaseForm.stickerPrice),
+        gradingCompany: purchaseForm.gradingCompany || undefined, grade: purchaseForm.grade || undefined,
+        certificateNumber: purchaseForm.certificateNumber || undefined, scanConfidence: purchaseForm.scanConfidence as InventoryPurchase["scanConfidence"] || undefined,
+        scanStatus: (purchaseForm.scanStatus === "needs_review" ? "imported" : purchaseForm.scanStatus) as InventoryPurchase["scanStatus"], imageHash: purchaseForm.imageHash || undefined, scanResult: purchaseForm.scanResult
+      }, imageFile, backImageFile);
       setPurchases((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
       if (quantitySold > 0 && linkedSales.length === 0) {
         const sale = (await createSaleRecord({
@@ -624,6 +648,7 @@ export function SalesControlPage() {
             onEditExpense={openExpense}
           />
           <section className="mt-4 grid grid-cols-2 gap-2">
+            <button onClick={() => setBatchOpen(true)} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><PackagePlus size={17} /> Batch Add Inventory</button>
             <button onClick={() => setExportOpen(true)} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-black text-white"><Download size={17} /> Download Excel</button>
             <button onClick={exportData} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><FileSpreadsheet size={17} /> Download CSV</button>
             <button onClick={() => void syncPending()} className="col-span-2 min-h-11 rounded-xl bg-slate-100 px-4 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">Sync Pending Sales</button>
@@ -666,6 +691,11 @@ export function SalesControlPage() {
         </div>
       ) : null}
 
+      {batchOpen ? <BatchInventoryImporter onClose={() => setBatchOpen(false)} onImport={async (input, file) => {
+        const saved = await saveInventoryPurchase(input, file);
+        setPurchases((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+      }} /> : null}
+
       {editor ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:p-4">
           <section onPaste={handleEditorPaste} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { if (event.defaultPrevented) return; event.preventDefault(); void pickFile(event.dataTransfer.files[0]); }} className="max-h-[95dvh] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-5 dark:bg-slate-900">
@@ -683,6 +713,27 @@ export function SalesControlPage() {
               {selectedLinkedPurchase ? <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-700 dark:bg-sky-950/30 dark:text-sky-200">Linked to {selectedLinkedPurchase.itemName}. Its purchase is not counted as an operating expense.</p> : null}<textarea value={saleForm.notes} onChange={(event) => setSaleForm({ ...saleForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} />
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
+
+            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash) => setPurchaseForm((current) => ({
+              ...current, category: scan.suggestedType || current.category, isRawCard: (scan.suggestedType || current.category) === "raw_card",
+              itemName: scan.cardName || current.itemName, cardName: scan.cardName || current.cardName,
+              collectorNumber: scan.collectorNumber || current.collectorNumber, cardSet: scan.cardSet || current.cardSet,
+              cardLanguage: scan.language || current.cardLanguage, cardCondition: scan.condition || current.cardCondition,
+              stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
+              gradingCompany: scan.gradingCompany || current.gradingCompany, grade: scan.grade || current.grade,
+              certificateNumber: scan.certificateNumber || current.certificateNumber, scanConfidence: scan.overallConfidence,
+              scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
+            }))} /> : null}
+            {editor === "purchase" ? <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-3 dark:border-slate-700">
+              <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
+              <input value={purchaseForm.collectorNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
+              <input value={purchaseForm.cardSet} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardSet: event.target.value })} placeholder="Set / code" className={compactInputClass()} />
+              <input value={purchaseForm.cardLanguage} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardLanguage: event.target.value })} placeholder="Language" className={compactInputClass()} />
+              <select value={purchaseForm.cardCondition} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
+              {moneyInput(purchaseForm.stickerPrice, (value) => setPurchaseForm({ ...purchaseForm, stickerPrice: value }), "Sticker / asking price")}
+              {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl); setBackImageFile(file); setBackPreviewUrl(URL.createObjectURL(file)); }} /></label></> : null}
+              <p className="sm:col-span-3 text-xs text-slate-500">Actual bought price remains the separate “Actual total cost” field below. Scan status: {purchaseForm.scanStatus.replace(/_/g, " ")}{purchaseForm.scanConfidence ? ` · ${purchaseForm.scanConfidence} confidence` : ""}</p>
+            </section> : null}
 
 
             {editor === "purchase" ? <div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Purchase preview" className="mx-auto max-h-64 object-contain" /> : <PackagePlus className="mx-auto text-sky-500" size={38} />}<button onClick={() => inputRef.current?.click()} className="mt-3 min-h-10 rounded-xl bg-ink px-4 text-sm font-bold text-white dark:bg-coral"><Upload className="inline" size={16} /> Choose optional photo</button></div><div className="grid gap-3 sm:grid-cols-2"><input value={purchaseForm.itemName} onChange={(event) => setPurchaseForm({ ...purchaseForm, itemName: event.target.value })} placeholder="Item name *" className={compactInputClass()} /><select value={purchaseForm.category} onChange={(event) => setPurchaseForm({ ...purchaseForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : purchaseForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={purchaseForm.purchaseDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseDate: event.target.value })} className={compactInputClass()} />{moneyInput(purchaseForm.totalCost, (value) => setPurchaseForm({ ...purchaseForm, totalCost: value }), "Actual total cost *")}</div><label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={purchaseForm.isRawCard} onChange={(event) => setPurchaseForm({ ...purchaseForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>{purchaseForm.isRawCard ? <RawCardCalculator marketValue={purchaseForm.marketValue} buyPercentage={purchaseForm.buyPercentage} actualCost={purchaseForm.totalCost} onMarketValue={(value) => setPurchaseForm({ ...purchaseForm, marketValue: value })} onPercentage={(value) => setPurchaseForm({ ...purchaseForm, buyPercentage: value })} onActualCost={(value) => setPurchaseForm({ ...purchaseForm, totalCost: value })} /> : moneyInput(purchaseForm.marketValue, (value) => setPurchaseForm({ ...purchaseForm, marketValue: value }), "Market value, optional")}<div className="grid gap-3 sm:grid-cols-2"><select value={purchaseForm.purchaseSource} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={purchaseForm.seller} onChange={(event) => setPurchaseForm({ ...purchaseForm, seller: event.target.value })} placeholder="Website / store / seller" className={compactInputClass()} /><select value={purchaseForm.eventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.purchasedByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchasedByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Purchased by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.status} onChange={(event) => setPurchaseForm({ ...purchaseForm, status: event.target.value as InventoryStatus })} className={compactInputClass()}>{inventoryStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.notes} onChange={(event) => setPurchaseForm({ ...purchaseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /></div> : null}
