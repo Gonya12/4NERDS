@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, Worker } from "../../types/models";
 import { expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { formatMoney } from "../../utils/paymentMath";
+import { ImageLightbox } from "./ImageLightbox";
 
 type RecordType = "sale" | "purchase" | "expense";
 type SortKey = "date" | "item" | "type" | "status" | "bought" | "sold" | "profit";
@@ -79,6 +80,7 @@ export function FinancialSpreadsheet(props: Props) {
   const [saveState, setSaveState] = useState<"idle" | "unsaved" | "saving" | "saved" | "error">("idle");
   const [page, setPage] = useState(0);
   const [addRowOpen, setAddRowOpen] = useState(false);
+  const [previewKey, setPreviewKey] = useState("");
   const pageSize = 25;
 
   const eventMap = useMemo(() => new Map(props.events.map((event) => [event.id, event.name])), [props.events]);
@@ -100,6 +102,9 @@ export function FinancialSpreadsheet(props: Props) {
   }, [rows, query, typeFilter, sortKey, ascending]);
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const visibleRows = filteredRows.slice(page * pageSize, page * pageSize + pageSize);
+  const imageRows = filteredRows.filter((row) => Boolean(row.image));
+  const previewIndex = imageRows.findIndex((row) => row.key === previewKey);
+  const previewRow = previewIndex >= 0 ? imageRows[previewIndex] : undefined;
 
   function toggleColumn(key: ColumnKey) {
     setVisibleColumns((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -149,7 +154,7 @@ export function FinancialSpreadsheet(props: Props) {
 
   function cell(key: ColumnKey, row: UnifiedRow) {
     const editing = editingKey === row.key;
-    if (key === "photo") return row.image ? <img src={row.image} alt="" loading="lazy" className="size-10 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="size-10 rounded-lg bg-slate-100 dark:bg-slate-800" />;
+    if (key === "photo") return row.image ? <button type="button" title={`Preview ${row.type === "expense" ? "receipt" : "image"}`} onClick={(event) => { event.stopPropagation(); setPreviewKey(row.key); }} className="group/image rounded-lg border-2 border-transparent transition hover:border-coral focus:border-coral focus:outline-none"><img src={row.image} alt={`${row.item} thumbnail`} loading="lazy" className="size-10 cursor-zoom-in rounded-md bg-slate-100 object-contain transition-transform group-hover/image:scale-105 dark:bg-slate-900" /></button> : <div aria-label="No image" className="size-10 rounded-lg bg-slate-100 dark:bg-slate-800" />;
     if (key === "item") return editing ? <input autoFocus value={draft.item} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, item: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : <span className="block max-w-44 truncate font-black text-ink dark:text-white">{row.item}</span>;
     if (key === "type") return <span className="capitalize" title="Record type cannot be converted in place. Use + Add Row to create another type.">{row.type}</span>;
     if (key === "category") return editing ? <select value={draft.category} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, category: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}>{Object.entries(row.type === "expense" ? expenseCategoryLabels : pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : row.category;
@@ -187,6 +192,7 @@ export function FinancialSpreadsheet(props: Props) {
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-slate-200 p-3 text-xs dark:border-slate-800"><span>{filteredRows.length} records · Page {page + 1} of {pageCount}</span><div className="flex gap-2"><button disabled={page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))} className="rounded-lg bg-slate-100 px-3 py-2 font-bold disabled:opacity-40 dark:bg-slate-800">Previous</button><button disabled={page >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))} className="rounded-lg bg-slate-100 px-3 py-2 font-bold disabled:opacity-40 dark:bg-slate-800">Next</button></div></div>
       {addRowOpen ? <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/60 p-0 sm:items-center sm:p-4"><section className="w-full max-w-sm space-y-3 rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl dark:bg-slate-900"><div className="flex items-center justify-between"><div><p className="eyebrow">Manual record</p><h3 className="text-xl font-black text-ink dark:text-white">Choose record type</h3></div><button onClick={() => setAddRowOpen(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>{([['sale','Sale'],['purchase','Inventory Purchase'],['expense','Business Expense']] as const).map(([type, label]) => <button key={type} onClick={() => { setAddRowOpen(false); props.onAddRow(type); }} className="min-h-12 w-full rounded-xl bg-slate-100 px-4 text-left font-black hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-slate-700"><Plus className="mr-2 inline" size={17} />{label}</button>)}<p className="text-xs text-slate-500">Photos are optional. The record will save to its matching Supabase table.</p></section></div> : null}
+      <ImageLightbox imageUrl={previewRow?.image} title={previewRow?.item || "Sales Control image"} onClose={() => setPreviewKey("")} onPrevious={imageRows.length > 1 ? () => setPreviewKey(imageRows[(previewIndex - 1 + imageRows.length) % imageRows.length].key) : undefined} onNext={imageRows.length > 1 ? () => setPreviewKey(imageRows[(previewIndex + 1) % imageRows.length].key) : undefined} />
     </section>
   );
 }
