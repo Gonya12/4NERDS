@@ -106,6 +106,8 @@ export function SalesControlPage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [cameraError, setCameraError] = useState("");
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraMode, setCameraMode] = useState(false);
+  const [cameraSwitching, setCameraSwitching] = useState(false);
   const [imageStatus, setImageStatus] = useState("");
   const [imageRemoved, setImageRemoved] = useState(false);
   const [largePreviewOpen, setLargePreviewOpen] = useState(false);
@@ -180,10 +182,12 @@ export function SalesControlPage() {
   }
 
   useEffect(() => { void loadData(); }, [location.search]);
+  useEffect(() => () => stopCamera(), []);
   useEffect(() => {
-    if (editor === "sale" && !previewUrl) void startCamera(); else stopCamera();
-    return stopCamera;
-  }, [editor, previewUrl, facingMode]);
+    if (!cameraMode) return;
+    const frame = window.requestAnimationFrame(() => void startCamera(facingMode));
+    return () => { window.cancelAnimationFrame(frame); stopCamera(); };
+  }, [cameraMode]);
 
   function cleanPreview() {
     if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
@@ -200,6 +204,7 @@ export function SalesControlPage() {
 
   function closeEditor() {
     stopCamera();
+    setCameraMode(false);
     cleanPreview();
     setEditor(null);
     setEditingSale(undefined);
@@ -262,6 +267,7 @@ export function SalesControlPage() {
   async function pickFile(file?: File) {
     if (!file) return;
     stopCamera();
+    setCameraMode(false);
     setImageStatus("Compressing image...");
     try {
       const compressed = await compressSaleImage(file);
@@ -277,6 +283,7 @@ export function SalesControlPage() {
 
   function removeImage() {
     stopCamera();
+    setCameraMode(false);
     if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     setImageFile(undefined);
@@ -316,17 +323,28 @@ export function SalesControlPage() {
     }
   }
 
-  async function startCamera() {
+  async function startCamera(mode: "environment" | "user" = facingMode) {
     stopCamera();
     setCameraReady(false);
     setCameraError("");
-    if (!navigator.mediaDevices?.getUserMedia) { setCameraError("Camera unavailable. You can still upload or paste an image."); return; }
+    if (!window.isSecureContext) { setCameraError("Camera requires a secure HTTPS connection. Use Upload instead."); return; }
+    if (!navigator.mediaDevices?.getUserMedia) { setCameraError("Camera is not available. Use Upload instead."); return; }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: mode } }, audio: false });
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      if (!videoRef.current) throw new Error("Camera preview is unavailable.");
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
       setCameraReady(true);
-    } catch { setCameraError("Camera permission denied. You can still upload or paste an image."); }
+    } catch (error) {
+      stopCamera();
+      const name = error instanceof DOMException ? error.name : "";
+      setCameraError(name === "NotAllowedError"
+        ? "Camera permission was denied. Enable camera access or upload an image."
+        : name === "NotReadableError"
+          ? "The camera may be in use by another app. Close it there or use Upload."
+          : "Camera is not available. Use Upload instead.");
+    }
   }
 
   function stopCamera() {
@@ -339,12 +357,29 @@ export function SalesControlPage() {
   async function capturePhoto() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || !video.videoWidth) return;
+    if (!video || !canvas || !streamRef.current || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      setCameraError("Camera is still starting. Try Capture again in a moment.");
+      return;
+    }
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
-    if (blob) await pickFile(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
+    if (!blob) { setCameraError("Could not capture the photo."); return; }
+    await pickFile(new File([blob], `sale-${Date.now()}.jpg`, { type: "image/jpeg" }));
+  }
+
+  function enterCameraMode() {
+    setCameraMode(true);
+    setCameraError("");
+  }
+
+  async function switchCamera() {
+    if (cameraSwitching) return;
+    setCameraSwitching(true);
+    const next = facingMode === "environment" ? "user" : "environment";
+    setFacingMode(next);
+    try { await startCamera(next); } finally { setCameraSwitching(false); }
   }
 
   async function saveSale() {
@@ -523,10 +558,34 @@ export function SalesControlPage() {
 
   function imageActions(label: string) {
     const pasteSupported = window.isSecureContext && Boolean(navigator.clipboard?.read);
-    return <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
-      <div className="flex items-center justify-between gap-2"><div><p className="font-black text-ink dark:text-white">{label}</p><p className="text-xs text-slate-500">Paste, upload, drag an image here, or take a photo. Optional.</p></div>{previewUrl ? <button type="button" onClick={() => setLargePreviewOpen(true)} className="shrink-0"><img src={previewUrl} alt={`${label} thumbnail`} loading="lazy" className="size-16 rounded-xl bg-white object-contain" /></button> : null}</div>
-      {cameraReady ? <video ref={videoRef} playsInline muted className="max-h-56 w-full rounded-xl object-contain" /> : null}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><button type="button" onClick={() => cameraReady ? void capturePhoto() : void startCamera()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Camera className="mr-1 inline" size={15} />{cameraReady ? "Capture" : "Take Photo"}</button><button type="button" onClick={() => inputRef.current?.click()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Upload className="mr-1 inline" size={15} />{previewUrl ? "Replace" : "Upload Image"}</button>{pasteSupported ? <button type="button" onClick={() => void pasteImageFromClipboard()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><ClipboardPaste className="mr-1 inline" size={15} />Paste Image</button> : <span className="flex min-h-10 items-center rounded-xl bg-slate-100 px-2 text-[11px] text-slate-500 dark:bg-slate-800">Paste unavailable; upload instead</span>}<button type="button" disabled={!previewUrl} onClick={removeImage} className="min-h-10 rounded-xl bg-rose-50 px-2 text-xs font-black text-rose-700 disabled:opacity-40 dark:bg-rose-950/30"><Trash2 className="mr-1 inline" size={15} />Remove</button></div>
+    return <div tabIndex={0} onPaste={(event) => { const file = imageFromClipboard(event); if (file) { event.preventDefault(); void pickFile(file); } }} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
+      <div><p className="font-black text-ink dark:text-white">{label}</p><p className="text-xs text-slate-500">Take, upload, or paste a photo. You can also continue without one.</p></div>
+      {cameraMode ? <>
+        <div className="relative mx-auto flex aspect-[3/4] max-h-[50dvh] min-h-56 w-full max-w-sm items-center justify-center overflow-hidden rounded-2xl bg-black">
+          <video ref={videoRef} playsInline muted className={`size-full object-contain ${cameraReady ? "block" : "invisible"}`} />
+          {!cameraReady ? <div className="absolute inset-0 flex items-center justify-center p-5 text-center text-sm font-bold text-white">{cameraError || "Starting camera…"}</div> : null}
+          <canvas ref={canvasRef} className="hidden" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <button type="button" onClick={() => void capturePhoto()} disabled={!cameraReady || cameraSwitching} className="min-h-11 rounded-xl bg-coral px-3 text-sm font-black text-white disabled:opacity-50"><Camera className="mr-1 inline" size={16} /> Capture</button>
+          <button type="button" onClick={() => void switchCamera()} disabled={!cameraReady || cameraSwitching} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-50 dark:bg-slate-800"><SwitchCamera className="mr-1 inline" size={16} /> {cameraSwitching ? "Switching…" : "Switch Camera"}</button>
+          <button type="button" onClick={() => { stopCamera(); setCameraMode(false); setCameraError(""); }} className="col-span-2 min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black sm:col-span-1 dark:bg-slate-800"><X className="mr-1 inline" size={16} /> Cancel Camera</button>
+        </div>
+      </> : previewUrl ? <>
+        <button type="button" onClick={() => setLargePreviewOpen(true)} className="block w-full overflow-hidden rounded-xl bg-white dark:bg-slate-900"><img src={previewUrl} alt={`${label} preview`} loading="lazy" className="mx-auto max-h-[360px] w-full object-contain" /></button>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <button type="button" onClick={enterCameraMode} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><RotateCcw className="mr-1 inline" size={15} /> Retake</button>
+          <button type="button" onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><ImagePlus className="mr-1 inline" size={15} /> Replace</button>
+          <button type="button" onClick={removeImage} className="min-h-11 rounded-xl bg-rose-100 px-2 text-sm font-black text-rose-700 dark:bg-rose-950/40"><Trash2 className="mr-1 inline" size={15} /> Remove</button>
+          <button type="button" onClick={removeImage} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800">Continue Without Photo</button>
+        </div>
+      </> : <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <button type="button" onClick={enterCameraMode} className="min-h-11 rounded-xl bg-coral px-2 text-sm font-black text-white"><Camera className="mr-1 inline" size={15} /> Take Photo</button>
+        <button type="button" onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><Upload className="mr-1 inline" size={15} /> Upload</button>
+        {pasteSupported ? <button type="button" onClick={() => void pasteImageFromClipboard()} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><ClipboardPaste className="mr-1 inline" size={15} /> Paste Image</button> : <button type="button" onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800">Upload Fallback</button>}
+        <button type="button" onClick={() => { stopCamera(); setImageStatus("Continuing without a photo."); }} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800">Continue Without Photo</button>
+      </div>}
+      {cameraError && !cameraMode ? <p role="alert" className="text-xs font-bold text-rose-600">{cameraError}</p> : null}
       {imageStatus ? <p role="status" className="text-xs font-bold text-slate-600 dark:text-slate-300">{imageStatus}</p> : null}
     </div>;
   }
@@ -722,10 +781,8 @@ export function SalesControlPage() {
           <section onPaste={handleEditorPaste} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { if (event.defaultPrevented) return; event.preventDefault(); void pickFile(event.dataTransfer.files[0]); }} className="max-h-[95dvh] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-5 dark:bg-slate-900">
             <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-start justify-between bg-white/95 px-1 py-1 backdrop-blur dark:bg-slate-900/95"><div><p className="eyebrow">Sales Control</p><h2 className="text-2xl font-black text-ink dark:text-white">{editor === "sale" ? editingSale ? "Edit Sale" : "Add Sale" : editor === "purchase" ? editingPurchase ? "Edit Purchase" : "Add Inventory Purchase" : editingExpense ? "Edit Expense" : "Add Expense"}</h2></div><button onClick={closeEditor} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
 
-            {imageActions(editor === "expense" ? "Receipt or proof of purchase" : editor === "purchase" ? "Inventory image" : "Sale image")}
+            {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              <div tabIndex={0} onPaste={(event) => { const file = imageFromClipboard(event); if (file) { event.preventDefault(); pickFile(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); pickFile(event.dataTransfer.files[0]); }} className="relative flex min-h-56 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Sale preview" className="max-h-[55vh] w-full object-contain" /> : <><video ref={videoRef} playsInline muted className={`min-h-56 max-h-[55vh] w-full object-contain ${cameraReady ? "block" : "hidden"}`} />{!cameraReady ? <div className="p-6"><Camera className="mx-auto text-coral" size={40} /><p className="mt-2 font-black">{cameraError || "Starting camera..."}</p><p className="mt-1 text-sm text-slate-500">Photo optional. Paste, drop, upload, or continue without one.</p></div> : null}</>}<canvas ref={canvasRef} className="hidden" /></div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{previewUrl ? <button onClick={() => { cleanPreview(); void startCamera(); }} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800"><RotateCcw className="inline" size={16} /> Retake</button> : <button onClick={() => void capturePhoto()} disabled={!cameraReady} className="min-h-11 rounded-xl bg-coral text-sm font-black text-white disabled:opacity-50"><Camera className="inline" size={16} /> Capture</button>}<button onClick={() => setFacingMode((value) => value === "environment" ? "user" : "environment")} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800"><SwitchCamera className="inline" size={16} /> Switch</button><button onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><ImagePlus className="inline" size={16} /> Upload</button><button onClick={() => { stopCamera(); setCameraError("Photo skipped."); }} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800">No Photo</button></div>
               {selectedSaleEvent ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">Linked to: {selectedSaleEvent.name}</p> : null}
               <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => setSaleForm({ ...saleForm, soldAt: event.target.value })} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
               <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
@@ -765,7 +822,7 @@ export function SalesControlPage() {
             {editor === "purchase" ? <section className="mt-3 space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/20"><div><p className="font-black text-emerald-800 dark:text-emerald-200">Sold inventory details</p><p className="text-xs text-emerald-700/80 dark:text-emerald-300/70">Set quantity sold to zero for in stock. A linked sale is created automatically when needed.</p></div><div className="grid gap-3 sm:grid-cols-2"><input type="number" min="0" max={purchaseForm.quantity} value={purchaseForm.quantitySold} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantitySold: event.target.value, status: inventoryStatusForQuantity(Number(purchaseForm.quantity || 1), Number(event.target.value || 0)) })} placeholder="Quantity sold" className={compactInputClass()} />{moneyInput(purchaseForm.soldPrice, (value) => setPurchaseForm({ ...purchaseForm, soldPrice: value }), "Total sold price")}<input type="datetime-local" value={purchaseForm.soldDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldDate: event.target.value })} className={compactInputClass()} /><select value={purchaseForm.soldByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.soldEventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldEventId: event.target.value })} className={compactInputClass()}><option value="">No sale event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.soldPaymentMethod} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldPaymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.buyerNote} onChange={(event) => setPurchaseForm({ ...purchaseForm, buyerNote: event.target.value })} placeholder="Buyer / sale note" className={`${compactInputClass()} min-h-20`} /></section> : null}
             {editor === "purchase" ? <button onClick={() => void savePurchase()} disabled={busy} className="btn-primary mt-3 min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Inventory & Sold Status"}</button> : null}
             <ImageLightbox imageUrl={largePreviewOpen ? previewUrl : undefined} title={editor === "sale" ? saleForm.itemName || "Sale image" : editor === "purchase" ? purchaseForm.itemName || "Inventory image" : expenseForm.description || "Expense receipt"} onClose={() => setLargePreviewOpen(false)} />
-            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { void pickFile(event.target.files?.[0]); event.target.value = ""; }} />
+            <input ref={inputRef} type="file" accept="image/*" capture="environment" hidden onChange={(event) => { void pickFile(event.target.files?.[0]); event.target.value = ""; }} />
           </section>
         </div>
       ) : null}
