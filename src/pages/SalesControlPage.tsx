@@ -1,6 +1,6 @@
 import {
-  Camera, Download, FileSpreadsheet, ImagePlus, PackagePlus, Receipt,
-  RotateCcw, Save, SwitchCamera, Upload, X
+  Camera, ClipboardPaste, Download, FileSpreadsheet, ImagePlus, PackagePlus, Receipt,
+  RotateCcw, Save, SwitchCamera, Trash2, Upload, X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
@@ -14,7 +14,7 @@ import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses,
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
 import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecordsPage, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { listWorkers } from "../services/database/workerRepository";
-import { imageFromClipboard } from "../services/images/saleImageService";
+import { compressSaleImage, imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { downloadFinancialWorkbook, type ExcelExportScope } from "../services/sales/excelExportService";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
@@ -99,6 +99,9 @@ export function SalesControlPage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [cameraError, setCameraError] = useState("");
   const [cameraReady, setCameraReady] = useState(false);
+  const [imageStatus, setImageStatus] = useState("");
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [largePreviewOpen, setLargePreviewOpen] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [hasMoreSales, setHasMoreSales] = useState(false);
   const [salesPage, setSalesPage] = useState(0);
@@ -173,6 +176,9 @@ export function SalesControlPage() {
     setPreviewUrl("");
     setImageFile(undefined);
     setCameraError("");
+    setImageStatus("");
+    setImageRemoved(false);
+    setLargePreviewOpen(false);
   }
 
   function closeEditor() {
@@ -230,12 +236,61 @@ export function SalesControlPage() {
     setEditor("expense");
   }
 
-  function pickFile(file?: File) {
+  async function pickFile(file?: File) {
     if (!file) return;
     stopCamera();
+    setImageStatus("Compressing image...");
+    try {
+      const compressed = await compressSaleImage(file);
+      if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+      setImageFile(compressed);
+      setImageRemoved(false);
+      setPreviewUrl(URL.createObjectURL(compressed));
+      setImageStatus(`Ready to upload on Save · ${(compressed.size / 1024).toFixed(0)} KB`);
+    } catch (error) {
+      setImageStatus(error instanceof Error ? error.message : "Could not prepare image.");
+    }
+  }
+
+  function removeImage() {
+    stopCamera();
     if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
-    setImageFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    setPreviewUrl("");
+    setImageFile(undefined);
+    setImageRemoved(true);
+    setImageStatus("Image will be removed when you save.");
+  }
+
+  function handleEditorPaste(event: React.ClipboardEvent) {
+    if (event.defaultPrevented) return;
+    const file = imageFromClipboard(event);
+    if (!file) {
+      if (!(event.target as HTMLElement).closest("input,textarea,[contenteditable='true']")) setImageStatus("No image found in the clipboard.");
+      return;
+    }
+    event.preventDefault();
+    void pickFile(file);
+  }
+
+  async function pasteImageFromClipboard() {
+    if (!window.isSecureContext || !navigator.clipboard?.read) {
+      setImageStatus("Clipboard images are unavailable here. Use Take Photo or Upload Image instead.");
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((value) => ["image/png", "image/jpeg", "image/webp"].includes(value));
+        if (type) {
+          const blob = await item.getType(type);
+          await pickFile(new File([blob], `pasted-${Date.now()}.${type.split("/")[1]}`, { type }));
+          return;
+        }
+      }
+      setImageStatus("No image found in the clipboard.");
+    } catch {
+      setImageStatus("Clipboard access was blocked. Press Ctrl+V in this form, or use Take Photo or Upload Image.");
+    }
   }
 
   async function startCamera() {
@@ -266,7 +321,7 @@ export function SalesControlPage() {
     canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
-    if (blob) pickFile(new File([blob], `sale-${Date.now()}.jpg`, { type: "image/jpeg" }));
+    if (blob) await pickFile(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
   }
 
   async function saveSale() {
@@ -279,7 +334,7 @@ export function SalesControlPage() {
       if (percentage) saveDefaultRawBuyPercentage(percentage);
       const input: Partial<SalesRecord> = {
         id: editingSale?.id, eventId: saleForm.eventId || undefined, eventDayId: saleForm.eventDayId || undefined,
-        imageUrl: editingSale?.imageUrl, imagePath: editingSale?.imagePath, itemName: saleForm.itemName.trim() || undefined,
+        imageUrl: imageRemoved ? undefined : editingSale?.imageUrl, imagePath: imageRemoved ? undefined : editingSale?.imagePath, itemName: saleForm.itemName.trim() || undefined,
         category: saleForm.category, quantity: Math.max(1, Number(saleForm.quantity || 1)), soldPrice: Number(saleForm.soldPrice),
         boughtPrice: saleForm.boughtPrice === "" ? undefined : Number(saleForm.boughtPrice), marketValue: market,
         boughtFrom: saleForm.boughtFrom.trim() || undefined, purchaseSource: saleForm.purchaseSource || undefined,
@@ -332,7 +387,7 @@ export function SalesControlPage() {
       const linkedQuantity = linkedSales.reduce((sum, sale) => sum + Number(sale.quantity || 1), 0);
       const quantitySold = Math.min(quantity, Math.max(requestedSoldQuantity, linkedQuantity));
       const saved = await saveInventoryPurchase({
-        ...editingPurchase, itemName: purchaseForm.itemName, category: purchaseForm.category, quantity,
+        ...editingPurchase, imageUrl: imageRemoved ? undefined : editingPurchase?.imageUrl, imagePath: imageRemoved ? undefined : editingPurchase?.imagePath, itemName: purchaseForm.itemName, category: purchaseForm.category, quantity,
         purchaseDate: safeDateFromLocalInput(purchaseForm.purchaseDate).toISOString(), totalCost: Number(purchaseForm.totalCost), marketValue: market,
         isRawCard: purchaseForm.isRawCard, buyPercentage: purchaseForm.isRawCard ? percentage : undefined,
         targetBuyPrice: purchaseForm.isRawCard && market && percentage ? roundMoney(market * percentage / 100) : undefined,
@@ -391,7 +446,7 @@ export function SalesControlPage() {
     try {
       const duplicate = expenseForm.category === "event_table_fee" && expenseForm.eventId && selectedEventCost(events.find((event) => event.id === expenseForm.eventId) as Event) > 0;
       const saved = await saveBusinessExpense({
-        ...editingExpense, expenseDate: safeDateFromLocalInput(expenseForm.expenseDate).toISOString(), amount: Number(expenseForm.amount),
+        ...editingExpense, receiptImageUrl: imageRemoved ? undefined : editingExpense?.receiptImageUrl, receiptImagePath: imageRemoved ? undefined : editingExpense?.receiptImagePath, expenseDate: safeDateFromLocalInput(expenseForm.expenseDate).toISOString(), amount: Number(expenseForm.amount),
         category: expenseForm.category, description: expenseForm.description, eventId: expenseForm.eventId || undefined,
         paidByWorkerId: expenseForm.paidByWorkerId || undefined, vendor: expenseForm.vendor, notes: expenseForm.notes
       }, imageFile);
@@ -423,6 +478,16 @@ export function SalesControlPage() {
   const selectedLinkedPurchase = purchases.find((purchase) => purchase.id === saleForm.inventoryPurchaseId);
   const selectedExpenseEvent = events.find((event) => event.id === expenseForm.eventId);
   const duplicateExpenseWarning = expenseForm.category === "event_table_fee" && selectedExpenseEvent && selectedEventCost(selectedExpenseEvent) > 0;
+
+  function imageActions(label: string) {
+    const pasteSupported = window.isSecureContext && Boolean(navigator.clipboard?.read);
+    return <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
+      <div className="flex items-center justify-between gap-2"><div><p className="font-black text-ink dark:text-white">{label}</p><p className="text-xs text-slate-500">Paste, upload, drag an image here, or take a photo. Optional.</p></div>{previewUrl ? <button type="button" onClick={() => setLargePreviewOpen(true)} className="shrink-0"><img src={previewUrl} alt={`${label} thumbnail`} loading="lazy" className="size-16 rounded-xl bg-white object-contain" /></button> : null}</div>
+      {cameraReady ? <video ref={videoRef} playsInline muted className="max-h-56 w-full rounded-xl object-contain" /> : null}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><button type="button" onClick={() => cameraReady ? void capturePhoto() : void startCamera()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Camera className="mr-1 inline" size={15} />{cameraReady ? "Capture" : "Take Photo"}</button><button type="button" onClick={() => inputRef.current?.click()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Upload className="mr-1 inline" size={15} />{previewUrl ? "Replace" : "Upload Image"}</button>{pasteSupported ? <button type="button" onClick={() => void pasteImageFromClipboard()} className="min-h-10 rounded-xl bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><ClipboardPaste className="mr-1 inline" size={15} />Paste Image</button> : <span className="flex min-h-10 items-center rounded-xl bg-slate-100 px-2 text-[11px] text-slate-500 dark:bg-slate-800">Paste unavailable; upload instead</span>}<button type="button" disabled={!previewUrl} onClick={removeImage} className="min-h-10 rounded-xl bg-rose-50 px-2 text-xs font-black text-rose-700 disabled:opacity-40 dark:bg-rose-950/30"><Trash2 className="mr-1 inline" size={15} />Remove</button></div>
+      {imageStatus ? <p role="status" className="text-xs font-bold text-slate-600 dark:text-slate-300">{imageStatus}</p> : null}
+    </div>;
+  }
 
   function exportData() {
     const rows = [
@@ -602,9 +667,10 @@ export function SalesControlPage() {
 
       {editor ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:p-4">
-          <section className="max-h-[95dvh] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-5 dark:bg-slate-900">
+          <section onPaste={handleEditorPaste} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { if (event.defaultPrevented) return; event.preventDefault(); void pickFile(event.dataTransfer.files[0]); }} className="max-h-[95dvh] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-5 dark:bg-slate-900">
             <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-start justify-between bg-white/95 px-1 py-1 backdrop-blur dark:bg-slate-900/95"><div><p className="eyebrow">Sales Control</p><h2 className="text-2xl font-black text-ink dark:text-white">{editor === "sale" ? editingSale ? "Edit Sale" : "Add Sale" : editor === "purchase" ? editingPurchase ? "Edit Purchase" : "Add Inventory Purchase" : editingExpense ? "Edit Expense" : "Add Expense"}</h2></div><button onClick={closeEditor} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
 
+            {imageActions(editor === "expense" ? "Receipt or proof of purchase" : editor === "purchase" ? "Inventory image" : "Sale image")}
             {editor === "sale" ? <div className="space-y-3">
               <div tabIndex={0} onPaste={(event) => { const file = imageFromClipboard(event); if (file) { event.preventDefault(); pickFile(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); pickFile(event.dataTransfer.files[0]); }} className="relative flex min-h-56 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Sale preview" className="max-h-[55vh] w-full object-contain" /> : <><video ref={videoRef} playsInline muted className={`min-h-56 max-h-[55vh] w-full object-contain ${cameraReady ? "block" : "hidden"}`} />{!cameraReady ? <div className="p-6"><Camera className="mx-auto text-coral" size={40} /><p className="mt-2 font-black">{cameraError || "Starting camera..."}</p><p className="mt-1 text-sm text-slate-500">Photo optional. Paste, drop, upload, or continue without one.</p></div> : null}</>}<canvas ref={canvasRef} className="hidden" /></div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{previewUrl ? <button onClick={() => { cleanPreview(); void startCamera(); }} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800"><RotateCcw className="inline" size={16} /> Retake</button> : <button onClick={() => void capturePhoto()} disabled={!cameraReady} className="min-h-11 rounded-xl bg-coral text-sm font-black text-white disabled:opacity-50"><Camera className="inline" size={16} /> Capture</button>}<button onClick={() => setFacingMode((value) => value === "environment" ? "user" : "environment")} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800"><SwitchCamera className="inline" size={16} /> Switch</button><button onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-ink text-sm font-bold text-white dark:bg-coral"><ImagePlus className="inline" size={16} /> Upload</button><button onClick={() => { stopCamera(); setCameraError("Photo skipped."); }} className="min-h-11 rounded-xl bg-slate-100 text-sm font-bold dark:bg-slate-800">No Photo</button></div>
@@ -617,12 +683,14 @@ export function SalesControlPage() {
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
+
             {editor === "purchase" ? <div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Purchase preview" className="mx-auto max-h-64 object-contain" /> : <PackagePlus className="mx-auto text-sky-500" size={38} />}<button onClick={() => inputRef.current?.click()} className="mt-3 min-h-10 rounded-xl bg-ink px-4 text-sm font-bold text-white dark:bg-coral"><Upload className="inline" size={16} /> Choose optional photo</button></div><div className="grid gap-3 sm:grid-cols-2"><input value={purchaseForm.itemName} onChange={(event) => setPurchaseForm({ ...purchaseForm, itemName: event.target.value })} placeholder="Item name *" className={compactInputClass()} /><select value={purchaseForm.category} onChange={(event) => setPurchaseForm({ ...purchaseForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : purchaseForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={purchaseForm.purchaseDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseDate: event.target.value })} className={compactInputClass()} />{moneyInput(purchaseForm.totalCost, (value) => setPurchaseForm({ ...purchaseForm, totalCost: value }), "Actual total cost *")}</div><label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={purchaseForm.isRawCard} onChange={(event) => setPurchaseForm({ ...purchaseForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>{purchaseForm.isRawCard ? <RawCardCalculator marketValue={purchaseForm.marketValue} buyPercentage={purchaseForm.buyPercentage} actualCost={purchaseForm.totalCost} onMarketValue={(value) => setPurchaseForm({ ...purchaseForm, marketValue: value })} onPercentage={(value) => setPurchaseForm({ ...purchaseForm, buyPercentage: value })} onActualCost={(value) => setPurchaseForm({ ...purchaseForm, totalCost: value })} /> : moneyInput(purchaseForm.marketValue, (value) => setPurchaseForm({ ...purchaseForm, marketValue: value }), "Market value, optional")}<div className="grid gap-3 sm:grid-cols-2"><select value={purchaseForm.purchaseSource} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={purchaseForm.seller} onChange={(event) => setPurchaseForm({ ...purchaseForm, seller: event.target.value })} placeholder="Website / store / seller" className={compactInputClass()} /><select value={purchaseForm.eventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.purchasedByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchasedByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Purchased by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.status} onChange={(event) => setPurchaseForm({ ...purchaseForm, status: event.target.value as InventoryStatus })} className={compactInputClass()}>{inventoryStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.notes} onChange={(event) => setPurchaseForm({ ...purchaseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /></div> : null}
 
             {editor === "expense" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2"><input type="datetime-local" value={expenseForm.expenseDate} onChange={(event) => setExpenseForm({ ...expenseForm, expenseDate: event.target.value })} className={compactInputClass()} />{moneyInput(expenseForm.amount, (value) => setExpenseForm({ ...expenseForm, amount: value }), "Amount *")}<select value={expenseForm.category} onChange={(event) => setExpenseForm({ ...expenseForm, category: event.target.value as BusinessExpenseCategory })} className={compactInputClass()}>{expenseOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={expenseForm.description} onChange={(event) => setExpenseForm({ ...expenseForm, description: event.target.value })} placeholder="Description" className={compactInputClass()} /><select value={expenseForm.eventId} onChange={(event) => setExpenseForm({ ...expenseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={expenseForm.paidByWorkerId} onChange={(event) => setExpenseForm({ ...expenseForm, paidByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Paid by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><input value={expenseForm.vendor} onChange={(event) => setExpenseForm({ ...expenseForm, vendor: event.target.value })} placeholder="Vendor / store" className={compactInputClass()} /></div>{duplicateExpenseWarning ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">This event already has a {formatMoney(selectedEventCost(selectedExpenseEvent))} table cost. Reports will use that event cost and exclude this manual table-fee row to prevent double-counting.</p> : null}<div className="rounded-2xl border-2 border-dashed border-slate-300 p-3 text-center dark:border-slate-700">{previewUrl ? <img src={previewUrl} alt="Receipt preview" className="mx-auto max-h-48 object-contain" /> : <Receipt className="mx-auto text-slate-400" size={30} />}<button onClick={() => inputRef.current?.click()} className="mt-2 min-h-10 rounded-xl bg-slate-100 px-4 text-sm font-bold dark:bg-slate-800"><Upload className="inline" size={16} /> Optional receipt</button></div><textarea value={expenseForm.notes} onChange={(event) => setExpenseForm({ ...expenseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /><button onClick={() => void saveExpense()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Expense"}</button></div> : null}
             {editor === "purchase" ? <section className="mt-3 space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/20"><div><p className="font-black text-emerald-800 dark:text-emerald-200">Sold inventory details</p><p className="text-xs text-emerald-700/80 dark:text-emerald-300/70">Set quantity sold to zero for in stock. A linked sale is created automatically when needed.</p></div><div className="grid gap-3 sm:grid-cols-2"><input type="number" min="0" max={purchaseForm.quantity} value={purchaseForm.quantitySold} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantitySold: event.target.value, status: inventoryStatusForQuantity(Number(purchaseForm.quantity || 1), Number(event.target.value || 0)) })} placeholder="Quantity sold" className={compactInputClass()} />{moneyInput(purchaseForm.soldPrice, (value) => setPurchaseForm({ ...purchaseForm, soldPrice: value }), "Total sold price")}<input type="datetime-local" value={purchaseForm.soldDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldDate: event.target.value })} className={compactInputClass()} /><select value={purchaseForm.soldByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.soldEventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldEventId: event.target.value })} className={compactInputClass()}><option value="">No sale event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.soldPaymentMethod} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldPaymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.buyerNote} onChange={(event) => setPurchaseForm({ ...purchaseForm, buyerNote: event.target.value })} placeholder="Buyer / sale note" className={`${compactInputClass()} min-h-20`} /></section> : null}
             {editor === "purchase" ? <button onClick={() => void savePurchase()} disabled={busy} className="btn-primary mt-3 min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Inventory & Sold Status"}</button> : null}
-            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => pickFile(event.target.files?.[0])} />
+            {largePreviewOpen && previewUrl ? <div onClick={() => setLargePreviewOpen(false)} className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/90 p-4"><button type="button" aria-label="Close image preview" className="absolute right-4 top-4 rounded-full bg-white p-2 text-slate-900"><X size={20} /></button><img src={previewUrl} alt="Large record preview" className="max-h-full max-w-full rounded-xl object-contain" /></div> : null}
+            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { void pickFile(event.target.files?.[0]); event.target.value = ""; }} />
           </section>
         </div>
       ) : null}

@@ -30,6 +30,7 @@ export function fileToDataUrl(file: File) {
 
 export async function compressSaleImage(file: File) {
   if (!isSupportedSaleImage(file)) throw new Error("Please use a PNG, JPG, JPEG, or WebP image.");
+  if (file.name.startsWith("compressed-")) return file;
   const imageUrl = URL.createObjectURL(file);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -38,8 +39,8 @@ export async function compressSaleImage(file: File) {
       img.onerror = () => reject(new Error("Could not load image."));
       img.src = imageUrl;
     });
-    const maxWidth = 1200;
-    const scale = Math.min(1, maxWidth / image.width);
+    const maxLongEdge = 1800;
+    const scale = Math.min(1, maxLongEdge / Math.max(image.width, image.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(image.width * scale);
     canvas.height = Math.round(image.height * scale);
@@ -49,7 +50,7 @@ export async function compressSaleImage(file: File) {
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", 0.8);
     });
-    return new File([blob], `${file.name || "sale-image"}.${extensionFor(file)}`, { type: "image/jpeg" });
+    return new File([blob], `compressed-${file.name || "financial-image"}.jpg`, { type: "image/jpeg" });
   } finally {
     URL.revokeObjectURL(imageUrl);
   }
