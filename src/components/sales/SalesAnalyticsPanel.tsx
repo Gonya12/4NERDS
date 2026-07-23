@@ -1,20 +1,22 @@
 import { BarChart3, Camera, FileSpreadsheet, LineChart, PackagePlus, Plus, Receipt, TrendingUp } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { BusinessExpense, Event, InventoryPurchase, SalesRecord } from "../../types/models";
+import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, Worker } from "../../types/models";
 import { filterFinancialRecords, financialDateRangeLabels, type FinancialDateRange } from "../../utils/financialDateRange";
 import { formatMoney } from "../../utils/paymentMath";
-import { expenseCategoryLabels, financialOverview, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
+import { effectiveSaleOwnership, expenseCategoryLabels, financialOverview, inventoryQuantitySummary, inventoryStatusLabels, ownerProfitRows, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { ImageLightbox } from "./ImageLightbox";
 
 type FeedFilter = "all" | "in_stock" | "sold" | "sales" | "purchases" | "expenses" | "missing";
-type ChartMetric = "revenue" | "profit" | "expenses" | "inventory";
-type ChartStyle = "line" | "bar";
+type ChartMetric = "revenue" | "gross_profit" | "net_profit" | "expenses" | "inventory" | "unsold_inventory" | "items_sold" | "average_sale" | "owner_profit";
+type ChartGrouping = "daily" | "weekly" | "monthly" | "event" | "category" | "owner" | "payment";
+type ChartStyle = "line" | "bar" | "area" | "donut" | "stacked";
 
 type Props = {
   sales: SalesRecord[];
   purchases: InventoryPurchase[];
   expenses: BusinessExpense[];
   events: Event[];
+  workers: Worker[];
   dateRange: FinancialDateRange;
   customStart: string;
   customEnd: string;
@@ -30,12 +32,20 @@ type Props = {
   onEditExpense: (expense: BusinessExpense) => void;
 };
 
-function dateKey(value: string, monthly: boolean) {
-  return monthly ? value.slice(0, 7) : value.slice(0, 10);
+function dateGroup(value: string, grouping: ChartGrouping) {
+  const date = new Date(value);
+  if (grouping === "monthly") return { key: value.slice(0, 7), label: date.toLocaleDateString([], { month: "short", year: "2-digit" }) };
+  if (grouping === "weekly") {
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - date.getDay());
+    const key = start.toISOString().slice(0, 10);
+    return { key, label: `Week of ${start.toLocaleDateString([], { month: "short", day: "numeric" })}` };
+  }
+  return { key: value.slice(0, 10), label: date.toLocaleDateString([], { month: "short", day: "numeric" }) };
 }
 
 export function SalesAnalyticsPanel(props: Props) {
   const [chartMetric, setChartMetric] = useState<ChartMetric>("revenue");
+  const [chartGrouping, setChartGrouping] = useState<ChartGrouping>("daily");
   const [chartStyle, setChartStyle] = useState<ChartStyle>("line");
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string }>();
@@ -43,22 +53,65 @@ export function SalesAnalyticsPanel(props: Props) {
   const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events), [filtered]);
 
   const chartRows = useMemo(() => {
-    const monthly = props.dateRange === "this_year";
-    const buckets = new Map<string, number>();
-    const add = (key: string, value: number) => buckets.set(key, (buckets.get(key) || 0) + value);
-    if (chartMetric === "revenue" || chartMetric === "profit") {
-      filtered.sales.forEach((sale) => add(dateKey(sale.soldAt, monthly), chartMetric === "revenue" ? Number(sale.soldPrice || 0) : saleProfit(sale)));
+    const buckets = new Map<string, { label: string; total: number; count: number; segments: Map<string, number> }>();
+    const eventNames = new Map(props.events.map((event) => [event.id, event.name]));
+    const workerNames = new Map(props.workers.map((worker) => [worker.id, worker.name]));
+    const add = (key: string, label: string, value: number, count = 1) => {
+      const old = buckets.get(key) || { label, total: 0, count: 0, segments: new Map<string, number>() };
+      buckets.set(key, { label, total: old.total + value, count: old.count + count, segments: old.segments });
+    };
+    const addSegment = (key: string, label: string, segment: string, value: number) => {
+      const old = buckets.get(key) || { label, total: 0, count: 0, segments: new Map<string, number>() };
+      old.total += value;
+      old.count += 1;
+      old.segments.set(segment, (old.segments.get(segment) || 0) + value);
+      buckets.set(key, old);
+    };
+    const group = (date: string, eventId?: string, category?: string, payment?: string) => {
+      if (chartGrouping === "event") return { key: eventId || "unassigned", label: eventNames.get(eventId || "") || "No event" };
+      if (chartGrouping === "category") return { key: category || "other", label: pokemonCategoryLabels[category as keyof typeof pokemonCategoryLabels] || expenseCategoryLabels[category as keyof typeof expenseCategoryLabels] || "Other" };
+      if (chartGrouping === "payment") return { key: payment || "unassigned", label: payment ? payment.replace(/_/g, " ") : "Not recorded" };
+      return dateGroup(date, chartGrouping);
+    };
+    if (chartMetric === "owner_profit" && chartGrouping !== "owner") {
+      filtered.sales.forEach((sale) => {
+        const g = group(sale.soldAt, sale.eventId, sale.category, sale.paymentMethod);
+        const shares = effectiveSaleOwnership(sale, props.purchases);
+        if (!shares.length) addSegment(g.key, g.label, "Unassigned", saleProfit(sale));
+        shares.forEach((share) => addSegment(g.key, g.label, workerNames.get(share.workerId) || "Other owner", saleProfit(sale) * share.ownershipPercentage / 100));
+      });
+    } else if (chartMetric === "owner_profit" || chartGrouping === "owner") {
+      filtered.sales.forEach((sale) => {
+        const shares = effectiveSaleOwnership(sale, props.purchases);
+        if (!shares.length) add("unassigned", "Unassigned", chartMetric === "items_sold" ? Number(sale.quantity || 1) : chartMetric === "revenue" ? Number(sale.soldPrice || 0) : saleProfit(sale));
+        shares.forEach((share) => {
+          const ratio = share.ownershipPercentage / 100;
+          const value = chartMetric === "items_sold" ? Number(sale.quantity || 1) * ratio : chartMetric === "revenue" ? Number(sale.soldPrice || 0) * ratio : saleProfit(sale) * ratio;
+          add(share.workerId, workerNames.get(share.workerId) || "Other owner", value);
+        });
+      });
     } else if (chartMetric === "expenses") {
-      filtered.expenses.forEach((expense) => add(dateKey(expense.expenseDate, monthly), Number(expense.amount || 0)));
+      filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, Number(row.amount || 0)); });
+    } else if (chartMetric === "inventory" || chartMetric === "unsold_inventory") {
+      filtered.purchases.filter((row) => chartMetric === "inventory" || row.status !== "sold").forEach((row) => {
+        const g = group(row.purchaseDate, row.eventId, row.category);
+        const remainingRatio = chartMetric === "unsold_inventory" ? Math.max(0, row.quantity - row.quantitySold) / Math.max(1, row.quantity) : 1;
+        add(g.key, g.label, Number(row.totalCost || 0) * remainingRatio);
+      });
     } else {
-      filtered.purchases.forEach((purchase) => add(dateKey(purchase.purchaseDate, monthly), Number(purchase.totalCost || 0)));
+      filtered.sales.forEach((row) => {
+        const g = group(row.soldAt, row.eventId, row.category, row.paymentMethod);
+        const value = chartMetric === "revenue" || chartMetric === "average_sale" ? Number(row.soldPrice || 0)
+          : chartMetric === "items_sold" ? Number(row.quantity || 1) : saleProfit(row);
+        add(g.key, g.label, value);
+      });
+      if (chartMetric === "net_profit") filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, -Number(row.amount || 0), 0); });
     }
-    return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({
-      key,
-      label: monthly ? new Date(`${key}-01T12:00:00`).toLocaleDateString([], { month: "short" }) : new Date(`${key}T12:00:00`).toLocaleDateString([], { month: "short", day: "numeric" }),
-      value
+    return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => ({
+      key, label: row.label, value: chartMetric === "average_sale" && row.count ? row.total / row.count : row.total,
+      segments: Array.from(row.segments.entries()).map(([label, value]) => ({ label, value }))
     }));
-  }, [filtered, chartMetric, props.dateRange]);
+  }, [filtered, chartMetric, chartGrouping, props.events, props.workers, props.purchases]);
 
   const maxChart = Math.max(1, ...chartRows.map((row) => Math.abs(row.value)));
   const linePoints = chartRows.map((row, index) => {
@@ -66,6 +119,31 @@ export function SalesAnalyticsPanel(props: Props) {
     const y = 160 - Math.max(0, row.value) / maxChart * 130;
     return `${x},${y}`;
   }).join(" ");
+  const ownerRows = useMemo(() => ownerProfitRows(filtered.sales, props.purchases), [filtered.sales, props.purchases]);
+  const ownerInventory = useMemo(() => {
+    const totals = new Map<string, { cost: number; unsold: number; balance: number }>();
+    filtered.purchases.forEach((purchase) => (purchase.ownershipShares || []).forEach((share) => {
+      const current = totals.get(share.workerId) || { cost: 0, unsold: 0, balance: 0 };
+      const ownedCost = Number(purchase.totalCost || 0) * share.ownershipPercentage / 100;
+      const unsoldRatio = Math.max(0, purchase.quantity - purchase.quantitySold) / Math.max(1, purchase.quantity);
+      current.cost += ownedCost;
+      current.unsold += ownedCost * unsoldRatio;
+      if (purchase.purchasedByWorkerId && purchase.purchasedByWorkerId !== share.workerId) current.balance += ownedCost;
+      totals.set(share.workerId, current);
+    }));
+    return totals;
+  }, [filtered.purchases]);
+  const donutTotal = chartRows.reduce((sum, row) => sum + Math.max(0, row.value), 0);
+  const donutColors = ["#F45D13", "#0284c7", "#16a34a", "#a855f7", "#eab308", "#e11d48", "#64748b"];
+  let donutCursor = 0;
+  const donutGradient = chartRows.map((row, index) => {
+    const start = donutCursor;
+    donutCursor += donutTotal ? Math.max(0, row.value) / donutTotal * 360 : 0;
+    return `${donutColors[index % donutColors.length]} ${start}deg ${donutCursor}deg`;
+  }).join(", ");
+  const temporalGrouping = chartGrouping === "daily" || chartGrouping === "weekly" || chartGrouping === "monthly";
+  const availableStyles: ChartStyle[] = temporalGrouping ? ["line", "bar", "area", "stacked"] : ["bar", "donut", "stacked"];
+  const visibleChartStyle = availableStyles.includes(chartStyle) ? chartStyle : availableStyles[0];
 
   const recentRecords = useMemo(() => {
     const rows = [
@@ -97,12 +175,20 @@ export function SalesAnalyticsPanel(props: Props) {
         <select value={props.dateRange} onChange={(event) => props.onDateRange(event.target.value as FinancialDateRange)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white">{Object.entries(financialDateRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
         {props.dateRange === "custom" ? <div className="grid grid-cols-2 gap-2"><input type="date" value={props.customStart} onChange={(event) => props.onCustomStart(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" /><input type="date" value={props.customEnd} onChange={(event) => props.onCustomEnd(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" /></div> : null}
         <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">{summaryCards.map(([label, value, color]) => <div key={label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">{label}</p><p className={`mt-1 truncate text-lg font-black ${color}`}>{formatMoney(value)}</p></div>)}</div>
+        {ownerRows.size || ownerInventory.size ? <div className="grid grid-cols-2 gap-2">{props.workers.filter((worker) => ownerRows.has(worker.id) || ownerInventory.has(worker.id)).map((worker) => <div key={worker.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800"><p className="text-xs font-black text-slate-500">{worker.name}</p><p className="text-lg font-black text-emerald-600">{formatMoney(ownerRows.get(worker.id)?.profit || 0)} profit</p><p className="text-[11px] text-slate-500">{formatMoney(ownerRows.get(worker.id)?.revenue || 0)} revenue · {(ownerRows.get(worker.id)?.itemsSold || 0).toFixed(1)} items</p><p className="text-[11px] text-slate-500">{formatMoney(ownerInventory.get(worker.id)?.cost || 0)} inventory · {formatMoney(ownerInventory.get(worker.id)?.unsold || 0)} unsold</p>{ownerInventory.get(worker.id)?.balance ? <p className="text-[11px] font-bold text-amber-600">{formatMoney(ownerInventory.get(worker.id)?.balance || 0)} advanced by another owner</p> : null}</div>)}</div> : null}
       </section>
 
       <section className="surface-card space-y-3 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Trend</h2></div><div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-950"><button onClick={() => setChartStyle("line")} aria-label="Line graph" className={`rounded-lg p-2 ${chartStyle === "line" ? "bg-white text-coral shadow-sm dark:bg-slate-800" : "text-slate-400"}`}><LineChart size={17} /></button><button onClick={() => setChartStyle("bar")} aria-label="Bar chart" className={`rounded-lg p-2 ${chartStyle === "bar" ? "bg-white text-coral shadow-sm dark:bg-slate-800" : "text-slate-400"}`}><BarChart3 size={17} /></button></div></div>
-        <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-950 xl:grid-cols-4">{(["revenue", "profit", "expenses", "inventory"] as ChartMetric[]).map((metric) => <button key={metric} onClick={() => setChartMetric(metric)} className={`min-h-9 rounded-lg px-2 text-xs font-black capitalize ${chartMetric === metric ? "bg-white text-ink shadow-sm dark:bg-slate-800 dark:text-white" : "text-slate-500"}`}>{metric === "inventory" ? "Purchases" : metric}</button>)}</div>
-        {chartRows.length ? chartStyle === "line" ? <div className="overflow-hidden rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70"><svg viewBox="0 0 600 180" className="h-44 w-full" role="img" aria-label={`${chartMetric} line graph`}><line x1="20" y1="160" x2="580" y2="160" stroke="currentColor" className="text-slate-300 dark:text-slate-700" /><polyline points={linePoints} fill="none" stroke="#F45D13" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />{chartRows.map((row, index) => { const [x, y] = linePoints.split(" ")[index].split(","); return <circle key={row.key} cx={x} cy={y} r="7" fill="#F45D13" />; })}</svg><div className="flex justify-between gap-1 text-[10px] text-slate-500">{chartRows.slice(-6).map((row) => <span key={row.key}>{row.label}</span>)}</div></div> : <div className="flex h-52 items-end gap-2 overflow-x-auto rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">{chartRows.map((row) => <div key={row.key} className="flex min-w-12 flex-1 flex-col items-center justify-end gap-1"><span className="text-[10px] font-bold">{formatMoney(row.value)}</span><div className="w-full max-w-12 rounded-t-lg bg-coral" style={{ height: `${Math.max(4, Math.abs(row.value) / maxChart * 150)}px` }} /><span className="text-[10px] text-slate-500">{row.label}</span></div>)}</div> : <div className="flex h-44 items-center justify-center rounded-xl bg-slate-50 text-sm text-slate-500 dark:bg-slate-950/70">No records in this date range.</div>}
+        <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><BarChart3 className="text-coral" size={20} /></div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["daily","Daily"],["weekly","Weekly"],["monthly","Monthly"],["event","Event"],["category","Category"],["owner","Owner"],["payment","Payment Method"]] as [ChartGrouping,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Chart type<select value={visibleChartStyle} onChange={(event) => setChartStyle(event.target.value as ChartStyle)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["line","Line"],["bar","Bar"],["area","Area"],["donut","Donut"],["stacked","Stacked Bar"]] as [ChartStyle,string][]).filter(([value]) => availableStyles.includes(value)).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        </div>
+        {chartRows.length ? visibleChartStyle === "line" || visibleChartStyle === "area" ? <div className="overflow-hidden rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70"><svg viewBox="0 0 600 180" className="h-44 w-full" role="img" aria-label={`${chartMetric} chart`}>{visibleChartStyle === "area" ? <polygon points={`20,160 ${linePoints} 580,160`} fill="#F45D1333" /> : null}<line x1="20" y1="160" x2="580" y2="160" stroke="currentColor" className="text-slate-300 dark:text-slate-700" /><polyline points={linePoints} fill="none" stroke="#F45D13" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />{chartRows.map((row, index) => { const [x, y] = linePoints.split(" ")[index].split(","); return <circle key={row.key} cx={x} cy={y} r="6" fill="#F45D13"><title>{row.label}: {formatMoney(row.value)}</title></circle>; })}</svg><div className="flex justify-between gap-1 text-[10px] text-slate-500">{chartRows.slice(-6).map((row) => <span key={row.key}>{row.label}</span>)}</div></div>
+          : visibleChartStyle === "donut" ? <div className="grid items-center gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-950/70"><div className="mx-auto flex size-44 items-center justify-center rounded-full" style={{ background: `conic-gradient(${donutGradient})` }}><div className="flex size-24 items-center justify-center rounded-full bg-white text-center text-sm font-black dark:bg-slate-900">{formatMoney(donutTotal)}<br />Total</div></div><div className="space-y-2">{chartRows.map((row, index) => <div key={row.key} className="flex items-center gap-2 text-xs"><span className="size-3 rounded-full" style={{ backgroundColor: donutColors[index % donutColors.length] }} /><span className="min-w-0 flex-1 truncate font-bold">{row.label}</span><span>{formatMoney(row.value)}</span></div>)}</div></div>
+          : <div className="flex h-56 items-end gap-2 overflow-x-auto rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70">{chartRows.map((row, index) => <div key={row.key} className="flex min-w-16 flex-1 flex-col items-center justify-end gap-1"><span className="text-[10px] font-bold">{chartMetric === "items_sold" ? row.value.toFixed(1) : formatMoney(row.value)}</span>{visibleChartStyle === "stacked" && row.segments.length ? <div className="flex w-full max-w-14 flex-col-reverse overflow-hidden rounded-t-lg" style={{ height: `${Math.max(4, Math.abs(row.value) / maxChart * 150)}px` }}>{row.segments.map((segment, segmentIndex) => <div key={segment.label} title={`${segment.label}: ${formatMoney(segment.value)}`} style={{ height: `${Math.abs(segment.value) / Math.max(0.01, Math.abs(row.value)) * 100}%`, backgroundColor: donutColors[segmentIndex % donutColors.length] }} />)}</div> : <div className="w-full max-w-14 rounded-t-lg bg-coral" style={{ height: `${Math.max(4, Math.abs(row.value) / maxChart * 150)}px`, backgroundColor: donutColors[index % donutColors.length] }} />}<span className="max-w-20 truncate text-[10px] text-slate-500">{row.label}</span></div>)}</div>
+          : <div className="flex h-44 items-center justify-center rounded-xl bg-slate-50 text-sm text-slate-500 dark:bg-slate-950/70">No records in this date range.</div>}
       </section>
 
       <section className="grid grid-cols-2 gap-2">

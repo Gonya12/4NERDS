@@ -1,13 +1,13 @@
 import { Check, ChevronDown, ChevronUp, Copy, Eye, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, Worker } from "../../types/models";
-import { expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
+import { effectiveSaleOwnership, expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { formatMoney } from "../../utils/paymentMath";
 import { ImageLightbox } from "./ImageLightbox";
 
 type RecordType = "sale" | "purchase" | "expense";
 type SortKey = "date" | "item" | "type" | "status" | "bought" | "sold" | "profit";
-type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "actions";
+type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "ownershipType" | "gonzaloPercent" | "thiagoPercent" | "otherOwnerPercent" | "paidBy" | "gonzaloCost" | "thiagoCost" | "gonzaloProfit" | "thiagoProfit" | "internalBalance" | "ownershipAssigned" | "actions";
 
 type Props = {
   sales: SalesRecord[];
@@ -65,7 +65,12 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "cardName", label: "Card Name" }, { key: "collectorNumber", label: "Collector #" }, { key: "cardSet", label: "Set" },
   { key: "condition", label: "Condition" }, { key: "stickerPrice", label: "Sticker Price" }, { key: "gradingCompany", label: "Grading Co." },
   { key: "grade", label: "Grade" }, { key: "certificateNumber", label: "Certificate #" }, { key: "scanConfidence", label: "Scan Confidence" },
-  { key: "scanStatus", label: "Scan Status" }, { key: "actions", label: "Actions" }
+  { key: "scanStatus", label: "Scan Status" }, { key: "ownershipType", label: "Ownership Type" },
+  { key: "gonzaloPercent", label: "Gonzalo %" }, { key: "thiagoPercent", label: "Thiago %" }, { key: "otherOwnerPercent", label: "Other Owner %" },
+  { key: "paidBy", label: "Paid By" }, { key: "gonzaloCost", label: "Gonzalo Cost Basis" }, { key: "thiagoCost", label: "Thiago Cost Basis" },
+  { key: "gonzaloProfit", label: "Gonzalo Profit" }, { key: "thiagoProfit", label: "Thiago Profit" },
+  { key: "internalBalance", label: "Internal Balance" }, { key: "ownershipAssigned", label: "Ownership Assigned" },
+  { key: "actions", label: "Actions" }
 ];
 
 const defaultVisible = new Set<ColumnKey>(["photo", "item", "type", "quantity", "status", "bought", "sold", "profit", "date", "actions"]);
@@ -185,6 +190,28 @@ export function FinancialSpreadsheet(props: Props) {
       const purchase = row.original as InventoryPurchase;
       const values: Record<string, string | number | undefined> = { cardName: purchase.cardName, collectorNumber: purchase.collectorNumber, cardSet: purchase.cardSet, condition: purchase.cardCondition, stickerPrice: purchase.stickerPrice, gradingCompany: purchase.gradingCompany, grade: purchase.grade, certificateNumber: purchase.certificateNumber, scanConfidence: purchase.scanConfidence, scanStatus: purchase.scanStatus?.replace(/_/g, " ") };
       return key === "stickerPrice" && values[key] !== undefined ? formatMoney(Number(values[key])) : values[key] || "—";
+    }
+    if (["ownershipType", "gonzaloPercent", "thiagoPercent", "otherOwnerPercent", "paidBy", "gonzaloCost", "thiagoCost", "gonzaloProfit", "thiagoProfit", "internalBalance", "ownershipAssigned"].includes(key)) {
+      if (row.type === "expense") return "—";
+      const shares = row.type === "purchase" ? (row.original as InventoryPurchase).ownershipShares || [] : effectiveSaleOwnership(row.original as SalesRecord, props.purchases);
+      const gonzalo = props.workers.find((item) => item.name.toLowerCase() === "gonzalo");
+      const thiago = props.workers.find((item) => item.name.toLowerCase() === "thiago");
+      const percent = (workerId?: string) => shares.find((share) => share.workerId === workerId)?.ownershipPercentage || 0;
+      const gonzaloPercent = percent(gonzalo?.id);
+      const thiagoPercent = percent(thiago?.id);
+      const base = row.type === "purchase" ? Number((row.original as InventoryPurchase).totalCost || 0) : Number((row.original as SalesRecord).boughtPrice || 0);
+      const paidById = row.type === "purchase" ? (row.original as InventoryPurchase).purchasedByWorkerId : undefined;
+      const paidByName = props.workers.find((item) => item.id === paidById)?.name;
+      const ownershipLabel = !shares.length ? "Not assigned" : shares.length === 1 ? (props.workers.find((item) => item.id === shares[0].workerId)?.name || "Single owner") : shares.length === 2 && Math.abs(shares[0].ownershipPercentage - 50) < 0.01 && Math.abs(shares[1].ownershipPercentage - 50) < 0.01 ? "Shared 50/50" : "Custom split";
+      const values: Record<string, string | number> = {
+        ownershipType: ownershipLabel, gonzaloPercent, thiagoPercent,
+        otherOwnerPercent: Math.max(0, shares.reduce((sum, share) => sum + share.ownershipPercentage, 0) - gonzaloPercent - thiagoPercent),
+        paidBy: paidByName || "—", gonzaloCost: base * gonzaloPercent / 100, thiagoCost: base * thiagoPercent / 100,
+        gonzaloProfit: row.profit * gonzaloPercent / 100, thiagoProfit: row.profit * thiagoPercent / 100,
+        internalBalance: paidById && shares.length ? `${shares.filter((share) => share.workerId !== paidById).map((share) => `${props.workers.find((item) => item.id === share.workerId)?.name || "Owner"} owes ${paidByName} ${formatMoney(base * share.ownershipPercentage / 100)}`).join(" · ") || "No balance"}` : "—",
+        ownershipAssigned: shares.length ? "Yes" : "No"
+      };
+      return ["gonzaloCost", "thiagoCost", "gonzaloProfit", "thiagoProfit"].includes(key) ? formatMoney(Number(values[key])) : key.endsWith("Percent") ? `${values[key]}%` : values[key];
     }
     return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Check size={15} /></button>}<button onClick={() => row.type === "sale" ? props.onOpenSale(row.original as SalesRecord) : row.type === "purchase" ? props.onOpenPurchase(row.original as InventoryPurchase) : props.onOpenExpense(row.original as BusinessExpense)} title="Full editor" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
   }

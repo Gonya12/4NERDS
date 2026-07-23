@@ -1,4 +1,4 @@
-import type { BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord } from "../types/models";
+import type { BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord } from "../types/models";
 import { roundMoney } from "./paymentMath";
 
 export const pokemonCategoryLabels: Record<PokemonProductCategory, string> = {
@@ -76,6 +76,38 @@ export function inventoryQuantitySummary(purchase: InventoryPurchase, sales: Sal
   const returnOnCost = realizedCost > 0 ? roundMoney(realizedProfit / realizedCost * 100) : 0;
   const potentialProfit = roundMoney(Number(purchase.marketValue || 0) - purchase.totalCost);
   return { linkedSales, quantitySold, quantityRemaining, costPerUnit, realizedCost, unsoldCost, realizedRevenue, realizedProfit, margin, returnOnCost, potentialProfit };
+}
+
+export function ownershipTotal(shares?: OwnershipShare[]) {
+  return roundMoney((shares || []).reduce((sum, share) => sum + Number(share.ownershipPercentage || 0), 0));
+}
+
+export function effectiveSaleOwnership(sale: SalesRecord, purchases: InventoryPurchase[]) {
+  return sale.inventoryPurchaseId
+    ? purchases.find((purchase) => purchase.id === sale.inventoryPurchaseId)?.ownershipShares || []
+    : sale.ownershipShares || [];
+}
+
+export function ownerAllocation(amount: number, shares?: OwnershipShare[]) {
+  return (shares || []).map((share) => ({ ...share, amount: roundMoney(amount * share.ownershipPercentage / 100) }));
+}
+
+export function ownerProfitRows(sales: SalesRecord[], purchases: InventoryPurchase[]) {
+  const totals = new Map<string, { profit: number; revenue: number; itemsSold: number }>();
+  sales.forEach((sale) => {
+    const shares = effectiveSaleOwnership(sale, purchases);
+    const profit = saleProfit(sale);
+    shares.forEach((share) => {
+      const current = totals.get(share.workerId) || { profit: 0, revenue: 0, itemsSold: 0 };
+      const ratio = share.ownershipPercentage / 100;
+      totals.set(share.workerId, {
+        profit: roundMoney(current.profit + profit * ratio),
+        revenue: roundMoney(current.revenue + Number(sale.soldPrice || 0) * ratio),
+        itemsSold: current.itemsSold + Number(sale.quantity || 1) * ratio
+      });
+    });
+  });
+  return totals;
 }
 
 export function inventoryStatusForQuantity(quantity: number, quantitySold: number, personal = false): InventoryStatus {

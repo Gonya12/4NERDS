@@ -11,18 +11,20 @@ import { CardScanPanel } from "../components/sales/CardScanPanel";
 import { BatchInventoryImporter } from "../components/sales/BatchInventoryImporter";
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
+import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses, saveBusinessExpense } from "../services/database/businessExpenseRepository";
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
 import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecordsPage, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { listWorkers } from "../services/database/workerRepository";
+import { listOwnershipShares, saveInventoryOwnership, saveSaleOwnership } from "../services/database/ownershipRepository";
 import { compressSaleImage, imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { downloadFinancialWorkbook, type ExcelExportScope } from "../services/sales/excelExportService";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 import type {
-  BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus,
+  BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
   PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord, Worker
 } from "../types/models";
 import { safeDateFromLocalInput } from "../utils/browserCompat";
@@ -130,7 +132,7 @@ export function SalesControlPage() {
     quantity: "1", soldPrice: "", boughtPrice: "", marketValue: "", boughtFrom: "",
     purchaseSource: "" as PurchaseSource | "", paymentMethod: "cash" as SalePaymentMethod,
     soldByWorkerId: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
-    inventoryPurchaseId: "", notes: "", soldAt: localDateTime()
+    inventoryPurchaseId: "", notes: "", soldAt: localDateTime(), ownershipShares: [] as OwnershipShare[]
   });
   const blankPurchase = () => ({
     itemName: "", category: "raw_card" as PokemonProductCategory, quantity: "1", purchaseDate: localDateTime(),
@@ -139,7 +141,8 @@ export function SalesControlPage() {
     notes: "", status: "in_stock" as InventoryStatus, quantitySold: "0", soldPrice: "", soldDate: "",
     soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: "",
     cardName: "", collectorNumber: "", cardSet: "", cardLanguage: "", cardCondition: "", stickerPrice: "",
-    gradingCompany: "", grade: "", certificateNumber: "", scanConfidence: "", scanStatus: "not_scanned", imageHash: "", scanResult: undefined as Record<string, unknown> | undefined
+    gradingCompany: "", grade: "", certificateNumber: "", scanConfidence: "", scanStatus: "not_scanned", imageHash: "", scanResult: undefined as Record<string, unknown> | undefined,
+    ownershipShares: [] as OwnershipShare[]
   });
   const blankExpense = () => ({
     expenseDate: localDateTime(), amount: "", category: "other" as BusinessExpenseCategory,
@@ -158,15 +161,18 @@ export function SalesControlPage() {
       withTimeout(listInventoryPurchases(100), "Inventory purchases"),
       withTimeout(listBusinessExpenses(100), "Expenses"),
       withTimeout(listPlannerEventOptions(500), "Events"),
-      withTimeout(listWorkers(), "Workers")
+      withTimeout(listWorkers(), "Workers"),
+      withTimeout(listOwnershipShares(), "Ownership")
     ]);
     const errors: string[] = [];
-    if (results[0].status === "fulfilled") { setSales(results[0].value.records); setHasMoreSales(results[0].value.hasMore); setSalesPage(0); } else errors.push(`Sales: ${String(results[0].reason?.message || results[0].reason)}`);
-    if (results[1].status === "fulfilled") setPurchases(results[1].value); else errors.push(`Inventory purchases: ${String(results[1].reason?.message || results[1].reason)}`);
+    const ownership = results[5].status === "fulfilled" ? results[5].value : { inventory: new Map<string, OwnershipShare[]>(), sales: new Map<string, OwnershipShare[]>() };
+    if (results[0].status === "fulfilled") { setSales(results[0].value.records.map((sale) => ({ ...sale, ownershipShares: ownership.sales.get(sale.id) || [] }))); setHasMoreSales(results[0].value.hasMore); setSalesPage(0); } else errors.push(`Sales: ${String(results[0].reason?.message || results[0].reason)}`);
+    if (results[1].status === "fulfilled") setPurchases(results[1].value.map((purchase) => ({ ...purchase, ownershipShares: ownership.inventory.get(purchase.id) || [] }))); else errors.push(`Inventory purchases: ${String(results[1].reason?.message || results[1].reason)}`);
     if (results[2].status === "fulfilled") setExpenses(results[2].value); else errors.push(`Expenses: ${String(results[2].reason?.message || results[2].reason)}`);
     const eventRows = results[3].status === "fulfilled" ? results[3].value : [];
     if (results[3].status === "fulfilled") setEvents(eventRows); else errors.push(`Events: ${String(results[3].reason?.message || results[3].reason)}`);
     if (results[4].status === "fulfilled") setWorkers(results[4].value); else errors.push(`Workers: ${String(results[4].reason?.message || results[4].reason)}`);
+    if (results[5].status === "rejected") errors.push(`Ownership: ${String(results[5].reason?.message || results[5].reason)}`);
     if (errors.length) setLoadError(errors.join("\n"));
     setLoading(false);
     setSyncing(false);
@@ -213,7 +219,7 @@ export function SalesControlPage() {
       boughtPrice: sale.boughtPrice === undefined ? "" : String(sale.boughtPrice), marketValue: sale.marketValue === undefined ? "" : String(sale.marketValue),
       boughtFrom: sale.boughtFrom || "", purchaseSource: sale.purchaseSource || "", paymentMethod: sale.paymentMethod || "cash",
       soldByWorkerId: sale.soldByWorkerId || "", isRawCard: sale.isRawCard, buyPercentage: String(sale.buyPercentage || defaultBuyPercentage),
-      inventoryPurchaseId: sale.inventoryPurchaseId || "", notes: sale.notes || "", soldAt: sale.soldAt.slice(0, 16)
+      inventoryPurchaseId: sale.inventoryPurchaseId || "", notes: sale.notes || "", soldAt: sale.soldAt.slice(0, 16), ownershipShares: sale.ownershipShares || []
     } : { ...blankSale(), eventId: automaticEvent?.id || "", eventDayId: todayDayId(automaticEvent) });
     setPreviewUrl(sale?.imageUrl || "");
     setEditor("sale");
@@ -233,7 +239,8 @@ export function SalesControlPage() {
       , cardName: purchase.cardName || "", collectorNumber: purchase.collectorNumber || "", cardSet: purchase.cardSet || "",
       cardLanguage: purchase.cardLanguage || "", cardCondition: purchase.cardCondition || "", stickerPrice: purchase.stickerPrice === undefined ? "" : String(purchase.stickerPrice),
       gradingCompany: purchase.gradingCompany || "", grade: purchase.grade || "", certificateNumber: purchase.certificateNumber || "",
-      scanConfidence: purchase.scanConfidence || "", scanStatus: purchase.scanStatus || "not_scanned", imageHash: purchase.imageHash || "", scanResult: purchase.scanResult
+      scanConfidence: purchase.scanConfidence || "", scanStatus: purchase.scanStatus || "not_scanned", imageHash: purchase.imageHash || "", scanResult: purchase.scanResult,
+      ownershipShares: purchase.ownershipShares || []
     } : blankPurchase());
     setPreviewUrl(purchase?.imageUrl || "");
     setBackPreviewUrl(purchase?.backImageUrl || "");
@@ -343,6 +350,8 @@ export function SalesControlPage() {
   async function saveSale() {
     if (saleForm.soldPrice === "" || !saleForm.soldAt) { setMessage("Sold price and date sold are required."); return; }
     if ([saleForm.soldPrice, saleForm.boughtPrice, saleForm.marketValue].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
+    const saleOwnershipTotal = saleForm.ownershipShares.reduce((sum, share) => sum + share.ownershipPercentage, 0);
+    if (!saleForm.inventoryPurchaseId && saleForm.ownershipShares.length && Math.abs(saleOwnershipTotal - 100) > 0.001) { setMessage("Profit ownership percentages must total 100%."); return; }
     setBusy(true); setMessage("");
     try {
       const market = saleForm.marketValue === "" ? undefined : Number(saleForm.marketValue);
@@ -357,12 +366,15 @@ export function SalesControlPage() {
         paymentMethod: saleForm.paymentMethod, soldByWorkerId: saleForm.soldByWorkerId || undefined, isRawCard: saleForm.isRawCard,
         buyPercentage: saleForm.isRawCard ? percentage : undefined, targetBuyPrice: saleForm.isRawCard && market && percentage ? roundMoney(market * percentage / 100) : undefined,
         inventoryPurchaseId: saleForm.inventoryPurchaseId || undefined, notes: saleForm.notes.trim() || undefined,
-        soldAt: safeDateFromLocalInput(saleForm.soldAt).toISOString(), createdAt: editingSale?.createdAt
+        soldAt: safeDateFromLocalInput(saleForm.soldAt).toISOString(), createdAt: editingSale?.createdAt,
+        ownershipShares: saleForm.inventoryPurchaseId ? [] : saleForm.ownershipShares
       };
       const saved = editingSale && !imageFile
         ? await saveSaleRecord({ ...editingSale, ...input, quantity: input.quantity || 1, isRawCard: Boolean(input.isRawCard), pendingUpload: editingSale.pendingUpload } as SalesRecord)
         : (await createSaleRecord(input, imageFile)).sale;
-      setSales((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+      if (!saved.inventoryPurchaseId) await saveSaleOwnership(saved.id, saleForm.ownershipShares);
+      const savedWithOwnership = { ...saved, ownershipShares: saved.inventoryPurchaseId ? [] : saleForm.ownershipShares };
+      setSales((current) => [savedWithOwnership, ...current.filter((row) => row.id !== saved.id)]);
       if (saved.inventoryPurchaseId) {
         const linked = purchases.find((purchase) => purchase.id === saved.inventoryPurchaseId);
         if (linked && linked.status !== "personal") {
@@ -380,7 +392,7 @@ export function SalesControlPage() {
             soldEventId: latestSale?.eventId,
             soldPaymentMethod: latestSale?.paymentMethod
           });
-          setPurchases((current) => current.map((row) => row.id === updated.id ? updated : row));
+          setPurchases((current) => current.map((row) => row.id === updated.id ? { ...updated, ownershipShares: linked.ownershipShares } : row));
         }
       }
       setMessage("Sale saved."); closeEditor();
@@ -396,6 +408,8 @@ export function SalesControlPage() {
     const requestedSoldQuantity = Math.max(0, Number(purchaseForm.quantitySold || 0));
     if (requestedSoldQuantity > quantity) { setMessage("Quantity sold cannot be greater than the quantity purchased."); return; }
     if (requestedSoldQuantity > 0 && (purchaseForm.soldPrice === "" || !purchaseForm.soldDate)) { setMessage("Sold price and sold date are required when inventory is marked sold."); return; }
+    const ownershipTotal = purchaseForm.ownershipShares.reduce((sum, share) => sum + share.ownershipPercentage, 0);
+    if (purchaseForm.ownershipShares.some((share) => share.ownershipPercentage < 0) || (purchaseForm.ownershipShares.length && Math.abs(ownershipTotal - 100) > 0.001)) { setMessage("Ownership percentages cannot be negative and must total 100%."); return; }
     setBusy(true); setMessage("");
     try {
       const market = purchaseForm.marketValue === "" ? undefined : Number(purchaseForm.marketValue);
@@ -422,9 +436,12 @@ export function SalesControlPage() {
         stickerPrice: purchaseForm.stickerPrice === "" ? undefined : Number(purchaseForm.stickerPrice),
         gradingCompany: purchaseForm.gradingCompany || undefined, grade: purchaseForm.grade || undefined,
         certificateNumber: purchaseForm.certificateNumber || undefined, scanConfidence: purchaseForm.scanConfidence as InventoryPurchase["scanConfidence"] || undefined,
-        scanStatus: (purchaseForm.scanStatus === "needs_review" ? "imported" : purchaseForm.scanStatus) as InventoryPurchase["scanStatus"], imageHash: purchaseForm.imageHash || undefined, scanResult: purchaseForm.scanResult
+        scanStatus: (purchaseForm.scanStatus === "needs_review" ? "imported" : purchaseForm.scanStatus) as InventoryPurchase["scanStatus"], imageHash: purchaseForm.imageHash || undefined, scanResult: purchaseForm.scanResult,
+        ownershipShares: purchaseForm.ownershipShares
       }, imageFile, backImageFile);
-      setPurchases((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+      await saveInventoryOwnership(saved.id, purchaseForm.ownershipShares);
+      const savedWithOwnership = { ...saved, ownershipShares: purchaseForm.ownershipShares };
+      setPurchases((current) => [savedWithOwnership, ...current.filter((row) => row.id !== saved.id)]);
       if (quantitySold > 0 && linkedSales.length === 0) {
         const sale = (await createSaleRecord({
           itemName: saved.itemName,
@@ -491,8 +508,8 @@ export function SalesControlPage() {
 
   async function loadMoreSales() {
     const nextPage = salesPage + 1;
-    const result = await listSalesRecordsPage(nextPage, 50);
-    setSales((current) => [...current, ...result.records]);
+    const [result, ownership] = await Promise.all([listSalesRecordsPage(nextPage, 50), listOwnershipShares()]);
+    setSales((current) => [...current, ...result.records.map((sale) => ({ ...sale, ownershipShares: ownership.sales.get(sale.id) || [] }))]);
     setSalesPage(nextPage);
     setHasMoreSales(result.hasMore);
   }
@@ -550,7 +567,8 @@ export function SalesControlPage() {
 
   async function saveSpreadsheetSale(sale: SalesRecord) {
     const saved = await saveSaleRecord(sale);
-    const nextSales = [saved, ...sales.filter((row) => row.id !== saved.id)];
+    const savedWithOwnership = { ...saved, ownershipShares: sale.ownershipShares || [] };
+    const nextSales = [savedWithOwnership, ...sales.filter((row) => row.id !== saved.id)];
     setSales(nextSales);
     if (saved.inventoryPurchaseId) {
       const purchase = purchases.find((row) => row.id === saved.inventoryPurchaseId);
@@ -559,14 +577,14 @@ export function SalesControlPage() {
         const quantitySold = Math.min(purchase.quantity, linked.reduce((sum, row) => sum + Number(row.quantity || 1), 0));
         const latest = [...linked].sort((a, b) => b.soldAt.localeCompare(a.soldAt))[0];
         const updated = await saveInventoryPurchase({ ...purchase, quantitySold, status: inventoryStatusForQuantity(purchase.quantity, quantitySold), soldPrice: roundMoney(linked.reduce((sum, row) => sum + Number(row.soldPrice || 0), 0)), soldDate: latest?.soldAt, soldByWorkerId: latest?.soldByWorkerId, soldEventId: latest?.eventId, soldPaymentMethod: latest?.paymentMethod });
-        setPurchases((current) => current.map((row) => row.id === updated.id ? updated : row));
+        setPurchases((current) => current.map((row) => row.id === updated.id ? { ...updated, ownershipShares: row.ownershipShares } : row));
       }
     }
   }
 
   async function saveSpreadsheetPurchase(purchase: InventoryPurchase) {
     const saved = await saveInventoryPurchase(purchase);
-    setPurchases((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
+    setPurchases((current) => [{ ...saved, ownershipShares: purchase.ownershipShares || [] }, ...current.filter((row) => row.id !== saved.id)]);
   }
 
   async function saveSpreadsheetExpense(expense: BusinessExpense) {
@@ -600,12 +618,14 @@ export function SalesControlPage() {
     if (type === "sale") {
       const source = sales.find((row) => row.id === id); if (!source) return;
       const saved = (await createSaleRecord({ ...source, id: undefined, imagePath: undefined, pendingUpload: false, soldAt: now, createdAt: undefined, updatedAt: undefined })).sale;
-      setSales((current) => [saved, ...current]);
+      if (!saved.inventoryPurchaseId && source.ownershipShares?.length) await saveSaleOwnership(saved.id, source.ownershipShares);
+      setSales((current) => [{ ...saved, ownershipShares: source.ownershipShares || [] }, ...current]);
     }
     if (type === "purchase") {
       const source = purchases.find((row) => row.id === id); if (!source) return;
       const saved = await saveInventoryPurchase({ ...source, id: undefined, imagePath: undefined, status: "in_stock", quantitySold: 0, soldPrice: undefined, soldDate: undefined, soldByWorkerId: undefined, soldEventId: undefined, soldPaymentMethod: undefined, buyerNote: undefined, purchaseDate: now, createdAt: undefined, updatedAt: undefined });
-      setPurchases((current) => [saved, ...current]);
+      if (source.ownershipShares?.length) await saveInventoryOwnership(saved.id, source.ownershipShares);
+      setPurchases((current) => [{ ...saved, ownershipShares: source.ownershipShares || [] }, ...current]);
     }
     if (type === "expense") {
       const source = expenses.find((row) => row.id === id); if (!source) return;
@@ -633,6 +653,7 @@ export function SalesControlPage() {
             purchases={purchases}
             expenses={expenses}
             events={events}
+            workers={workers}
             dateRange={dateRange}
             customStart={customStart}
             customEnd={customEnd}
@@ -711,6 +732,7 @@ export function SalesControlPage() {
               {saleForm.isRawCard ? <RawCardCalculator marketValue={saleForm.marketValue} buyPercentage={saleForm.buyPercentage} actualCost={saleForm.boughtPrice} onMarketValue={(value) => setSaleForm({ ...saleForm, marketValue: value })} onPercentage={(value) => setSaleForm({ ...saleForm, buyPercentage: value })} onActualCost={(value) => setSaleForm({ ...saleForm, boughtPrice: value })} /> : <>{moneyInput(saleForm.marketValue, (value) => setSaleForm({ ...saleForm, marketValue: value }), "Market value, optional")}</>}
               <div className="grid gap-3 sm:grid-cols-2"><select value={saleForm.eventId} onChange={(event) => setSaleForm({ ...saleForm, eventId: event.target.value, eventDayId: "" })} className={compactInputClass()}><option value="">No event selected</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name} · {shortScheduleSummary(event)}</option>)}</select><select value={saleForm.eventDayId} disabled={!selectedSaleEvent} onChange={(event) => setSaleForm({ ...saleForm, eventDayId: event.target.value })} className={compactInputClass()}><option value="">No event day selected</option>{selectedSaleEvent ? eventDays(selectedSaleEvent).map((day) => <option key={day.id} value={day.id}>{day.date.slice(0, 10)}</option>) : null}</select><select value={saleForm.inventoryPurchaseId} onChange={(event) => { const linked = purchases.find((row) => row.id === event.target.value); const suggested = linked ? roundMoney(linked.totalCost / Math.max(1, linked.quantity) * Math.max(1, Number(saleForm.quantity || 1))) : undefined; setSaleForm({ ...saleForm, inventoryPurchaseId: event.target.value, boughtPrice: linked && saleForm.boughtPrice === "" ? String(suggested) : saleForm.boughtPrice }); }} className={compactInputClass()}><option value="">No linked inventory purchase</option>{purchases.map((purchase) => <option key={purchase.id} value={purchase.id}>{purchase.itemName} · {formatMoney(purchase.totalCost)}</option>)}</select><select value={saleForm.soldByWorkerId} onChange={(event) => setSaleForm({ ...saleForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={saleForm.purchaseSource} onChange={(event) => setSaleForm({ ...saleForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source, optional</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={saleForm.paymentMethod} onChange={(event) => setSaleForm({ ...saleForm, paymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={saleForm.boughtFrom} onChange={(event) => setSaleForm({ ...saleForm, boughtFrom: event.target.value })} placeholder="Bought from / seller" className={compactInputClass()} /></div>
               {selectedLinkedPurchase ? <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-700 dark:bg-sky-950/30 dark:text-sky-200">Linked to {selectedLinkedPurchase.itemName}. Its purchase is not counted as an operating expense.</p> : null}<textarea value={saleForm.notes} onChange={(event) => setSaleForm({ ...saleForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} />
+              {!saleForm.inventoryPurchaseId ? <OwnershipEditor workers={workers} shares={saleForm.ownershipShares} totalCost={Number(saleForm.boughtPrice || 0)} label="Profit Ownership" onChange={(ownershipShares) => setSaleForm({ ...saleForm, ownershipShares })} /> : null}
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
@@ -734,6 +756,7 @@ export function SalesControlPage() {
               {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl); setBackImageFile(file); setBackPreviewUrl(URL.createObjectURL(file)); }} /></label></> : null}
               <p className="sm:col-span-3 text-xs text-slate-500">Actual bought price remains the separate “Actual total cost” field below. Scan status: {purchaseForm.scanStatus.replace(/_/g, " ")}{purchaseForm.scanConfidence ? ` · ${purchaseForm.scanConfidence} confidence` : ""}</p>
             </section> : null}
+            {editor === "purchase" ? <OwnershipEditor workers={workers} shares={purchaseForm.ownershipShares} totalCost={Number(purchaseForm.totalCost || 0)} paidByWorkerId={purchaseForm.purchasedByWorkerId} onChange={(ownershipShares) => setPurchaseForm({ ...purchaseForm, ownershipShares })} /> : null}
 
 
             {editor === "purchase" ? <div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Purchase preview" className="mx-auto max-h-64 object-contain" /> : <PackagePlus className="mx-auto text-sky-500" size={38} />}<button onClick={() => inputRef.current?.click()} className="mt-3 min-h-10 rounded-xl bg-ink px-4 text-sm font-bold text-white dark:bg-coral"><Upload className="inline" size={16} /> Choose optional photo</button></div><div className="grid gap-3 sm:grid-cols-2"><input value={purchaseForm.itemName} onChange={(event) => setPurchaseForm({ ...purchaseForm, itemName: event.target.value })} placeholder="Item name *" className={compactInputClass()} /><select value={purchaseForm.category} onChange={(event) => setPurchaseForm({ ...purchaseForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : purchaseForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={purchaseForm.purchaseDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseDate: event.target.value })} className={compactInputClass()} />{moneyInput(purchaseForm.totalCost, (value) => setPurchaseForm({ ...purchaseForm, totalCost: value }), "Actual total cost *")}</div><label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={purchaseForm.isRawCard} onChange={(event) => setPurchaseForm({ ...purchaseForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>{purchaseForm.isRawCard ? <RawCardCalculator marketValue={purchaseForm.marketValue} buyPercentage={purchaseForm.buyPercentage} actualCost={purchaseForm.totalCost} onMarketValue={(value) => setPurchaseForm({ ...purchaseForm, marketValue: value })} onPercentage={(value) => setPurchaseForm({ ...purchaseForm, buyPercentage: value })} onActualCost={(value) => setPurchaseForm({ ...purchaseForm, totalCost: value })} /> : moneyInput(purchaseForm.marketValue, (value) => setPurchaseForm({ ...purchaseForm, marketValue: value }), "Market value, optional")}<div className="grid gap-3 sm:grid-cols-2"><select value={purchaseForm.purchaseSource} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={purchaseForm.seller} onChange={(event) => setPurchaseForm({ ...purchaseForm, seller: event.target.value })} placeholder="Website / store / seller" className={compactInputClass()} /><select value={purchaseForm.eventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.purchasedByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchasedByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Purchased by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.status} onChange={(event) => setPurchaseForm({ ...purchaseForm, status: event.target.value as InventoryStatus })} className={compactInputClass()}>{inventoryStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.notes} onChange={(event) => setPurchaseForm({ ...purchaseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /></div> : null}

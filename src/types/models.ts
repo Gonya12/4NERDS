@@ -158,6 +158,7 @@ export interface SalesRecord {
   pendingUpload: boolean;
   createdAt: string;
   updatedAt: string;
+  ownershipShares?: OwnershipShare[];
 }
 
 export interface InventoryPurchase {
@@ -205,6 +206,14 @@ export interface InventoryPurchase {
   scanResult?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  ownershipShares?: OwnershipShare[];
+}
+
+export interface OwnershipShare {
+  id?: string;
+  workerId: string;
+  ownershipPercentage: number;
+  contributionAmount?: number;
 }
 
 export interface BusinessExpense {
