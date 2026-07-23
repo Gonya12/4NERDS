@@ -1,5 +1,5 @@
-import { BarChart3, Camera, FileSpreadsheet, LineChart, PackagePlus, Plus, Receipt, TrendingUp } from "lucide-react";
-import { useMemo, useState } from "react";
+import { BarChart3, Camera, ChartArea, ChartBarStacked, ChartPie, FileSpreadsheet, LineChart, PackagePlus, Plus, Receipt, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, Worker } from "../../types/models";
 import { filterFinancialRecords, financialDateRangeLabels, type FinancialDateRange } from "../../utils/financialDateRange";
 import { formatMoney } from "../../utils/paymentMath";
@@ -142,8 +142,13 @@ export function SalesAnalyticsPanel(props: Props) {
     return `${donutColors[index % donutColors.length]} ${start}deg ${donutCursor}deg`;
   }).join(", ");
   const temporalGrouping = chartGrouping === "daily" || chartGrouping === "weekly" || chartGrouping === "monthly";
-  const availableStyles: ChartStyle[] = temporalGrouping ? ["line", "bar", "area", "stacked"] : ["bar", "donut", "stacked"];
+  const availableStyles: ChartStyle[] = temporalGrouping
+    ? ["line", "bar", "area", ...(chartMetric === "owner_profit" ? ["stacked" as const] : [])]
+    : ["bar", "donut", ...(["event", "category", "owner"].includes(chartGrouping) ? ["stacked" as const] : [])];
   const visibleChartStyle = availableStyles.includes(chartStyle) ? chartStyle : availableStyles[0];
+  useEffect(() => {
+    if (!availableStyles.includes(chartStyle)) setChartStyle(availableStyles[0]);
+  }, [availableStyles, chartStyle]);
 
   const recentRecords = useMemo(() => {
     const rows = [
@@ -180,10 +185,24 @@ export function SalesAnalyticsPanel(props: Props) {
 
       <section className="surface-card space-y-3 p-3 sm:p-4">
         <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><BarChart3 className="text-coral" size={20} /></div>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2">
           <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["daily","Daily"],["weekly","Weekly"],["monthly","Monthly"],["event","Event"],["category","Category"],["owner","Owner"],["payment","Payment Method"]] as [ChartGrouping,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label className="text-xs font-black text-slate-500">Chart type<select value={visibleChartStyle} onChange={(event) => setChartStyle(event.target.value as ChartStyle)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["line","Line"],["bar","Bar"],["area","Area"],["donut","Donut"],["stacked","Stacked Bar"]] as [ChartStyle,string][]).filter(([value]) => availableStyles.includes(value)).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        </div>
+        <div>
+          <p className="mb-1 text-xs font-black text-slate-500">Chart type</p>
+          <div className="flex max-w-full flex-wrap gap-2" role="group" aria-label="Chart type">
+            {([
+              ["line", "Line", LineChart],
+              ["bar", "Bar", BarChart3],
+              ["area", "Area", ChartArea],
+              ["donut", "Donut", ChartPie],
+              ["stacked", "Stacked Bar", ChartBarStacked]
+            ] as const).filter(([value]) => availableStyles.includes(value)).map(([value, label, Icon]) => {
+              const selected = visibleChartStyle === value;
+              return <button key={value} type="button" aria-pressed={selected} onClick={() => setChartStyle(value)} className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-black transition duration-150 active:scale-[0.97] ${selected ? "border-coral bg-coral text-white shadow-sm shadow-orange-950/20" : "border-slate-700 bg-slate-900 text-slate-200 hover:border-coral/70 hover:bg-slate-800 hover:text-white"}`}><Icon size={17} aria-hidden="true" />{label}</button>;
+            })}
+          </div>
         </div>
         {chartRows.length ? visibleChartStyle === "line" || visibleChartStyle === "area" ? <div className="overflow-hidden rounded-xl bg-slate-50 p-2 dark:bg-slate-950/70"><svg viewBox="0 0 600 180" className="h-44 w-full" role="img" aria-label={`${chartMetric} chart`}>{visibleChartStyle === "area" ? <polygon points={`20,160 ${linePoints} 580,160`} fill="#F45D1333" /> : null}<line x1="20" y1="160" x2="580" y2="160" stroke="currentColor" className="text-slate-300 dark:text-slate-700" /><polyline points={linePoints} fill="none" stroke="#F45D13" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />{chartRows.map((row, index) => { const [x, y] = linePoints.split(" ")[index].split(","); return <circle key={row.key} cx={x} cy={y} r="6" fill="#F45D13"><title>{row.label}: {formatMoney(row.value)}</title></circle>; })}</svg><div className="flex justify-between gap-1 text-[10px] text-slate-500">{chartRows.slice(-6).map((row) => <span key={row.key}>{row.label}</span>)}</div></div>
           : visibleChartStyle === "donut" ? <div className="grid items-center gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-950/70"><div className="mx-auto flex size-44 items-center justify-center rounded-full" style={{ background: `conic-gradient(${donutGradient})` }}><div className="flex size-24 items-center justify-center rounded-full bg-white text-center text-sm font-black dark:bg-slate-900">{formatMoney(donutTotal)}<br />Total</div></div><div className="space-y-2">{chartRows.map((row, index) => <div key={row.key} className="flex items-center gap-2 text-xs"><span className="size-3 rounded-full" style={{ backgroundColor: donutColors[index % donutColors.length] }} /><span className="min-w-0 flex-1 truncate font-bold">{row.label}</span><span>{formatMoney(row.value)}</span></div>)}</div></div>
