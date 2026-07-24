@@ -1,6 +1,6 @@
 import { ArrowRight, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { BottomNav } from "./components/BottomNav";
 import { DesktopSidebar } from "./components/DesktopSidebar";
 import { CalendarPage } from "./pages/CalendarPage";
@@ -14,13 +14,14 @@ import { NeedsToBuyPage } from "./pages/NeedsToBuyPage";
 import { NjCalendarPage } from "./pages/NjCalendarPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { PastEventsPage } from "./pages/PastEventsPage";
-import { SalesControlPage } from "./pages/SalesControlPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { db, getSettings, removeDemoData, seedWorkers } from "./services/storage/localDb";
 import { listCalendarFeeds, seedDefaultCalendarFeed, syncCalendarFeed } from "./services/database/calendarFeedRepository";
 import { canRunAction, markActionRun } from "./utils/supabase";
 import { addDebugLog, appVersion } from "./services/debug/debugLog";
 import { applyPwaUpdate, getPwaStatus, subscribePwaStatus } from "./services/pwa/registerPwa";
+
+const SalesControlPage = lazy(() => import("./pages/SalesControlPage").then((module) => ({ default: module.SalesControlPage })));
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   useEffect(() => {
@@ -124,12 +125,13 @@ export default function App() {
             <Route path="/past" element={<PastEventsPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/flyers" element={<FlyerGalleryPage />} />
-            <Route path="/sales" element={<SalesControlPage />} />
+            <Route path="/sales" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Sales Control…</div>}><SalesControlPage /></Suspense>} />
             <Route path="/buy" element={<NeedsToBuyPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/events/new" element={<EventFormPage />} />
             <Route path="/events/:id" element={<EventDetailPage />} />
             <Route path="/events/:id/edit" element={<EventFormPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
       </main>

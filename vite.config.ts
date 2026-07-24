@@ -7,6 +7,16 @@ const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.met
 const buildTime = new Date().toISOString();
 
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/tesseract.js") || id.includes("node_modules/tesseract.js-core")) return "scanner-tesseract";
+          if (id.includes("node_modules/@huggingface/transformers") || id.includes("node_modules/onnxruntime-web")) return "scanner-transformers";
+        }
+      }
+    }
+  },
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
     __APP_BUILD_TIME__: JSON.stringify(buildTime)
@@ -46,6 +56,14 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+        globIgnores: [
+          "**/scanner-*.js",
+          "**/cardScanService-*.js",
+          "**/CardScanPanel-*.js",
+          "**/QuickCardScanner-*.js",
+          "**/BatchInventoryImporter-*.js",
+          "**/TcgplayerPricingPanel-*.js"
+        ],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,

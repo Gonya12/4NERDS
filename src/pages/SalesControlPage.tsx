@@ -2,16 +2,13 @@ import {
   Camera, ClipboardPaste, Download, FileSpreadsheet, ImagePlus, PackagePlus, Receipt,
   RotateCcw, Save, ScanLine, SwitchCamera, Trash2, Upload, X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { FinancialSpreadsheet } from "../components/sales/FinancialSpreadsheet";
-import { CardScanPanel } from "../components/sales/CardScanPanel";
-import { BatchInventoryImporter } from "../components/sales/BatchInventoryImporter";
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
-import { QuickCardScanner } from "../components/sales/QuickCardScanner";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
@@ -38,6 +35,10 @@ import {
 } from "../utils/salesControl";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 import { getAutoLinkEventForSale, getEligibleSaleEvents, isPaidAndConfirmedEvent, matchingSaleEventDay } from "../utils/saleEventLinking";
+
+const CardScanPanel = lazy(() => import("../components/sales/CardScanPanel").then((module) => ({ default: module.CardScanPanel })));
+const BatchInventoryImporter = lazy(() => import("../components/sales/BatchInventoryImporter").then((module) => ({ default: module.BatchInventoryImporter })));
+const QuickCardScanner = lazy(() => import("../components/sales/QuickCardScanner").then((module) => ({ default: module.QuickCardScanner })));
 
 type Editor = "sale" | "purchase" | "expense" | null;
 
