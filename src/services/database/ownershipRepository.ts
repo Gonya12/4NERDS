@@ -1,5 +1,5 @@
 import type { OwnershipShare } from "../../types/models";
-import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, startSupabaseQueryTrace, supabase } from "../../utils/supabase";
 
 type InventoryRow = { id: string; inventory_purchase_id: string; worker_id: string; ownership_percentage: number; contribution_amount?: number | null };
 type SaleRow = { id: string; sales_record_id: string; worker_id: string; ownership_percentage: number };
@@ -11,12 +11,22 @@ const toShare = (row: InventoryRow | SaleRow): OwnershipShare => ({
   contributionAmount: "contribution_amount" in row && row.contribution_amount != null ? Number(row.contribution_amount) : undefined
 });
 
-export async function listOwnershipShares() {
+export async function listOwnershipShares(inventoryPurchaseIds: string[] = [], salesRecordIds: string[] = []) {
   if (!isSupabaseConfigured || !supabase) return { inventory: new Map<string, OwnershipShare[]>(), sales: new Map<string, OwnershipShare[]>() };
+  if (!inventoryPurchaseIds.length && !salesRecordIds.length) return { inventory: new Map<string, OwnershipShare[]>(), sales: new Map<string, OwnershipShare[]>() };
+  const completeTrace = startSupabaseQueryTrace("ownership shares", "listOwnershipShares", "inventory_purchase_id,sales_record_id,worker_id,ownership_percentage,contribution_amount");
   const [inventoryResult, salesResult] = await Promise.all([
-    supabase.from("inventory_ownership_shares").select("*"),
-    supabase.from("sale_profit_shares").select("*")
+    inventoryPurchaseIds.length
+      ? supabase.from("inventory_ownership_shares").select("id,inventory_purchase_id,worker_id,ownership_percentage,contribution_amount").in("inventory_purchase_id", inventoryPurchaseIds)
+      : Promise.resolve({ data: [], error: null }),
+    salesRecordIds.length
+      ? supabase.from("sale_profit_shares").select("id,sales_record_id,worker_id,ownership_percentage").in("sales_record_id", salesRecordIds)
+      : Promise.resolve({ data: [], error: null })
   ]);
+  completeTrace(
+    (inventoryResult.data?.length || 0) + (salesResult.data?.length || 0),
+    inventoryResult.error || salesResult.error
+  );
   recordSupabaseRequest("inventory_ownership_shares", "listOwnershipShares:inventory", inventoryResult.data?.length || 0);
   recordSupabaseRequest("sale_profit_shares", "listOwnershipShares:sales", salesResult.data?.length || 0);
   const error = inventoryResult.error || salesResult.error;

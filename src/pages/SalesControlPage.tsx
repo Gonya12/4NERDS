@@ -64,11 +64,21 @@ function moneyInput(value: string, onChange: (value: string) => void, placeholde
   return <input type="number" min="0" step="0.01" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className={compactInputClass()} />;
 }
 
-function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 8_000) {
+function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 18_000) {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(`${label} timed out. Cached data is still available.`)), timeoutMs))
   ]);
+}
+
+function loadErrorGuidance(error: string) {
+  if (/schema cache|relation .* does not exist|table .* not found|column .* (not found|does not exist)|could not find (the )?(table|column)/i.test(error)) {
+    return "A database table or column is missing. Run the focused migration associated with that feature.";
+  }
+  if (/timed out|timeout|network|fetch/i.test(error)) {
+    return "The request took too long. Cached data is still available.";
+  }
+  return "Cached data remains available. Retry the failed refresh when ready.";
 }
 
 export function SalesControlPage() {
@@ -92,6 +102,8 @@ export function SalesControlPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [usingCachedData, setUsingCachedData] = useState(Boolean(cachedSales.length || cachedPurchases.length || cachedExpenses.length));
+  const loadInFlightRef = useRef(false);
   const [imageFile, setImageFile] = useState<File>();
   const [backImageFile, setBackImageFile] = useState<File>();
   const [backPreviewUrl, setBackPreviewUrl] = useState("");
@@ -150,29 +162,40 @@ export function SalesControlPage() {
   const [expenseForm, setExpenseForm] = useState(blankExpense);
 
   async function loadData() {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     recordPageLoad("Sales Control");
     setSyncing(true);
     setLoadError("");
     const results = await Promise.allSettled([
       withTimeout(listSalesRecordsPage(0, 50), "Sales"),
-      withTimeout(listInventoryPurchases(100), "Inventory purchases"),
-      withTimeout(listBusinessExpenses(100), "Expenses"),
-      withTimeout(listPlannerEventOptions(500), "Events"),
-      withTimeout(listWorkers(), "Workers"),
-      withTimeout(listOwnershipShares(), "Ownership")
+      withTimeout(listInventoryPurchases(75), "Inventory purchases"),
+      withTimeout(listBusinessExpenses(75), "Expenses"),
+      withTimeout(listPlannerEventOptions(40), "Events"),
+      withTimeout(listWorkers(), "Workers")
     ]);
     const errors: string[] = [];
-    const ownership = results[5].status === "fulfilled" ? results[5].value : { inventory: new Map<string, OwnershipShare[]>(), sales: new Map<string, OwnershipShare[]>() };
-    if (results[0].status === "fulfilled") { setSales(results[0].value.records.map((sale) => ({ ...sale, ownershipShares: ownership.sales.get(sale.id) || [] }))); setHasMoreSales(results[0].value.hasMore); setSalesPage(0); } else errors.push(`Sales: ${String(results[0].reason?.message || results[0].reason)}`);
-    if (results[1].status === "fulfilled") setPurchases(results[1].value.map((purchase) => ({ ...purchase, ownershipShares: ownership.inventory.get(purchase.id) || [] }))); else errors.push(`Inventory purchases: ${String(results[1].reason?.message || results[1].reason)}`);
+    const refreshedSales = results[0].status === "fulfilled" ? results[0].value.records : sales;
+    const refreshedPurchases = results[1].status === "fulfilled" ? results[1].value : purchases;
+    let ownership = { inventory: new Map<string, OwnershipShare[]>(), sales: new Map<string, OwnershipShare[]>() };
+    try {
+      ownership = await withTimeout(listOwnershipShares(refreshedPurchases.map((row) => row.id), refreshedSales.map((row) => row.id)), "Ownership");
+    } catch (error) {
+      errors.push(`Ownership: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const existingSaleShares = new Map(sales.map((row) => [row.id, row.ownershipShares || []]));
+    const existingPurchaseShares = new Map(purchases.map((row) => [row.id, row.ownershipShares || []]));
+    if (results[0].status === "fulfilled") { setSales(refreshedSales.map((sale) => ({ ...sale, ownershipShares: ownership.sales.get(sale.id) || existingSaleShares.get(sale.id) || [] }))); setHasMoreSales(results[0].value.hasMore); setSalesPage(0); } else errors.push(`Sales: ${String(results[0].reason?.message || results[0].reason)}`);
+    if (results[1].status === "fulfilled") setPurchases(refreshedPurchases.map((purchase) => ({ ...purchase, ownershipShares: ownership.inventory.get(purchase.id) || existingPurchaseShares.get(purchase.id) || [] }))); else errors.push(`Inventory purchases: ${String(results[1].reason?.message || results[1].reason)}`);
     if (results[2].status === "fulfilled") setExpenses(results[2].value); else errors.push(`Expenses: ${String(results[2].reason?.message || results[2].reason)}`);
     const eventRows = results[3].status === "fulfilled" ? results[3].value : [];
     if (results[3].status === "fulfilled") setEvents(eventRows); else errors.push(`Events: ${String(results[3].reason?.message || results[3].reason)}`);
     if (results[4].status === "fulfilled") setWorkers(results[4].value); else errors.push(`Workers: ${String(results[4].reason?.message || results[4].reason)}`);
-    if (results[5].status === "rejected") errors.push(`Ownership: ${String(results[5].reason?.message || results[5].reason)}`);
     if (errors.length) setLoadError(errors.join("\n"));
+    setUsingCachedData(errors.length > 0);
     setLoading(false);
     setSyncing(false);
+    loadInFlightRef.current = false;
     if (new URLSearchParams(location.search).get("mode") === "sale" && !editor) openSale(undefined, eventRows);
   }
 
@@ -545,7 +568,8 @@ export function SalesControlPage() {
 
   async function loadMoreSales() {
     const nextPage = salesPage + 1;
-    const [result, ownership] = await Promise.all([listSalesRecordsPage(nextPage, 50), listOwnershipShares()]);
+    const result = await listSalesRecordsPage(nextPage, 50);
+    const ownership = await listOwnershipShares([], result.records.map((sale) => sale.id));
     setSales((current) => [...current, ...result.records.map((sale) => ({ ...sale, ownershipShares: ownership.sales.get(sale.id) || [] }))]);
     setSalesPage(nextPage);
     setHasMoreSales(result.hasMore);
@@ -733,7 +757,8 @@ export function SalesControlPage() {
         <button onClick={() => openSale()} className="btn-primary"><Camera size={18} /> Add Sale</button>
       </header>
       <SyncStatusBadge syncing={syncing} />
-      {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\nRun the latest supabase-schema.sql if the new tables are missing.`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
+      {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
+      {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
       {message ? <p className="rounded-2xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{message}</p> : null}
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(20rem,0.38fr)_minmax(0,0.62fr)] lg:items-start">

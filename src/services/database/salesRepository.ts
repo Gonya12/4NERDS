@@ -1,6 +1,6 @@
 import type { PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, startSupabaseQueryTrace, supabase } from "../../utils/supabase";
 import { fileToDataUrl, uploadSaleImage } from "../images/saleImageService";
 
 const pendingKey = "4nerds_pending_sales_v1";
@@ -124,13 +124,16 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
+  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at";
+  const completeTrace = startSupabaseQueryTrace("sales_records", "listSalesRecordsPage", columns);
   const extended = await supabase
     .from("sales_records")
-    .select("id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at")
+    .select(columns)
     .order("sold_at", { ascending: false })
     .range(from, to);
   let data = extended.data as unknown as SalesRow[] | null;
   let error = extended.error;
+  completeTrace(data?.length || 0, error);
   recordSupabaseRequest("sales_records", "listSalesRecordsPage", data?.length || 0);
   if (error && (error.code === "42703" || error.code === "PGRST204")) {
     const legacy = await supabase

@@ -103,6 +103,19 @@ export function recordSupabaseRequest(table: string, functionName: string, rows?
   }
 }
 
+export function startSupabaseQueryTrace(table: string, queryName: string, selectedColumns: string, fromCache = false) {
+  const startedAt = performance.now();
+  if (import.meta.env.DEV) console.info("[Supabase query:start]", { queryName, table, selectedColumns, startedAt: new Date().toISOString(), fromCache });
+  return (rows: number, error?: unknown) => {
+    if (!import.meta.env.DEV) return;
+    console.info("[Supabase query:complete]", {
+      queryName, table, selectedColumns, rows, fromCache,
+      durationMs: Math.round(performance.now() - startedAt),
+      error: error instanceof Error ? error.message : error || null
+    });
+  };
+}
+
 export function recordPageLoad(page: string) {
   lastPageLoaded = page;
 }

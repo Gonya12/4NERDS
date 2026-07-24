@@ -1,7 +1,7 @@
 import type { Worker } from "../../types/models";
 import { nowIso } from "../../utils/normalize";
 import { db, seedWorkers } from "../storage/localDb";
-import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, setSupabaseStatus, startSupabaseQueryTrace, supabase } from "../../utils/supabase";
 
 const defaultWorkerNames = ["Gonzalo", "Thiago", "Ivan", "Nahuel", "Slave 1", "Slave 2", "Slave 3"];
 const workerCacheKey = "4nerds_workers_cache_v1";
@@ -111,7 +111,10 @@ export async function listWorkers(force = false) {
     }
   }
   if (!workersSeedChecked) await seedSupabaseWorkers();
-  const { data, error } = await supabase.from("workers").select("*").order("name");
+  const columns = "id,name,active,created_at,updated_at";
+  const completeTrace = startSupabaseQueryTrace("workers", "listWorkers", columns);
+  const { data, error } = await supabase.from("workers").select(columns).order("name");
+  completeTrace(data?.length || 0, error);
   recordSupabaseRequest("workers", "listWorkers", data?.length || 0);
   if (error) {
     throw new Error(recordSupabaseError({ functionName: "listWorkers", table: "workers", error }));

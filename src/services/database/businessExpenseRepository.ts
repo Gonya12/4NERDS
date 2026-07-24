@@ -1,6 +1,6 @@
 import type { BusinessExpense, BusinessExpenseCategory } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, startSupabaseQueryTrace, supabase } from "../../utils/supabase";
 import { fileToDataUrl, uploadFinancialImage } from "../images/saleImageService";
 
 const localKey = "4nerds_business_expenses_local_v1";
@@ -72,7 +72,12 @@ export function getCachedBusinessExpenses() {
 
 export async function listBusinessExpenses(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const { data, error } = await supabase.from("business_expenses").select("*").order("expense_date", { ascending: false }).limit(limit);
+  const columns = "id,expense_date,amount,category,description,event_id,paid_by_worker_id,vendor,receipt_image_url,receipt_image_path,notes,created_at,updated_at";
+  const completeTrace = startSupabaseQueryTrace("business_expenses", "listBusinessExpenses", columns);
+  const { data, error } = await supabase.from("business_expenses")
+    .select(columns)
+    .order("expense_date", { ascending: false }).limit(limit);
+  completeTrace(data?.length || 0, error);
   recordSupabaseRequest("business_expenses", "listBusinessExpenses", data?.length || 0);
   if (error) throw new Error(error.message);
   const values = (data || []).map((row) => fromRow(row as ExpenseRow));

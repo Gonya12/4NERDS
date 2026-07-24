@@ -1,6 +1,6 @@
 import type { InventoryPurchase, InventoryStatus, PokemonProductCategory, PurchaseSource } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
-import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseRequest, setSupabaseStatus, startSupabaseQueryTrace, supabase } from "../../utils/supabase";
 import { fileToDataUrl, uploadFinancialImage } from "../images/saleImageService";
 
 const localKey = "4nerds_inventory_purchases_local_v1";
@@ -165,7 +165,12 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const { data, error } = await supabase.from("inventory_purchases").select("*").order("purchase_date", { ascending: false }).limit(limit);
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,created_at,updated_at";
+  const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
+  const { data, error } = await supabase.from("inventory_purchases")
+    .select(columns)
+    .order("purchase_date", { ascending: false }).limit(limit);
+  completeTrace(data?.length || 0, error);
   recordSupabaseRequest("inventory_purchases", "listInventoryPurchases", data?.length || 0);
   if (error) throw new Error(error.message);
   const values = (data || []).map((row) => fromRow(row as PurchaseRow));
