@@ -4,6 +4,7 @@
 
 - Pre-audit checkpoint: `6544ec59`
 - Consolidated camera/crop/mobile phase: `55c9258f`
+- OCR, matching, pricing, bulk, and test phase: `8538a9b8`
 - No destructive SQL or data mutation was run.
 
 ## Scanner surface
