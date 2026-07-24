@@ -99,6 +99,7 @@ export function ManualCardSearch({
   const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [selectionMessage, setSelectionMessage] = useState("");
   const [searched, setSearched] = useState(false);
   const [selected, setSelected] = useState<CardScanSuggestion>();
   const [largeMatch, setLargeMatch] = useState<CardMatch>();
@@ -124,6 +125,7 @@ export function ManualCardSearch({
     setTotalCount(0);
     setError("");
     setWarnings([]);
+    setSelectionMessage("");
     setSearched(false);
     setSelected(undefined);
     setLoading(false);
@@ -187,6 +189,7 @@ export function ManualCardSearch({
     controllerRef.current = controller;
     setSelecting(true);
     setError("");
+    setSelectionMessage("Applying card…");
     try {
       const { confirmPokemonCardMatch } = await import("../../services/sales/cardScanService");
       const confirmed = await confirmPokemonCardMatch(
@@ -194,18 +197,32 @@ export function ManualCardSearch({
         match,
         controller.signal,
       );
-      setSelected({
+      const nextSelected: CardScanSuggestion = {
         ...confirmed,
         language: terms.language || confirmed.language,
         overallConfidence: "high",
         warnings: confirmed.warnings.filter((warning) => !/no .*match|search manually/i.test(warning)),
-      });
+      };
+      // A single finish is already selected by the service, so one mobile tap
+      // should finish the action rather than leaving an unexplained extra step.
+      if (nextSelected.tcgplayerPricing?.variants.length !== 1) {
+        setSelected(nextSelected);
+        setSelectionMessage(nextSelected.tcgplayerPricing?.variants.length
+          ? "Choose the physical finish before applying this card."
+          : "Card ready to apply. No TCGplayer price is listed for this printing.");
+        return;
+      }
+      onApply(nextSelected);
+      onClose();
     } catch (reason) {
       if (!controller.signal.aborted) {
         setError(reason instanceof Error ? reason.message : "Could not load the selected card.");
       }
     } finally {
-      if (!controller.signal.aborted) setSelecting(false);
+      if (!controller.signal.aborted) {
+        setSelecting(false);
+        setSelectionMessage("");
+      }
     }
   }
 
@@ -218,9 +235,9 @@ export function ManualCardSearch({
       role="dialog"
       aria-modal="true"
       aria-label="Search Card Manually"
-      className="fixed inset-0 z-[95] overflow-y-auto bg-slate-950/80 p-2 backdrop-blur-sm sm:p-5"
+      className="fixed inset-0 z-[95] overflow-y-auto touch-pan-y bg-slate-950/80 p-2 backdrop-blur-sm sm:p-5"
     >
-      <section className="mx-auto my-2 w-full max-w-6xl space-y-4 rounded-3xl bg-white p-4 shadow-2xl sm:p-6 dark:bg-slate-900">
+      <section className="relative z-0 mx-auto my-2 w-full max-w-6xl space-y-4 rounded-3xl bg-white p-4 shadow-2xl sm:p-6 dark:bg-slate-900">
         <header className="flex items-start justify-between gap-3">
           <div>
             <p className="eyebrow">Pokémon TCG API</p>
@@ -275,6 +292,7 @@ export function ManualCardSearch({
         </div> : null}
 
         {error ? <p role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-black text-rose-800 dark:bg-rose-950/50 dark:text-rose-200">{error}</p> : null}
+        {selectionMessage ? <p role="status" className="rounded-xl bg-violet-50 p-3 text-sm font-black text-violet-800 dark:bg-violet-950/40 dark:text-violet-100">{selectionMessage}</p> : null}
         {warnings.map((warning) => <p key={warning} role="status" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">{warning} Showing results using the remaining search fields.</p>)}
         {loading && !results.length ? <p role="status" className="rounded-xl bg-violet-50 p-4 text-sm font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200"><LoaderCircle className="mr-2 inline animate-spin" size={18} />Searching the official card catalog…</p> : null}
 
@@ -328,10 +346,10 @@ export function ManualCardSearch({
                   ? `Finishes: ${match.tcgplayerPricing.variants.map((variant) => variantLabel(variant.variant)).join(", ")}`
                   : "No TCGplayer finish pricing listed"}</p>
                 <div className="grid gap-2 pt-2 sm:grid-cols-2">
-                  <button type="button" disabled={selecting} onClick={() => void chooseCard(match)} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">{selecting ? "Loading…" : "Use This Card"}</button>
-                  <button type="button" disabled={!match.largeImageUrl} onClick={() => setLargeMatch(match)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-40 dark:bg-slate-800">View Larger</button>
+                  <button type="button" disabled={selecting} onClick={() => void chooseCard(match)} className="relative z-10 min-h-11 touch-manipulation rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">{selecting ? "Applying card…" : "Use This Card"}</button>
+                  <button type="button" disabled={!match.largeImageUrl && !match.imageUrl} onClick={() => setLargeMatch(match)} className="relative z-10 min-h-11 touch-manipulation rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-40 dark:bg-slate-800">View Larger</button>
                 </div>
-                {match.tcgplayerPricing?.url ? <a href={match.tcgplayerPricing.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 pt-1 text-xs font-black text-sky-700 underline dark:text-sky-300"><ExternalLink size={13} />TCGplayer product</a> : null}
+                {match.tcgplayerPricing?.url ? <a href={match.tcgplayerPricing.url} target="_blank" rel="noopener noreferrer" className="relative z-10 inline-flex touch-manipulation items-center gap-1 pt-1 text-xs font-black text-sky-700 underline dark:text-sky-300"><ExternalLink size={13} />TCGplayer product</a> : <p className="pt-1 text-xs font-bold text-slate-500">TCGplayer link unavailable</p>}
               </div>
             </article>)}
           </div>
@@ -339,6 +357,6 @@ export function ManualCardSearch({
         </> : null}
       </section>
     </div>
-    <ImageLightbox imageUrl={largeMatch?.largeImageUrl} title={largeMatch ? `${largeMatch.cardName} · ${largeMatch.setName} #${largeMatch.collectorNumber}` : "Official card"} onClose={() => setLargeMatch(undefined)} />
+    <ImageLightbox imageUrl={largeMatch?.largeImageUrl || largeMatch?.imageUrl} title={largeMatch ? `${largeMatch.cardName} · ${largeMatch.setName} #${largeMatch.collectorNumber}` : "Official card"} onClose={() => setLargeMatch(undefined)} />
   </>;
 }

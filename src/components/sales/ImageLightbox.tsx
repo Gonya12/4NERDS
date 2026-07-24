@@ -44,7 +44,7 @@ export function ImageLightbox({ imageUrl, title, onClose, onPrevious, onNext }: 
       aria-modal="true"
       aria-label={`${title} image preview`}
       onClick={onClose}
-      className="fixed inset-0 z-[90] flex items-center justify-center overflow-hidden bg-slate-950/95 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-[calc(0.5rem+env(safe-area-inset-top))] backdrop-blur-sm sm:p-4"
+      className="fixed inset-0 z-[110] flex items-center justify-center overflow-hidden bg-slate-950/95 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-[calc(0.5rem+env(safe-area-inset-top))] backdrop-blur-sm sm:p-4"
     >
       <div onClick={(event) => event.stopPropagation()} className="grid h-[calc(100dvh-1rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-[95vw] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl bg-slate-900 shadow-2xl sm:h-[94dvh] sm:w-[94vw]">
         <header className="z-10 flex items-center gap-2 border-b border-white/10 bg-slate-900 p-2 text-white sm:p-3">
