@@ -24,6 +24,11 @@ export type CardScanSuggestion = {
   fieldConfidence: Record<string, ScanConfidence>;
   possibleMatches?: CardMatch[];
   warnings: string[];
+  technicalDetails?: {
+    fullText: string; topText: string; bottomText: string; stickerText: string;
+    confidence: Record<string, number>; parsed: Record<string, string | number | null>;
+    apiQuery: string; apiMatchCount: number;
+  };
 };
 
 type OcrRegion = { text: string; confidence: number };
@@ -76,26 +81,44 @@ async function imageElement(file: File) {
   }
 }
 
-function crop(image: HTMLImageElement, x: number, y: number, width: number, height: number) {
+function crop(image: HTMLImageElement, x: number, y: number, width: number, height: number, scale = 2, threshold = false) {
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * width));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * height));
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * width * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * height * scale));
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("This browser could not prepare the image for OCR.");
-  context.filter = "grayscale(1) contrast(1.45)";
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = "grayscale(1) contrast(1.65) saturate(0)";
   context.drawImage(
     image,
     Math.round(image.naturalWidth * x), Math.round(image.naturalHeight * y),
     Math.round(image.naturalWidth * width), Math.round(image.naturalHeight * height),
     0, 0, canvas.width, canvas.height
   );
+  if (threshold) {
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < pixels.data.length; index += 4) {
+      const value = pixels.data[index] > 155 ? 255 : 0;
+      pixels.data[index] = pixels.data[index + 1] = pixels.data[index + 2] = value;
+    }
+    context.putImageData(pixels, 0, 0);
+  }
   return canvas;
 }
 
-async function recognize(canvas: HTMLCanvasElement): Promise<OcrRegion> {
+async function recognize(canvas: HTMLCanvasElement, pageSegmentationMode: "6" | "7" | "11"): Promise<OcrRegion> {
   const engine = await worker();
+  await engine.setParameters({ tessedit_pageseg_mode: pageSegmentationMode as import("tesseract.js").PSM });
   const result = await engine.recognize(canvas);
   return { text: result.data.text.trim(), confidence: Number(result.data.confidence || 0) };
+}
+
+async function recognizeBest(image: HTMLImageElement, region: [number, number, number, number], psm: "6" | "7" | "11", scale = 2) {
+  const normal = await recognize(crop(image, ...region, scale, false), psm);
+  const thresholded = await recognize(crop(image, ...region, scale, true), psm);
+  const usefulness = (result: OcrRegion) => result.text.replace(/[^A-Za-z0-9$/]/g, "").length * 2 + result.confidence;
+  return usefulness(thresholded) > usefulness(normal) ? thresholded : normal;
 }
 
 function serializedOcr<T>(task: () => Promise<T>) {
@@ -105,19 +128,19 @@ function serializedOcr<T>(task: () => Promise<T>) {
 }
 
 function cardNameFrom(text: string, score: number) {
-  if (score < 45) return null;
   const ignored = /\b(?:pokemon|pokémon|basic|stage|trainer|energy|ability|weakness|resistance|retreat|illustrator|hp)\b/i;
-  return text.split(/\r?\n/)
+  const candidate = text.split(/\r?\n/)
     .map((line) => line.replace(/[^\p{L}\p{N}' .:&-]/gu, " ").replace(/\s+/g, " ").trim())
     .filter((line) => line.length >= 3 && line.length <= 32 && /[A-Za-z]{3}/.test(line) && !ignored.test(line))
-    .sort((a, b) => a.length - b.length)[0] || null;
+    .sort((a, b) => (/\d/.test(a) ? 1 : 0) - (/\d/.test(b) ? 1 : 0) || a.length - b.length)[0] || null;
+  return score >= 25 || (candidate && /^[A-Za-z][A-Za-z' .-]{2,24}$/.test(candidate)) ? candidate : null;
 }
 
 function collectorNumberFrom(text: string, score: number) {
-  if (score < 42) return null;
-  const fraction = text.match(/\b(?:[A-Z]{1,4}\s*)?\d{1,3}\s*\/\s*(?:[A-Z]{1,4}\s*)?\d{1,3}\b/i)?.[0];
+  void score;
+  const fraction = text.match(/\b[A-Z]{0,4}\s*\d{1,3}\s*[/|]\s*[A-Z]{0,4}\s*\d{1,3}\b/i)?.[0];
   if (fraction) return fraction.replace(/\s+/g, "");
-  return text.match(/\b(?:SV|TG|GG|RC|SH|SWSH|XY|SM|BW)?\d{1,3}[A-Z]?\b/i)?.[0] || null;
+  return text.match(/\b(?:SV|TG|GG|RC|SH|SWSH|XY|SM|BW)?\d{3}[A-Z]?\b/i)?.[0] || null;
 }
 
 function conditionFrom(text: string): CardCondition | null {
@@ -127,13 +150,14 @@ function conditionFrom(text: string): CardCondition | null {
   if (/\sMP\s|\sMODERATELY PLAYED\s/.test(normalized)) return "Moderately Played / MP";
   if (/\sLP\s|\sLIGHTLY PLAYED\s/.test(normalized)) return "Lightly Played / LP";
   if (/\sNM\s|\sNEAR MINT\s/.test(normalized)) return "Near Mint / NM";
+  if (/\sMINT\s/.test(normalized)) return "Mint";
   return null;
 }
 
 function priceFrom(text: string) {
-  const match = text.match(/(?:\$\s*(\d{1,5}(?:[.,]\d{2})?)|(\d{1,5}(?:[.,]\d{2})?)\s*\$)(?!\d)/);
+  const match = text.match(/(?:\$\s*(\d{1,5}(?:[.,]\d{2})?)|(\d{1,5}(?:[.,]\d{2})?)\s*\$|USD\s*(\d{1,5}(?:[.,]\d{2})?))(?!\d)/i);
   if (!match) return null;
-  const value = Number((match[1] || match[2]).replace(",", "."));
+  const value = Number((match[1] || match[2] || match[3]).replace(",", "."));
   return Number.isFinite(value) ? value : null;
 }
 
@@ -142,6 +166,29 @@ function slabFields(text: string) {
   const grade = gradingCompany ? text.match(/\b(?:GEM\s*MINT|MINT|NM-MT|PRISTINE)?\s*(10(?:\.0)?|9\.5|9|8\.5|8|7\.5|7)\b/i)?.[1] || null : null;
   const certificateNumber = text.match(/\b(?:CERT(?:IFICATE)?\.?\s*(?:NO\.?|#)?\s*)?(\d[\d -]{6,15}\d)\b/i)?.[1]?.replace(/[ -]/g, "") || null;
   return { gradingCompany, grade, certificateNumber };
+}
+
+function photoQualityWarnings(image: HTMLImageElement) {
+  const warnings: string[] = [];
+  if (Math.min(image.naturalWidth, image.naturalHeight) < 700) warnings.push("The card is small or low-resolution in this photo. A closer photo will scan better.");
+  const sample = crop(image, 0, 0, 1, 1, 0.12, false);
+  const context = sample.getContext("2d");
+  if (!context) return warnings;
+  const data = context.getImageData(0, 0, sample.width, sample.height).data;
+  let total = 0;
+  let bright = 0;
+  let dark = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const light = (data[index] + data[index + 1] + data[index + 2]) / 3;
+    total += light;
+    if (light > 245) bright++;
+    if (light < 35) dark++;
+  }
+  const pixels = Math.max(1, data.length / 4);
+  if (total / pixels < 65) warnings.push("The photo is dark. Add even lighting and avoid shadows.");
+  if (bright / pixels > 0.18) warnings.push("Strong glare may hide printed text. Tilt the light away from the card.");
+  if (dark / pixels > 0.55) warnings.push("The card may occupy too little of the image. Move closer and fill the frame.");
+  return warnings;
 }
 
 function marketPrice(card: { tcgplayer?: { prices?: Record<string, Record<string, number | null>> } }) {
@@ -202,7 +249,7 @@ async function findPokemonCards(cardName: string | null, collectorNumber: string
 
 export async function scanPokemonCard(front: File, requestedType: PokemonProductCategory, back?: File, force = false) {
   const hash = `${await imageHash(front)}:${back ? await imageHash(back) : ""}`;
-  const cacheKey = `4nerds_local_ocr_${hash}`;
+  const cacheKey = `4nerds_local_ocr_v2_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);
@@ -211,24 +258,30 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
   }
 
   const suggestion = await serializedOcr(async () => {
-    const preparedFront = await compressSaleImage(front);
-    const frontImage = await imageElement(preparedFront);
-    const top = await recognize(crop(frontImage, 0.03, 0.02, 0.94, 0.25));
-    const bottom = await recognize(crop(frontImage, 0.02, 0.70, 0.96, 0.29));
-    const sticker = await recognize(crop(frontImage, 0.50, 0.15, 0.49, 0.70));
+    const frontImage = await imageElement(front);
+    const qualityWarnings = photoQualityWarnings(frontImage);
+    const full = await recognize(crop(frontImage, 0.01, 0.01, 0.98, 0.98, 1, false), "6");
+    const top = await recognizeBest(frontImage, [0.03, 0.01, 0.94, 0.27], "7", 2.5);
+    const bottom = await recognizeBest(frontImage, [0.01, 0.74, 0.98, 0.25], "7", 3);
+    const stickerRight = await recognizeBest(frontImage, [0.52, 0.05, 0.47, 0.90], "11", 2);
+    const stickerLeft = await recognize(crop(frontImage, 0.01, 0.05, 0.47, 0.90, 2, false), "11");
+    const sticker: OcrRegion = {
+      text: `${stickerRight.text}\n${stickerLeft.text}`.trim(),
+      confidence: Math.max(stickerRight.confidence, stickerLeft.confidence)
+    };
     let label: OcrRegion = { text: "", confidence: 0 };
     if (requestedType === "graded_card") {
       const labelSource = back ? await imageElement(await compressSaleImage(back)) : frontImage;
-      label = await recognize(crop(labelSource, 0.02, 0.01, 0.96, 0.38));
+      label = await recognizeBest(labelSource, [0.02, 0.01, 0.96, 0.40], "11", 2.5);
     }
-    const cardName = cardNameFrom(top.text, top.confidence);
-    const collectorNumber = collectorNumberFrom(bottom.text, bottom.confidence);
-    const stickerText = `${sticker.text}\n${bottom.text}`;
+    const cardName = cardNameFrom(top.text, top.confidence) || cardNameFrom(full.text, full.confidence);
+    const collectorNumber = collectorNumberFrom(`${bottom.text}\n${full.text}`, bottom.confidence);
+    const stickerText = `${sticker.text}\n${bottom.text}\n${full.text}`;
     const condition = conditionFrom(stickerText);
     const stickerPrice = priceFrom(stickerText);
     const slab = slabFields(`${top.text}\n${label.text}`);
     const possibleMatches = await findPokemonCards(cardName, collectorNumber, confidence(top.confidence));
-    const warnings: string[] = [];
+    const warnings: string[] = [...qualityWarnings];
     if (!cardName) warnings.push("Card name confidence was low; enter it manually or choose a possible match.");
     if (!collectorNumber) warnings.push("Collector number was not clear enough to suggest.");
     if (!possibleMatches.length && (cardName || collectorNumber)) warnings.push("No Pokémon TCG API match was found. OCR suggestions remain editable.");
@@ -241,13 +294,28 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
       grade: slab.grade ? confidence(label.confidence || top.confidence) : "low" as const,
       certificateNumber: slab.certificateNumber ? confidence(label.confidence || top.confidence) : "low" as const,
     };
-    const strongest = Math.max(top.confidence, bottom.confidence, sticker.confidence, label.confidence);
+    const strongest = Math.max(full.confidence, top.confidence, bottom.confidence, sticker.confidence, label.confidence);
+    const apiQuery = [
+      cardName ? `${confidence(top.confidence) === "high" ? "!" : ""}name:${cardName.includes(" ") ? `"${cardName}"` : cardName}` : "",
+      collectorNumber ? `number:${collectorNumber.split("/")[0].replace(/[^A-Za-z0-9]/g, "")}` : ""
+    ].filter(Boolean).join(" ");
+    if (import.meta.env.DEV) console.info("[Local card OCR:result]", {
+      fullText: full.text, topText: top.text, bottomText: bottom.text, stickerText: sticker.text,
+      confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence },
+      parsed: { cardName, collectorNumber, condition, stickerPrice }, apiQuery, apiMatchCount: possibleMatches.length
+    });
     return {
       suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
       cardName, collectorNumber, cardSet: null, language: null, condition, stickerPrice,
       gradingCompany: slab.gradingCompany, grade: slab.grade, certificateNumber: slab.certificateNumber,
       labelInformation: label.text || null, barcodeText: null, overallConfidence: confidence(strongest),
-      fieldConfidence, possibleMatches, warnings
+      fieldConfidence, possibleMatches, warnings,
+      technicalDetails: {
+        fullText: full.text, topText: top.text, bottomText: bottom.text, stickerText: sticker.text,
+        confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence, label: label.confidence },
+        parsed: { cardName, collectorNumber, condition, stickerPrice },
+        apiQuery, apiMatchCount: possibleMatches.length
+      }
     } satisfies CardScanSuggestion;
   }).finally(scheduleWorkerTermination);
 

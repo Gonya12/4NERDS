@@ -102,6 +102,21 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
     await useFile(new File([blob], `card-scan-${Date.now()}.jpg`, { type: "image/jpeg" }));
   }
 
+  async function cropCard() {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image(); element.onload = () => resolve(element); element.onerror = reject; element.src = url;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.naturalWidth * 0.9); canvas.height = Math.round(image.naturalHeight * 0.9);
+      canvas.getContext("2d")?.drawImage(image, image.naturalWidth * 0.05, image.naturalHeight * 0.05, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.94));
+      if (blob) await useFile(new File([blob], `cropped-${file.name}`, { type: "image/jpeg" }));
+    } finally { URL.revokeObjectURL(url); }
+  }
+
   async function switchCamera() {
     if (switching) return;
     setSwitching(true);
@@ -118,6 +133,7 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   }
 
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => setSuggestion((current) => current ? { ...current, [key]: value } : current);
+  const hasUsefulSuggestion = Boolean(suggestion && (suggestion.cardName || suggestion.collectorNumber || suggestion.condition || suggestion.stickerPrice != null || suggestion.possibleMatches?.length));
 
   return <div className="fixed inset-0 z-[100] overflow-hidden bg-black text-white">
     {mode === "camera" ? <>
@@ -137,11 +153,13 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
         {preview ? <img src={preview} alt="Captured card" className="max-h-[46vh] w-full rounded-2xl bg-black object-contain" /> : null}
         {analyzing ? <div className="rounded-2xl bg-violet-950 p-4"><LoaderCircle className="mr-2 inline animate-spin" /><strong>{stages[stage]}</strong><button onClick={() => { runRef.current += 1; setAnalyzing(false); }} className="float-right text-xs font-bold text-rose-300">Cancel Analysis</button></div> : null}
         {error ? <div className="rounded-2xl bg-rose-950/60 p-4 text-sm font-bold">{error}<div className="mt-3 flex gap-2">{file ? <button onClick={() => void analyze(file, true)} className="rounded-xl bg-white px-3 py-2 text-slate-950">Retry</button> : null}<button onClick={retake} className="rounded-xl bg-white/10 px-3 py-2">Retake</button></div></div> : null}
-        {suggestion ? <section className="space-y-3 rounded-2xl bg-white p-4 text-slate-950"><div className="grid gap-3 sm:grid-cols-2">{([
+        {suggestion && !hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-amber-950/60 p-4"><h3 className="font-black">No readable card information was found.</h3><p className="text-sm">Move closer and fill the frame with one card. Keep the top name and bottom collector number sharp and avoid glare.</p><div className="grid grid-cols-2 gap-2"><button onClick={retake} className="rounded-xl bg-white/10 p-3 font-black">Retake Photo</button><button onClick={() => void cropCard()} className="rounded-xl bg-white/10 p-3 font-black">Crop Card</button><button onClick={() => file && void analyze(file, true)} className="rounded-xl bg-violet-600 p-3 font-black">Rescan</button><label className="cursor-pointer rounded-xl bg-white/10 p-3 text-center font-black">Upload Different Photo<input type="file" accept="image/*" hidden onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void useFile(selected); }} /></label><button onClick={() => file && onApply(file)} className="col-span-2 rounded-xl bg-coral p-3 font-black">Enter Manually</button></div>{suggestion.technicalDetails ? <details className="rounded-xl bg-black/30 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}</section> : null}
+        {suggestion && hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-white p-4 text-slate-950"><div className="grid gap-3 sm:grid-cols-2">{([
           ["cardName", "Card Name"], ["collectorNumber", "Collector Number"], ["cardSet", "Set"], ["language", "Language"], ["condition", "Condition"], ["stickerPrice", "Sticker Price"]
         ] as const).map(([key, label]) => <label key={key} className="text-xs font-black">{label}<span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px]">{suggestion.fieldConfidence[key] || "low"}</span><input type={key === "stickerPrice" ? "number" : "text"} min={key === "stickerPrice" ? 0 : undefined} step={key === "stickerPrice" ? "0.01" : undefined} value={suggestion[key] ?? ""} onChange={(event) => edit(key, key === "stickerPrice" ? (event.target.value ? Number(event.target.value) : null) : event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-base" /></label>)}</div>
           {suggestion.possibleMatches?.length ? <div className="space-y-2"><div className="flex justify-between text-xs font-black"><span>Possible Pokémon TCG matches</span><span className="text-slate-400">Try another match</span></div>{suggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-slate-200 p-2 text-xs">{match.imageUrl ? <img src={match.imageUrl} alt="" loading="lazy" className="h-28 w-20 rounded object-contain" /> : null}<div className="flex-1"><p className="font-black">{match.cardName} · {match.collectorNumber}</p><p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p><p>{match.marketPrice != null ? `$${match.marketPrice.toFixed(2)} market · ` : ""}{match.matchConfidence} match</p><button onClick={() => setSuggestion((current) => current ? { ...current, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName, possibleMatches: [] } : current)} className="mt-2 rounded-lg bg-violet-600 px-3 py-2 font-black text-white">Use This Card</button></div></article>)}<button onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700">Edit Manually</button></div> : null}
           {suggestion.warnings?.map((warning) => <p key={warning} className="text-xs text-amber-700">{warning}</p>)}
+          {suggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}
           <p className="text-xs text-slate-500">Suggestions are not saved until you review the inventory form and press Save. Sticker price never fills Actual Bought Price.</p></section> : null}
         <div className="grid grid-cols-2 gap-2"><button onClick={retake} className="min-h-12 rounded-xl bg-white/10 font-black"><RotateCcw className="mr-1 inline" /> Retake</button>{file && !analyzing ? <button onClick={() => void analyze(file, Boolean(suggestion))} className="min-h-12 rounded-xl bg-violet-600 font-black"><ScanLine className="mr-1 inline" />{suggestion ? "Rescan" : "Analyze Card"}</button> : null}{file && !analyzing ? <button onClick={() => onApply(file, suggestion, hash || undefined)} className="col-span-2 min-h-12 rounded-xl bg-coral font-black">{suggestion ? "Apply to Inventory Draft" : "Use Photo and Enter Manually"}</button> : null}</div>
       </main>
