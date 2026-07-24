@@ -67,6 +67,27 @@ let workerPromise: Promise<Worker> | null = null;
 let ocrQueue: Promise<unknown> = Promise.resolve();
 let workerIdleTimer: number | undefined;
 const searchCache = new Map<string, Promise<CardMatch[]>>();
+export type CardScanStage = "Preparing image" | "Detecting and cropping card" | "Initializing OCR" | "Reading card text" | "Reading collector number" | "Reading sticker" | "Searching Pokémon cards" | "Visual matching" | "Preparing review";
+type ScanOptions = { signal?: AbortSignal; onStage?: (stage: CardScanStage) => void };
+
+function abortError() { return new DOMException("Card scan cancelled.", "AbortError"); }
+function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw abortError(); }
+function timed<T>(promise: Promise<T>, milliseconds: number, message: string, onTimeout?: () => void) {
+  let timer = 0;
+  return Promise.race([
+    promise.finally(() => window.clearTimeout(timer)),
+    new Promise<T>((_, reject) => { timer = window.setTimeout(() => { onTimeout?.(); reject(new Error(message)); }, milliseconds); })
+  ]);
+}
+
+export async function cancelCardScan() {
+  if (workerIdleTimer) window.clearTimeout(workerIdleTimer);
+  const active = workerPromise;
+  workerPromise = null;
+  if (active) {
+    try { await (await active).terminate(); } catch { /* Worker may already be stopping. */ }
+  }
+}
 
 export async function imageHash(file: File) {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
@@ -278,7 +299,20 @@ async function findPokemonCards(cardName: string | null, collectorNumber: string
   return request;
 }
 
-export async function scanPokemonCard(front: File, requestedType: PokemonProductCategory, back?: File, force = false) {
+export async function scanPokemonCard(front: File, requestedType: PokemonProductCategory, back?: File, force = false, options: ScanOptions = {}) {
+  const startedAt = performance.now();
+  let previousStage: CardScanStage | undefined;
+  let previousStageAt = startedAt;
+  const stage = (name: CardScanStage) => {
+    checkAbort(options.signal);
+    const now = performance.now();
+    if (import.meta.env.DEV && previousStage) console.info("[Card scan stage:complete]", { stage: previousStage, durationMs: Math.round(now - previousStageAt) });
+    previousStage = name;
+    previousStageAt = now;
+    options.onStage?.(name);
+    if (import.meta.env.DEV) console.info("[Card scan stage:start]", { stage: name, elapsedMs: Math.round(now - startedAt), imageBytes: front.size });
+  };
+  stage("Preparing image");
   const hash = `${await imageHash(front)}:${back ? await imageHash(back) : ""}`;
   const cacheKey = `4nerds_hybrid_visual_v1_${hash}`;
   if (!force) {
@@ -288,13 +322,22 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
     } catch { /* Local caching is optional. */ }
   }
 
-  const analysis = await serializedOcr(async () => {
+  const task = serializedOcr(async () => {
+    stage("Detecting and cropping card");
     const corrected = await detectAndCorrectCard(front);
+    checkAbort(options.signal);
     const frontImage = await imageElement(corrected.file);
+    if (import.meta.env.DEV) console.info("[Card scan image]", { width: frontImage.naturalWidth, height: frontImage.naturalHeight, processedBytes: corrected.file.size, cardDetected: corrected.detected });
     const qualityWarnings = photoQualityWarnings(frontImage);
+    stage("Initializing OCR");
+    await timed(worker(), 12_000, "OCR could not start on this device.");
+    stage("Reading card text");
     const full = await recognize(crop(frontImage, 0.01, 0.01, 0.98, 0.98, 1, false), "6");
     const top = await recognizeBest(frontImage, [0.03, 0.01, 0.94, 0.27], "7", 2.5);
+    checkAbort(options.signal);
+    stage("Reading collector number");
     const bottom = await recognizeBest(frontImage, [0.01, 0.74, 0.98, 0.25], "7", 3);
+    stage("Reading sticker");
     const stickerRight = await recognizeBest(frontImage, [0.52, 0.05, 0.47, 0.90], "11", 2);
     const stickerLeft = await recognize(crop(frontImage, 0.01, 0.05, 0.47, 0.90, 2, false), "11");
     const sticker: OcrRegion = {
@@ -312,8 +355,11 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
     const condition = conditionFrom(stickerText);
     const stickerPrice = priceFrom(stickerText);
     const slab = slabFields(`${top.text}\n${label.text}`);
-    const visual = await visualCardMatches(corrected.file, cardName, collectorNumber);
-    const textMatches = visual.matches.length ? [] : await findPokemonCards(cardName, collectorNumber, confidence(top.confidence));
+    stage("Visual matching");
+    const visual = await timed(visualCardMatches(corrected.file, cardName, collectorNumber), 18_000, "Visual matching took too long; using OCR search instead.")
+      .catch(() => ({ matches: [] as CardMatch[], warning: "Visual matching was skipped because it took too long." }));
+    stage("Searching Pokémon cards");
+    const textMatches = visual.matches.length ? [] : await timed(findPokemonCards(cardName, collectorNumber, confidence(top.confidence)), 15_000, "Pokémon card search timed out.");
     const possibleMatches = visual.matches.length ? visual.matches : textMatches;
     const warnings: string[] = [...qualityWarnings];
     warnings.push(corrected.detected ? "Card boundary detected and perspective corrected." : "Automatic card boundary detection failed. Using the full photo; crop again if background dominates.");
@@ -340,6 +386,7 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
       confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence },
       parsed: { cardName, collectorNumber, condition, stickerPrice }, apiQuery, apiMatchCount: possibleMatches.length
     });
+    stage("Preparing review");
     const suggestion = {
       suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
       cardName, collectorNumber, cardSet: null, language: null, condition, stickerPrice,
@@ -355,6 +402,7 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
     } satisfies CardScanSuggestion;
     return { suggestion, correctedFile: corrected.file, cardDetected: corrected.detected };
   }).finally(scheduleWorkerTermination);
+  const analysis = await timed(task, 60_000, "Scanning took too long on this device. Retake the photo, crop the card, or enter the details manually.", () => void cancelCardScan());
 
   try { localStorage.setItem(cacheKey, JSON.stringify(analysis.suggestion)); } catch { /* Cache is optional. */ }
   return { ...analysis, hash, cached: false };

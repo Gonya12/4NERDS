@@ -13,7 +13,7 @@ let openCvPromise: Promise<any> | null = null;
 
 function lowMemoryDevice() {
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  return Boolean(memory && memory < 4);
+  return Boolean((memory && memory < 6) || window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 768);
 }
 
 function openCv() {
@@ -73,6 +73,7 @@ function confidence(score: number): ScanConfidence {
 }
 
 export async function detectAndCorrectCard(file: File) {
+  if (lowMemoryDevice()) return { file, detected: false };
   const sourceUrl = URL.createObjectURL(file);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -84,7 +85,10 @@ export async function detectAndCorrectCard(file: File) {
     if (!context) return { file, detected: false };
     context.drawImage(image, 0, 0);
     try {
-      const cv = await openCv();
+      const cv = await Promise.race([
+        openCv(),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("Card detection timed out.")), 8_000))
+      ]);
       const source = cv.imread(canvas);
       const gray = new cv.Mat(); const blurred = new cv.Mat(); const edges = new cv.Mat();
       const contours = new cv.MatVector(); const hierarchy = new cv.Mat();
@@ -127,7 +131,7 @@ export async function detectAndCorrectCard(file: File) {
 }
 
 export async function visualCardMatches(file: File, ocrName?: string | null, ocrNumber?: string | null) {
-  const indexManifest = await manifest();
+  const indexManifest = await Promise.race([manifest(), new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 4_000))]);
   if (!indexManifest || lowMemoryDevice()) return { matches: [] as CardMatch[], warning: indexManifest ? "Visual matching was skipped on this low-memory device." : "Visual card index is unavailable; using OCR and manual search." };
   const imageUrl = URL.createObjectURL(file);
   try {

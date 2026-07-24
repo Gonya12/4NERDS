@@ -1,15 +1,14 @@
 import { Camera, ImagePlus, LoaderCircle, RotateCcw, ScanLine, SwitchCamera, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { compressSaleImage } from "../../services/images/saleImageService";
-import { confirmPokemonCardMatch, scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
+import { cancelCardScan, confirmPokemonCardMatch, scanPokemonCard, type CardScanStage, type CardScanSuggestion } from "../../services/sales/cardScanService";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
+import { clearQuickScanDraft, loadQuickScanDraft, saveQuickScanDraft } from "../../services/sales/scanDraftService";
 
 type Props = {
   onClose: () => void;
   onApply: (file: File, suggestion?: CardScanSuggestion, hash?: string) => void;
 };
-
-const stages = ["Preparing image", "Reading card name", "Reading card number", "Checking sticker", "Matching card information", "Preparing suggestions"];
 
 export function QuickCardScanner({ onClose, onApply }: Props) {
   const [mode, setMode] = useState<"camera" | "review">("camera");
@@ -21,12 +20,14 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   const [suggestion, setSuggestion] = useState<CardScanSuggestion>();
   const [hash, setHash] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
-  const [stage, setStage] = useState(0);
+  const [stage, setStage] = useState<CardScanStage>("Preparing image");
   const [error, setError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const runRef = useRef(0);
+  const scanActiveRef = useRef(false);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -58,16 +59,19 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   }
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => void startCamera("environment"));
-    return () => { cancelAnimationFrame(frame); runRef.current += 1; stopCamera(); if (preview.startsWith("blob:")) URL.revokeObjectURL(preview); };
+    const frame = requestAnimationFrame(() => void loadQuickScanDraft().then((draft) => draft ? useFile(draft) : startCamera("environment")));
+    return () => { cancelAnimationFrame(frame); runRef.current += 1; scanAbortRef.current?.abort(); void cancelCardScan(); stopCamera(); if (preview.startsWith("blob:")) URL.revokeObjectURL(preview); };
   }, []);
 
   async function analyze(image: File, force = false) {
+    if (scanActiveRef.current) return;
+    scanActiveRef.current = true;
     const run = ++runRef.current;
-    setAnalyzing(true); setSuggestion(undefined); setError(""); setStage(0);
-    const timer = window.setInterval(() => setStage((current) => Math.min(stages.length - 1, current + 1)), 850);
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    setAnalyzing(true); setSuggestion(undefined); setError(""); setStage("Preparing image");
     try {
-      const result = await scanPokemonCard(image, "raw_card", undefined, force);
+      const result = await scanPokemonCard(image, "raw_card", undefined, force, { signal: controller.signal, onStage: setStage });
       if (run !== runRef.current) return;
       if ("correctedFile" in result && result.correctedFile && result.cardDetected) {
         if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
@@ -76,16 +80,28 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
       }
       setSuggestion(result.suggestion); setHash(result.hash);
     } catch (scanError) {
-      if (run === runRef.current) setError(scanError instanceof Error ? scanError.message : "Card analysis failed.");
+      if (run === runRef.current) setError(scanError instanceof DOMException && scanError.name === "AbortError" ? "Scan cancelled. Your photo is still available." : scanError instanceof Error ? scanError.message : "Card analysis failed.");
     } finally {
-      clearInterval(timer);
+      scanActiveRef.current = false;
+      if (scanAbortRef.current === controller) scanAbortRef.current = null;
       if (run === runRef.current) setAnalyzing(false);
     }
+  }
+
+  async function cancelAnalysis() {
+    runRef.current += 1;
+    scanAbortRef.current?.abort();
+    scanAbortRef.current = null;
+    scanActiveRef.current = false;
+    await cancelCardScan();
+    setAnalyzing(false);
+    setError("Scan cancelled. Your photo is still available.");
   }
 
   async function useFile(source: File) {
     try {
       const prepared = await compressSaleImage(source);
+      await saveQuickScanDraft(prepared);
       stopCamera();
       if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
       setFile(prepared); setPreview(URL.createObjectURL(prepared)); setMode("review");
@@ -132,6 +148,7 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   }
 
   function retake() {
+    void clearQuickScanDraft();
     runRef.current += 1;
     if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
     setPreview(""); setFile(undefined); setSuggestion(undefined); setError(""); setMode("camera");
@@ -141,6 +158,10 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => setSuggestion((current) => current ? { ...current, [key]: value } : current);
   const chooseMatch = async (match: NonNullable<CardScanSuggestion["possibleMatches"]>[number]) => {
     if (suggestion) setSuggestion(await confirmPokemonCardMatch(suggestion, match));
+  };
+  const applyDraft = (photo: File, scan?: CardScanSuggestion, scanHash?: string) => {
+    void clearQuickScanDraft();
+    onApply(photo, scan, scanHash);
   };
   const hasUsefulSuggestion = Boolean(suggestion && (suggestion.cardName || suggestion.collectorNumber || suggestion.condition || suggestion.stickerPrice != null || suggestion.possibleMatches?.length));
 
@@ -160,9 +181,9 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
       <header className="mx-auto flex max-w-2xl items-center justify-between"><div><p className="text-xs font-black uppercase tracking-wide text-coral">Card scan review</p><h2 className="text-xl font-black">Review detected information</h2></div><button onClick={onClose} className="rounded-full bg-white/10 p-3"><X /></button></header>
       <main className="mx-auto mt-4 max-w-2xl space-y-4">
         {preview ? <img src={preview} alt="Captured card" className="max-h-[46vh] w-full rounded-2xl bg-black object-contain" /> : null}
-        {analyzing ? <div className="rounded-2xl bg-violet-950 p-4"><LoaderCircle className="mr-2 inline animate-spin" /><strong>{stages[stage]}</strong><button onClick={() => { runRef.current += 1; setAnalyzing(false); }} className="float-right text-xs font-bold text-rose-300">Cancel Analysis</button></div> : null}
-        {error ? <div className="rounded-2xl bg-rose-950/60 p-4 text-sm font-bold">{error}<div className="mt-3 flex gap-2">{file ? <button onClick={() => void analyze(file, true)} className="rounded-xl bg-white px-3 py-2 text-slate-950">Retry</button> : null}<button onClick={retake} className="rounded-xl bg-white/10 px-3 py-2">Retake</button></div></div> : null}
-        {suggestion && !hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-amber-950/60 p-4"><h3 className="font-black">No readable card information was found.</h3><p className="text-sm">Move closer and fill the frame with one card. Keep the top name and bottom collector number sharp and avoid glare.</p><div className="grid grid-cols-2 gap-2"><button onClick={retake} className="rounded-xl bg-white/10 p-3 font-black">Retake Photo</button><button onClick={() => void cropCard()} className="rounded-xl bg-white/10 p-3 font-black">Crop Card</button><button onClick={() => file && void analyze(file, true)} className="rounded-xl bg-violet-600 p-3 font-black">Rescan</button><label className="cursor-pointer rounded-xl bg-white/10 p-3 text-center font-black">Upload Different Photo<input type="file" accept="image/*" hidden onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void useFile(selected); }} /></label><button onClick={() => file && onApply(file)} className="col-span-2 rounded-xl bg-coral p-3 font-black">Enter Manually</button></div>{suggestion.technicalDetails ? <details className="rounded-xl bg-black/30 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}</section> : null}
+        {analyzing ? <div className="rounded-2xl bg-violet-950 p-4"><LoaderCircle className="mr-2 inline animate-spin" /><strong>{stage}…</strong><button onClick={() => void cancelAnalysis()} className="float-right text-xs font-bold text-rose-300">Cancel Analysis</button><p className="mt-2 text-xs text-violet-200">Your photo is saved in this review while scanning.</p></div> : null}
+        {error ? <div className="rounded-2xl bg-rose-950/60 p-4 text-sm font-bold">{error}<div className="mt-3 flex flex-wrap gap-2">{file ? <button disabled={analyzing} onClick={() => void analyze(file, true)} className="rounded-xl bg-white px-3 py-2 text-slate-950 disabled:opacity-40">Retry</button> : null}{file ? <button onClick={() => void cropCard()} className="rounded-xl bg-white/10 px-3 py-2">Crop Card</button> : null}<button onClick={retake} className="rounded-xl bg-white/10 px-3 py-2">Retake</button>{file ? <button onClick={() => applyDraft(file)} className="rounded-xl bg-coral px-3 py-2">Enter Manually</button> : null}</div></div> : null}
+        {suggestion && !hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-amber-950/60 p-4"><h3 className="font-black">No readable card information was found.</h3><p className="text-sm">Move closer and fill the frame with one card. Keep the top name and bottom collector number sharp and avoid glare.</p><div className="grid grid-cols-2 gap-2"><button onClick={retake} className="rounded-xl bg-white/10 p-3 font-black">Retake Photo</button><button onClick={() => void cropCard()} className="rounded-xl bg-white/10 p-3 font-black">Crop Card</button><button onClick={() => file && void analyze(file, true)} className="rounded-xl bg-violet-600 p-3 font-black">Rescan</button><label className="cursor-pointer rounded-xl bg-white/10 p-3 text-center font-black">Upload Different Photo<input type="file" accept="image/*" hidden onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void useFile(selected); }} /></label><button onClick={() => file && applyDraft(file)} className="col-span-2 rounded-xl bg-coral p-3 font-black">Enter Manually</button></div>{suggestion.technicalDetails ? <details className="rounded-xl bg-black/30 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}</section> : null}
         {suggestion && hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-white p-4 text-slate-950"><div className="grid gap-3 sm:grid-cols-2">{([
           ["cardName", "Card Name"], ["collectorNumber", "Collector Number"], ["cardSet", "Set"], ["language", "Language"], ["condition", "Condition"], ["stickerPrice", "Sticker Price"]
         ] as const).map(([key, label]) => <label key={key} className="text-xs font-black">{label}<span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px]">{suggestion.fieldConfidence[key] || "low"}</span><input type={key === "stickerPrice" ? "number" : "text"} min={key === "stickerPrice" ? 0 : undefined} step={key === "stickerPrice" ? "0.01" : undefined} value={suggestion[key] ?? ""} onChange={(event) => edit(key, key === "stickerPrice" ? (event.target.value ? Number(event.target.value) : null) : event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-base" /></label>)}</div>
@@ -171,7 +192,7 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
           {suggestion.warnings?.map((warning) => <p key={warning} className="text-xs text-amber-700">{warning}</p>)}
           {suggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}
           <p className="text-xs text-slate-500">Suggestions are not saved until you review the inventory form and press Save. Sticker price never fills Actual Bought Price.</p></section> : null}
-        <div className="grid grid-cols-2 gap-2"><button onClick={retake} className="min-h-12 rounded-xl bg-white/10 font-black"><RotateCcw className="mr-1 inline" /> Retake</button>{file && !analyzing ? <button onClick={() => void analyze(file, Boolean(suggestion))} className="min-h-12 rounded-xl bg-violet-600 font-black"><ScanLine className="mr-1 inline" />{suggestion ? "Rescan" : "Analyze Card"}</button> : null}{file && !analyzing ? <button onClick={() => onApply(file, suggestion, hash || undefined)} className="col-span-2 min-h-12 rounded-xl bg-coral font-black">{suggestion ? "Apply to Inventory Draft" : "Use Photo and Enter Manually"}</button> : null}</div>
+        <div className="grid grid-cols-2 gap-2"><button onClick={retake} className="min-h-12 rounded-xl bg-white/10 font-black"><RotateCcw className="mr-1 inline" /> Retake</button>{file && !analyzing ? <button onClick={() => void analyze(file, Boolean(suggestion))} className="min-h-12 rounded-xl bg-violet-600 font-black"><ScanLine className="mr-1 inline" />{suggestion ? "Rescan" : "Analyze Card"}</button> : null}{file && !analyzing ? <button onClick={() => applyDraft(file, suggestion, hash || undefined)} className="col-span-2 min-h-12 rounded-xl bg-coral font-black">{suggestion ? "Apply to Inventory Draft" : "Use Photo and Enter Manually"}</button> : null}</div>
       </main>
     </div>}
   </div>;
