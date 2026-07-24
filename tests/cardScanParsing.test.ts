@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildManualPokemonQuery,
   buildNameEvidence,
+  buildPokemonApiQueries,
   conditionFromVisibleText,
   manualCardSearchValidationError,
   normalizeManualCardSearchTerms,
@@ -50,6 +51,24 @@ test("preserves printed suffix variants", () => {
   assert.equal(buildNameEvidence("Mewtwo EX").candidates[0], "Mewtwo EX");
   assert.equal(buildNameEvidence("Pikachu VMAX").candidates[0], "Pikachu VMAX");
   assert.equal(buildNameEvidence("Lugia BREAK").candidates[0], "Lugia BREAK");
+});
+
+test("preserves possessive printed names and rejects unrelated fuzzy OCR", () => {
+  const lance = buildNameEvidence("Lance's Charizard V");
+  assert.equal(lance.candidates[0], "Lance's Charizard V");
+  assert.equal(lance.isReliable, true);
+  const noise = buildNameEvidence("aerial damage resistance");
+  assert.equal(noise.isReliable, false);
+  assert.deepEqual(noise.candidates, []);
+});
+
+test("searches an exact collector number before any inferred card name", () => {
+  const evidence = buildNameEvidence("Lance's Charizard V");
+  assert.deepEqual(buildPokemonApiQueries(evidence, parseCollectorNumber("SWSH133")), [
+    "number:SWSH133",
+    'name:"Lance\'s Charizard V" number:SWSH133',
+    'name:"Lance\'s Charizard V"',
+  ]);
 });
 
 test("parses collector-number families and common OCR substitutions", () => {

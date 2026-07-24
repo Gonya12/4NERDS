@@ -44,6 +44,8 @@ export type NameEvidence = {
   baseCandidate: string;
   suffix: string;
   candidates: string[];
+  candidateScores: Array<{ candidate: string; score: number }>;
+  isReliable: boolean;
 };
 
 export type RankablePokemonCard = {
@@ -166,7 +168,14 @@ function nearestPokemon(value: string) {
   const ranked = pokemonNames
     .map((name) => ({ name: displayPokemonName(name), score: textSimilarity(value, name) }))
     .sort((left, right) => right.score - left.score);
-  return ranked[0]?.score >= (value.length >= 7 ? 0.62 : 0.72) ? ranked[0] : null;
+  // A scan should fail safely instead of turning an unrelated attack or artwork
+  // word into the closest Pokémon in the dictionary.
+  const best = ranked[0];
+  const shared = best && value.toLocaleLowerCase().includes(best.name.toLocaleLowerCase().slice(0, 4));
+  // Common OCR substitutions in a long species name can land just below .78
+  // (for example Charizalo → Charizard), so accept .77 only when the first
+  // four characters also agree; short words remain deliberately stricter.
+  return best?.score >= (value.length >= 7 ? 0.77 : 0.84) && shared ? best : null;
 }
 
 export function buildNameEvidence(raw: string): NameEvidence {
@@ -192,7 +201,12 @@ export function buildNameEvidence(raw: string): NameEvidence {
     .map((word) => nearestPokemon(word))
     .filter((value): value is { name: string; score: number } => Boolean(value))
     .sort((left, right) => right.score - left.score);
-  const baseCandidate = dictionaryCandidates[0]?.name || likelyWords[0] || "";
+  const matchedSpecies = dictionaryCandidates[0]?.name || "";
+  const matchedIndex = words.findIndex((word) => word.toLocaleLowerCase().replace(/[^a-z]/g, "") === matchedSpecies.toLocaleLowerCase().replace(/[^a-z]/g, ""));
+  // Keep a title/possessive with an exact species match (Lance's Charizard V),
+  // rather than reducing every printed name to its species.
+  const title = matchedIndex > 0 && /^[A-Za-z][A-Za-z']{2,}$/.test(words[matchedIndex - 1]) ? words[matchedIndex - 1] : "";
+  const baseCandidate = [title, matchedSpecies].filter(Boolean).join(" ");
   const values = [
     [baseCandidate, suffix].filter(Boolean).join(" "),
     baseCandidate,
@@ -204,6 +218,8 @@ export function buildNameEvidence(raw: string): NameEvidence {
     baseCandidate,
     suffix,
     candidates: [...new Set(values)],
+    candidateScores: dictionaryCandidates.map((candidate) => ({ candidate: candidate.name, score: candidate.score })),
+    isReliable: Boolean(matchedSpecies),
   };
 }
 
@@ -220,7 +236,9 @@ export function extractRawNameCandidate(text: string, confidence: number) {
         || left.length - right.length;
     });
   const candidate = lines[0] || null;
-  return confidence >= 20 || candidate ? candidate : null;
+  // Do not turn a barely legible word into a catalog search. A printed collector
+  // number can still drive the search independently.
+  return confidence >= 45 ? candidate : null;
 }
 
 export function conditionFromVisibleText(text: string) {
@@ -246,7 +264,7 @@ function suffixFromOfficialName(name: string) {
 }
 
 export function rankPokemonCards(cards: RankablePokemonCard[], evidence: NameEvidence, collector: CollectorNumberParts | null) {
-  return cards.map((card): RankedPokemonCard => {
+  return cards.map((card) => {
     const officialBase = card.name.replace(/\b(?:ex|EX|GX|V|VMAX|VSTAR|BREAK)\b/g, "").trim();
     const nameScore = evidence.baseCandidate
       ? Math.max(textSimilarity(evidence.baseCandidate, officialBase), tokenSimilarity(evidence.baseCandidate, officialBase))
@@ -256,7 +274,7 @@ export function rankPokemonCards(cards: RankablePokemonCard[], evidence: NameEvi
     if (nameScore >= 0.82) reasons.push("card name closely matches OCR");
     else if (nameScore >= 0.58) reasons.push("card name is a fuzzy OCR match");
     if (collector?.numerator && card.number.toUpperCase() === collector.numerator.toUpperCase()) {
-      score += 28;
+      score += 70;
       reasons.push("collector number matches");
     }
     const printedTotal = String(card.set?.printedTotal || "");
@@ -275,19 +293,23 @@ export function rankPokemonCards(cards: RankablePokemonCard[], evidence: NameEvi
       reasons.push("printed suffix differs");
     }
     if (!reasons.length) reasons.push("broad search candidate");
-    return { ...card, matchScore: Math.max(0, Math.min(100, Math.round(score))), reasons };
-  }).sort((left, right) => right.matchScore - left.matchScore);
+    return { ...card, rawScore: score, reasons };
+  }).sort((left, right) => right.rawScore - left.rawScore)
+    .map(({ rawScore, ...card }): RankedPokemonCard => ({
+      ...card,
+      matchScore: Math.max(0, Math.min(100, Math.round(rawScore))),
+    }));
 }
 
 export function buildPokemonApiQueries(evidence: NameEvidence, collector: CollectorNumberParts | null, manualName?: string) {
   const manual = manualName?.trim().replace(/["\\]/g, " ");
-  const nameCandidates = manual ? [manual] : evidence.candidates;
+  const nameCandidates = manual ? [manual] : evidence.isReliable ? evidence.candidates : [];
   const primaryName = nameCandidates[0];
   const queries = [
+    collector?.numerator ? `number:${collector.numerator}` : "",
     primaryName && collector?.numerator ? `name:"${primaryName}" number:${collector.numerator}` : "",
     primaryName ? `name:"${primaryName}"` : "",
-    collector?.numerator ? `number:${collector.numerator}` : "",
-    evidence.baseCandidate ? `name:${evidence.baseCandidate.slice(0, Math.min(6, evidence.baseCandidate.length))}*` : "",
+    evidence.isReliable && evidence.baseCandidate ? `name:${evidence.baseCandidate.slice(0, Math.min(6, evidence.baseCandidate.length))}*` : "",
   ].filter(Boolean);
   return [...new Set(queries)].slice(0, 3);
 }

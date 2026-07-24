@@ -503,6 +503,10 @@ export async function searchPokemonCards(cardName: string | null, collectorNumbe
     }
   }
   const matches = rankPokemonCards([...cards.values()], evidence, collector)
+    // Keep only cards supported by a reliable name or an exact printed number.
+    // Broad API results must never become a scanner suggestion by themselves.
+    .filter((card) => card.number.toUpperCase() === collector?.numerator?.toUpperCase()
+      || (evidence.isReliable && card.matchScore >= 48))
     .slice(0, 5)
     .map((card) => cardMatch(card, card.matchScore, card.reasons));
   if (searchCache.size >= 50) searchCache.delete(searchCache.keys().next().value as string);
@@ -665,14 +669,14 @@ export async function scanPokemonCard(
 
     stage("Searching Pokémon cards");
     const possibleMatches = await timed(
-      searchPokemonCards(nameEvidence.candidates[0] || rawNameCandidate, collector?.normalized || null, options.signal),
+      searchPokemonCards(nameEvidence.isReliable ? nameEvidence.candidates[0] || null : null, collector?.normalized || null, options.signal),
       18_000,
       "Pokémon card search timed out.",
     ).catch((error) => {
       if (options.signal?.aborted) throw abortError();
       return [] as CardMatch[];
     });
-    const correctedNameCandidate = possibleMatches[0]?.cardName || nameEvidence.candidates[0];
+    const correctedNameCandidate = possibleMatches[0]?.cardName || (nameEvidence.isReliable ? nameEvidence.candidates[0] : undefined);
     const correctedNameConfidence = possibleMatches[0]?.matchConfidence
       || (correctedNameCandidate ? confidence(top.confidence) : undefined);
     const warnings = [...qualityWarnings];
@@ -683,7 +687,7 @@ export async function scanPokemonCard(
     } else {
       warnings.push("Automatic card detection was uncertain. Adjust the four corners before relying on OCR.");
     }
-    if (!correctedNameCandidate) warnings.push("No reliable cleaned card-name candidate was found. Search manually or enter the card name.");
+    if (!nameEvidence.isReliable && !collector) warnings.push("No reliable card name was detected. Search manually or enter the card name.");
     if (!collector) warnings.push("Collector number was not clear enough to suggest.");
     if (!possibleMatches.length && (rawNameCandidate || collector)) {
       warnings.push("No Pokémon TCG API match was found. Raw OCR is available only under Technical Details.");
@@ -737,6 +741,7 @@ export async function scanPokemonCard(
           rawNameCandidate,
           correctedNameCandidate: correctedNameCandidate || null,
           collectorNumber: collector?.normalized || null,
+          cleanedCandidates: nameEvidence.candidateScores.map((candidate) => `${candidate.candidate}: ${Math.round(candidate.score * 100)}%`).join(", ") || null,
           condition,
           stickerPrice,
         },
