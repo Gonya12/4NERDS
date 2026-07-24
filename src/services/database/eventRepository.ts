@@ -495,7 +495,14 @@ export async function listEventOptions(limit = 500) {
   const rows = ((data || []) as EventRow[]).filter((row) => row.name && row.start_date);
   const ids = rows.map((row) => row.id);
   if (!ids.length) return [] as Event[];
-  const { data: dayRows, error: daysError } = await supabase.from("event_days").select("*").in("event_id", ids).order("date");
+  const [daysResult, workersResult, dayWorkersResult, pricesResult, paymentsResult] = await Promise.all([
+    supabase.from("event_days").select("*").in("event_id", ids).order("date"),
+    supabase.from("event_workers").select("event_id, worker_id").in("event_id", ids),
+    supabase.from("event_day_workers").select("*").in("event_id", ids),
+    supabase.from("event_price_options").select("*").in("event_id", ids),
+    supabase.from("payment_records").select("id,event_id,worker_id,amount_paid,paid_at,note,created_at,updated_at").in("event_id", ids)
+  ]);
+  const { data: dayRows, error: daysError } = daysResult;
   recordSupabaseRequest("event_days", "listEventOptions:days", dayRows?.length || 0);
   if (daysError) {
     setSupabaseStatus({ connected: false, error: daysError.message });
@@ -506,8 +513,32 @@ export async function listEventOptions(limit = 500) {
     const day = fromDayRow(row as EventDayRow);
     daysByEvent.set(day.eventId, [...(daysByEvent.get(day.eventId) || []), day]);
   });
+  const workersByEvent = new Map<string, string[]>();
+  (workersResult.data || []).forEach((row) => {
+    const typed = row as EventWorkerRow;
+    workersByEvent.set(typed.event_id, [...(workersByEvent.get(typed.event_id) || []), typed.worker_id]);
+  });
+  const dayWorkersByEvent = new Map<string, ReturnType<typeof fromDayWorkerRow>[]>();
+  (dayWorkersResult.data || []).forEach((row) => {
+    const item = fromDayWorkerRow(row as EventDayWorkerRow);
+    dayWorkersByEvent.set(item.eventId, [...(dayWorkersByEvent.get(item.eventId) || []), item]);
+  });
+  const pricesByEvent = new Map<string, ReturnType<typeof fromPriceOptionRow>[]>();
+  (pricesResult.data || []).forEach((row) => {
+    const item = fromPriceOptionRow(row as PriceOptionRow);
+    pricesByEvent.set(item.eventId, [...(pricesByEvent.get(item.eventId) || []), item]);
+  });
+  const paymentsByEvent = new Map<string, ReturnType<typeof fromPaymentRow>[]>();
+  (paymentsResult.data || []).forEach((row) => {
+    const item = fromPaymentRow(row as PaymentRow);
+    paymentsByEvent.set(item.eventId, [...(paymentsByEvent.get(item.eventId) || []), item]);
+  });
   setSupabaseStatus({ connected: true, error: "", synced: true, cacheStatus: `Loaded ${rows.length} event options` });
-  return rows.map((row) => fromRow(row, [], [], daysByEvent.get(row.id) || []));
+  return rows.map((row) => ({
+    ...fromRow(row, workersByEvent.get(row.id) || [], paymentsByEvent.get(row.id) || [], daysByEvent.get(row.id) || []),
+    eventDayWorkers: dayWorkersByEvent.get(row.id) || [],
+    priceOptions: pricesByEvent.get(row.id) || []
+  }));
 }
 
 export async function listPastPaidEventsPage(page = 0, pageSize = 20) {

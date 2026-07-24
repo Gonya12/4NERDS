@@ -36,6 +36,7 @@ import {
   pokemonCategoryLabels, purchaseSourceLabels, selectedEventCost
 } from "../utils/salesControl";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
+import { getAutoLinkEventForSale, getEligibleSaleEvents, isPaidAndConfirmedEvent, matchingSaleEventDay } from "../utils/saleEventLinking";
 
 type Editor = "sale" | "purchase" | "expense" | null;
 
@@ -52,16 +53,6 @@ function localDateTime() {
 
 function isoDay(value: string) {
   return value.slice(0, 10);
-}
-
-function todayEventMatches(events: Event[]) {
-  const today = new Date().toISOString().slice(0, 10);
-  return events.filter((event) => eventDays(event).some((day) => day.date.slice(0, 10) === today));
-}
-
-function todayDayId(event?: Event) {
-  const today = new Date().toISOString().slice(0, 10);
-  return event ? eventDays(event).find((day) => day.date.slice(0, 10) === today)?.id || "" : "";
 }
 
 function compactInputClass() {
@@ -108,6 +99,8 @@ export function SalesControlPage() {
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraMode, setCameraMode] = useState(false);
   const [cameraSwitching, setCameraSwitching] = useState(false);
+  const [eventLinkNotice, setEventLinkNotice] = useState("");
+  const [eventLinkManuallyChanged, setEventLinkManuallyChanged] = useState(false);
   const [imageStatus, setImageStatus] = useState("");
   const [imageRemoved, setImageRemoved] = useState(false);
   const [largePreviewOpen, setLargePreviewOpen] = useState(false);
@@ -215,9 +208,16 @@ export function SalesControlPage() {
   function openSale(sale?: SalesRecord, availableEvents = events) {
     cleanPreview();
     setEditingSale(sale);
-    const requested = requestedEventId ? availableEvents.find((event) => event.id === requestedEventId) : undefined;
-    const todayMatches = todayEventMatches(availableEvents);
-    const automaticEvent = requested || (todayMatches.length === 1 ? todayMatches[0] : undefined);
+    setEventLinkManuallyChanged(Boolean(sale));
+    const initialDate = sale?.soldAt || new Date().toISOString();
+    const eligible = getEligibleSaleEvents(availableEvents, initialDate, workers);
+    const requested = requestedEventId ? eligible.find((match) => match.event.id === requestedEventId) : undefined;
+    const automatic = requested || getAutoLinkEventForSale(availableEvents, initialDate, workers);
+    setEventLinkNotice(sale ? "" : eligible.length > 1
+      ? "Multiple paid and confirmed events match this sale date. Choose the correct event."
+      : automatic
+        ? `Linked to: ${automatic.event.name}`
+        : "No paid and confirmed event found for this sale date.");
     setSaleForm(sale ? {
       eventId: sale.eventId || "", eventDayId: sale.eventDayId || "", itemName: sale.itemName || "",
       category: sale.category || "raw_card", quantity: String(sale.quantity || 1), soldPrice: sale.soldPrice === undefined ? "" : String(sale.soldPrice),
@@ -225,7 +225,7 @@ export function SalesControlPage() {
       boughtFrom: sale.boughtFrom || "", purchaseSource: sale.purchaseSource || "", paymentMethod: sale.paymentMethod || "cash",
       soldByWorkerId: sale.soldByWorkerId || "", isRawCard: sale.isRawCard, buyPercentage: String(sale.buyPercentage || defaultBuyPercentage),
       inventoryPurchaseId: sale.inventoryPurchaseId || "", notes: sale.notes || "", soldAt: sale.soldAt.slice(0, 16), ownershipShares: sale.ownershipShares || []
-    } : { ...blankSale(), eventId: automaticEvent?.id || "", eventDayId: todayDayId(automaticEvent) });
+    } : { ...blankSale(), eventId: automatic?.event.id || "", eventDayId: automatic?.eventDay.id || "" });
     setPreviewUrl(sale?.imageUrl || "");
     setEditor("sale");
   }
@@ -551,10 +551,39 @@ export function SalesControlPage() {
 
   const eventMap = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const workerMap = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
+  const eligibleSaleEventMatches = useMemo(() => getEligibleSaleEvents(events, saleForm.soldAt, workers), [events, saleForm.soldAt, workers]);
+  const saleEventOptions = useMemo(() => {
+    const matchingIds = new Set(eligibleSaleEventMatches.map((match) => match.event.id));
+    const current = events.find((event) => event.id === saleForm.eventId);
+    const preferred = eligibleSaleEventMatches.map((match) => match.event);
+    const other = events.filter((event) => !matchingIds.has(event.id) && isPaidAndConfirmedEvent(event, workers));
+    return [...preferred, ...(current && !matchingIds.has(current.id) && !other.some((event) => event.id === current.id) ? [current] : []), ...other];
+  }, [events, workers, eligibleSaleEventMatches, saleForm.eventId]);
   const selectedSaleEvent = events.find((event) => event.id === saleForm.eventId);
   const selectedLinkedPurchase = purchases.find((purchase) => purchase.id === saleForm.inventoryPurchaseId);
   const selectedExpenseEvent = events.find((event) => event.id === expenseForm.eventId);
   const duplicateExpenseWarning = expenseForm.category === "event_table_fee" && selectedExpenseEvent && selectedEventCost(selectedExpenseEvent) > 0;
+
+  function changeSaleDate(value: string) {
+    if (editingSale || eventLinkManuallyChanged) {
+      setSaleForm((current) => ({ ...current, soldAt: value }));
+      return;
+    }
+    const eligible = getEligibleSaleEvents(events, value, workers);
+    const automatic = eligible.length === 1 ? eligible[0] : undefined;
+    setSaleForm((current) => ({ ...current, soldAt: value, eventId: automatic?.event.id || "", eventDayId: automatic?.eventDay.id || "" }));
+    setEventLinkNotice(eligible.length > 1
+      ? "Multiple paid and confirmed events match this sale date. Choose the correct event."
+      : automatic ? `Linked to: ${automatic.event.name}` : "No paid and confirmed event found for this sale date.");
+  }
+
+  function changeSaleEvent(eventId: string) {
+    setEventLinkManuallyChanged(true);
+    const event = events.find((item) => item.id === eventId);
+    const day = event ? matchingSaleEventDay(event, saleForm.soldAt) : undefined;
+    setSaleForm((current) => ({ ...current, eventId, eventDayId: day?.id || "" }));
+    setEventLinkNotice(event ? `Linked to: ${event.name}` : "No Event selected.");
+  }
 
   function imageActions(label: string) {
     const pasteSupported = window.isSecureContext && Boolean(navigator.clipboard?.read);
@@ -783,11 +812,11 @@ export function SalesControlPage() {
 
             {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              {selectedSaleEvent ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">Linked to: {selectedSaleEvent.name}</p> : null}
-              <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => setSaleForm({ ...saleForm, soldAt: event.target.value })} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
+              {eventLinkNotice ? <p className={`rounded-xl p-3 text-sm font-black ${selectedSaleEvent ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>{eventLinkNotice}</p> : null}
+              <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => changeSaleDate(event.target.value)} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
               <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
               {saleForm.isRawCard ? <RawCardCalculator marketValue={saleForm.marketValue} buyPercentage={saleForm.buyPercentage} actualCost={saleForm.boughtPrice} onMarketValue={(value) => setSaleForm({ ...saleForm, marketValue: value })} onPercentage={(value) => setSaleForm({ ...saleForm, buyPercentage: value })} onActualCost={(value) => setSaleForm({ ...saleForm, boughtPrice: value })} /> : <>{moneyInput(saleForm.marketValue, (value) => setSaleForm({ ...saleForm, marketValue: value }), "Market value, optional")}</>}
-              <div className="grid gap-3 sm:grid-cols-2"><select value={saleForm.eventId} onChange={(event) => setSaleForm({ ...saleForm, eventId: event.target.value, eventDayId: "" })} className={compactInputClass()}><option value="">No event selected</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name} · {shortScheduleSummary(event)}</option>)}</select><select value={saleForm.eventDayId} disabled={!selectedSaleEvent} onChange={(event) => setSaleForm({ ...saleForm, eventDayId: event.target.value })} className={compactInputClass()}><option value="">No event day selected</option>{selectedSaleEvent ? eventDays(selectedSaleEvent).map((day) => <option key={day.id} value={day.id}>{day.date.slice(0, 10)}</option>) : null}</select><select value={saleForm.inventoryPurchaseId} onChange={(event) => { const linked = purchases.find((row) => row.id === event.target.value); const suggested = linked ? roundMoney(linked.totalCost / Math.max(1, linked.quantity) * Math.max(1, Number(saleForm.quantity || 1))) : undefined; setSaleForm({ ...saleForm, inventoryPurchaseId: event.target.value, boughtPrice: linked && saleForm.boughtPrice === "" ? String(suggested) : saleForm.boughtPrice }); }} className={compactInputClass()}><option value="">No linked inventory purchase</option>{purchases.map((purchase) => <option key={purchase.id} value={purchase.id}>{purchase.itemName} · {formatMoney(purchase.totalCost)}</option>)}</select><select value={saleForm.soldByWorkerId} onChange={(event) => setSaleForm({ ...saleForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={saleForm.purchaseSource} onChange={(event) => setSaleForm({ ...saleForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source, optional</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={saleForm.paymentMethod} onChange={(event) => setSaleForm({ ...saleForm, paymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={saleForm.boughtFrom} onChange={(event) => setSaleForm({ ...saleForm, boughtFrom: event.target.value })} placeholder="Bought from / seller" className={compactInputClass()} /></div>
+              <div className="grid gap-3 sm:grid-cols-2"><select value={saleForm.eventId} onChange={(event) => changeSaleEvent(event.target.value)} className={compactInputClass()}>{saleEventOptions.map((event) => <option key={event.id} value={event.id}>{eligibleSaleEventMatches.some((match) => match.event.id === event.id) ? "Matching · " : ""}{event.name} · {shortScheduleSummary(event)}</option>)}<option value="">{eligibleSaleEventMatches.length > 1 ? "Choose matching event / No Event" : "No Event"}</option></select><select value={saleForm.eventDayId} disabled={!selectedSaleEvent} onChange={(event) => { setEventLinkManuallyChanged(true); setSaleForm({ ...saleForm, eventDayId: event.target.value }); }} className={compactInputClass()}><option value="">No event day selected</option>{selectedSaleEvent ? eventDays(selectedSaleEvent).map((day) => <option key={day.id} value={day.id}>{day.date.slice(0, 10)}</option>) : null}</select><select value={saleForm.inventoryPurchaseId} onChange={(event) => { const linked = purchases.find((row) => row.id === event.target.value); const suggested = linked ? roundMoney(linked.totalCost / Math.max(1, linked.quantity) * Math.max(1, Number(saleForm.quantity || 1))) : undefined; setSaleForm({ ...saleForm, inventoryPurchaseId: event.target.value, boughtPrice: linked && saleForm.boughtPrice === "" ? String(suggested) : saleForm.boughtPrice }); }} className={compactInputClass()}><option value="">No linked inventory purchase</option>{purchases.map((purchase) => <option key={purchase.id} value={purchase.id}>{purchase.itemName} · {formatMoney(purchase.totalCost)}</option>)}</select><select value={saleForm.soldByWorkerId} onChange={(event) => setSaleForm({ ...saleForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={saleForm.purchaseSource} onChange={(event) => setSaleForm({ ...saleForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source, optional</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={saleForm.paymentMethod} onChange={(event) => setSaleForm({ ...saleForm, paymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={saleForm.boughtFrom} onChange={(event) => setSaleForm({ ...saleForm, boughtFrom: event.target.value })} placeholder="Bought from / seller" className={compactInputClass()} /></div>
               {selectedLinkedPurchase ? <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-700 dark:bg-sky-950/30 dark:text-sky-200">Linked to {selectedLinkedPurchase.itemName}. Its purchase is not counted as an operating expense.</p> : null}<textarea value={saleForm.notes} onChange={(event) => setSaleForm({ ...saleForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} />
               {!saleForm.inventoryPurchaseId ? <OwnershipEditor workers={workers} shares={saleForm.ownershipShares} totalCost={Number(saleForm.boughtPrice || 0)} label="Profit Ownership" onChange={(ownershipShares) => setSaleForm({ ...saleForm, ownershipShares })} /> : null}
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
