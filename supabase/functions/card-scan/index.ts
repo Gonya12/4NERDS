@@ -37,6 +37,27 @@ function enforceRateLimit(request: Request) {
   return true;
 }
 
+async function findPokemonCardMatches(cardName: string | null, collectorNumber: string | null) {
+  if (!cardName && !collectorNumber) return [];
+  const number = collectorNumber?.split("/")[0]?.replace(/[^A-Za-z0-9]/g, "") || "";
+  const query = [
+    cardName ? `name:${cardName.includes(" ") ? `"${cardName.replace(/"/g, "")}"` : cardName}` : "",
+    number ? `number:${number}` : "",
+  ].filter(Boolean).join(" ");
+  const apiUrl = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}&pageSize=10&select=id,name,number,set,rarity,images,tcgplayer`;
+  const pokemonApiKey = Deno.env.get("POKEMON_TCG_API_KEY");
+
+  const response = await fetch(apiUrl, {
+    headers: pokemonApiKey
+      ? { "X-Api-Key": pokemonApiKey }
+      : {},
+  });
+  console.info("card-scan: pokemon tcg response", { status: response.status, authenticated: Boolean(pokemonApiKey) });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return Array.isArray(payload?.data) ? payload.data.slice(0, 5) : [];
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return json({ success: false, error: "Method not allowed." }, 405);
@@ -126,6 +147,10 @@ Do not estimate market value, bought price, or sold price. Confidence values mus
     if (!outputText) return json({ success: false, error: "Card analysis returned no structured result." }, 502);
     const scan = JSON.parse(outputText);
     console.info("card-scan: structured parsing completed");
+    const cardMatches = await findPokemonCardMatches(scan.cardName, scan.collectorNumber).catch((error) => {
+      console.error("card-scan: failure stage=pokemon-tcg-match", { message: error instanceof Error ? error.message : "unknown" });
+      return [];
+    });
     return json({
       success: true, cardType: scan.suggestedType,
       suggestions: {
@@ -135,6 +160,7 @@ Do not estimate market value, bought price, or sold price. Confidence values mus
         labelInformation: scan.labelInformation, barcodeText: scan.barcodeText,
       },
       confidence: scan.fieldConfidence, overallConfidence: scan.overallConfidence, warnings: [],
+      possibleMatches: cardMatches,
     });
   } catch (error) {
     const timedOut = error instanceof DOMException && error.name === "AbortError";

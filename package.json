@@ -29,6 +29,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.4",
+    "tesseract.js": "^7.0.0",
     "write-excel-file": "^4.1.1",
     "zod": "^4.1.12"
   },

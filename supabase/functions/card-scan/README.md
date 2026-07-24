@@ -19,6 +19,15 @@ Optional model override:
 supabase secrets set OPENAI_CARD_SCAN_MODEL=gpt-4.1-mini
 ```
 
+Optional authenticated Pokémon TCG API matching:
+
+```sh
+npx supabase secrets set POKEMON_TCG_API_KEY=your-server-side-key
+```
+
+The function sends this secret only through the server-side `X-Api-Key` header.
+When the secret is absent, Pokémon TCG matching continues anonymously.
+
 The app calls the deployed function with `supabase.functions.invoke("card-scan")`.
 If the function or secret is missing, the scanner keeps the image and shows the
 configuration/backend error so the user can retry or enter the inventory data
@@ -28,4 +37,5 @@ manually.
 key without a signed-in user session. The function does not accept privileged
 database operations or service-role credentials; it validates image type/size,
 limits requests per client on a best-effort basis, and keeps the provider key
-server-side. The only required secret is `OPENAI_API_KEY`.
+server-side. `OPENAI_API_KEY` is required only for this optional OpenAI scanner.
+`POKEMON_TCG_API_KEY` and `OPENAI_CARD_SCAN_MODEL` are optional.
