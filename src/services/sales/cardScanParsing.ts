@@ -99,7 +99,7 @@ export function tokenSimilarity(left: string, right: string) {
 
 function normalizeNumberSide(value: string) {
   const compact = value.toUpperCase().replace(/\s+/g, "").replace(/\|/g, "1");
-  const prefix = compact.match(/^[A-Z]{1,4}/)?.[0] || "";
+  const prefix = compact.match(/^(?:SV|TG|GG|RC|SH|SWSH|XY|SM|BW)/)?.[0] || "";
   const remainder = compact.slice(prefix.length)
     .replace(/[OQ]/g, "0")
     .replace(/[IL]/g, "1")
@@ -152,7 +152,9 @@ export function buildNameEvidence(raw: string): NameEvidence {
     .trim();
   const tokens = normalized.split(/\s+/).filter(Boolean);
   const suffixToken = [...tokens].reverse().find((token) => ocrSuffixMap.has(token.toLocaleLowerCase()));
-  const suffix = suffixToken ? ocrSuffixMap.get(suffixToken.toLocaleLowerCase()) || "" : "";
+  const suffix = suffixToken
+    ? suffixToken === "EX" ? "EX" : ocrSuffixMap.get(suffixToken.toLocaleLowerCase()) || ""
+    : "";
   const words = tokens.filter((token) => token !== suffixToken
     && token.length >= 3
     && /[A-Za-z]/.test(token)

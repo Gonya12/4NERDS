@@ -371,7 +371,14 @@ export function SalesControlPage() {
     if (!window.isSecureContext) { setCameraError("Camera requires a secure HTTPS connection. Use Upload instead."); return; }
     if (!navigator.mediaDevices?.getUserMedia) { setCameraError("Camera is not available. Use Upload instead."); return; }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: mode } }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: 1920, max: 2560 },
+          height: { ideal: 1080, max: 2560 }
+        },
+        audio: false
+      });
       streamRef.current = stream;
       if (!videoRef.current) throw new Error("Camera preview is unavailable.");
       videoRef.current.srcObject = stream;
@@ -402,10 +409,13 @@ export function SalesControlPage() {
       setCameraError("Camera is still starting. Try Capture again in a moment.");
       return;
     }
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const captureScale = Math.min(1, 1800 / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.max(1, Math.round(video.videoWidth * captureScale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * captureScale));
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+    canvas.width = 1;
+    canvas.height = 1;
     if (!blob) { setCameraError("Could not capture the photo."); return; }
     await pickFile(new File([blob], `sale-${Date.now()}.jpg`, { type: "image/jpeg" }));
   }
@@ -869,7 +879,17 @@ export function SalesControlPage() {
             {editor === "sale" ? <div className="space-y-3">
               {imageFile ? <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan, _hash, processed) => {
                 useProcessedScanFile(processed);
-                setSaleForm((current) => ({ ...current, itemName: scan.cardName || current.itemName, category: scan.suggestedType || current.category, isRawCard: (scan.suggestedType || current.category) === "raw_card" }));
+                setSaleForm((current) => {
+                  const nextCategory = scan.suggestedType || current.category;
+                  const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
+                  return {
+                    ...current,
+                    itemName: scan.cardName || current.itemName,
+                    category: nextCategory,
+                    isRawCard: nextCategory === "raw_card",
+                    marketValue: nextCategory === "raw_card" && selectedPrice?.market != null ? String(selectedPrice.market) : current.marketValue
+                  };
+                });
               }} /> : null}
               {eventLinkNotice ? <p className={`rounded-xl p-3 text-sm font-black ${selectedSaleEvent ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>{eventLinkNotice}</p> : null}
               <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => changeSaleDate(event.target.value)} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>

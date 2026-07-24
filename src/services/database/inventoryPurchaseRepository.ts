@@ -177,7 +177,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const { data, error } = await supabase.from("inventory_purchases")
     .select(columns)

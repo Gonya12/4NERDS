@@ -12,6 +12,7 @@ type Props = {
   inventory: InventoryPurchase[];
   onApply: (suggestion: CardScanSuggestion, hash: string, processedFile?: File) => void;
 };
+type ScanOutcome = "Match found" | "Several possible matches" | "No reliable match" | "Timed out" | "Cancelled" | "Processing error";
 
 const confidenceClass = {
   high: "bg-emerald-100 text-emerald-700",
@@ -102,10 +103,12 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
   const [detectingCrop, setDetectingCrop] = useState(false);
   const [manualSearch, setManualSearch] = useState("");
   const [searching, setSearching] = useState(false);
+  const [outcome, setOutcome] = useState<ScanOutcome>();
   const preview = useFilePreview(imageFile);
   const processedPreview = useFilePreview(processedFile);
   const runRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     const run = ++runRef.current;
@@ -117,6 +120,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     setProcessedFile(undefined);
     setHash("");
     setMessage("");
+    setOutcome(undefined);
     setCropConfidence(null);
     setCorners(defaultCorners);
     if (!imageFile) return () => controller.abort();
@@ -139,10 +143,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     return () => controller.abort();
   }, [imageFile]);
 
-  useEffect(() => () => {
-    runRef.current += 1;
-    controllerRef.current?.abort();
-    void import("../../services/sales/cardScanService").then(({ cancelCardScan }) => cancelCardScan());
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      runRef.current += 1;
+      controllerRef.current?.abort();
+      queueMicrotask(() => {
+        if (!mountedRef.current) {
+          void import("../../services/sales/cardScanService").then(({ cancelCardScan }) => cancelCardScan());
+        }
+      });
+    };
   }, []);
 
   async function scan(force = false, useFullImage = false) {
@@ -154,6 +166,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     setStatus("analyzing");
     setMessage("");
     setSuggestion(undefined);
+    setOutcome(undefined);
     setStage("Preparing image");
     try {
       let source = imageFile;
@@ -175,6 +188,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
       setHash(result.hash);
       setStatus("review");
       const matchCount = result.suggestion.possibleMatches?.length || 0;
+      setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : "No reliable match");
       setMessage(matchCount > 1
         ? "Several possible matches found. Choose the exact card."
         : matchCount === 1
@@ -183,7 +197,10 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     } catch (error) {
       if (run !== runRef.current) return;
       setStatus("failed");
-      setMessage(error instanceof DOMException && error.name === "AbortError"
+      const cancelled = error instanceof DOMException && error.name === "AbortError";
+      const timedOut = error instanceof Error && /timed out|timeout/i.test(error.message);
+      setOutcome(cancelled ? "Cancelled" : timedOut ? "Timed out" : "Processing error");
+      setMessage(cancelled
         ? "Cancelled. The photo and crop are still available."
         : error instanceof Error ? error.message : "Card analysis failed.");
     }
@@ -196,6 +213,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     const { cancelCardScan } = await import("../../services/sales/cardScanService");
     await cancelCardScan();
     setStatus("crop");
+    setOutcome("Cancelled");
     setMessage("Cancelled. Adjust the crop or enter the details manually.");
   }
 
@@ -207,6 +225,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     try {
       const { confirmPokemonCardMatch } = await import("../../services/sales/cardScanService");
       setSuggestion(await confirmPokemonCardMatch(suggestion, match, controller.signal));
+      setOutcome("Match found");
       setMessage("Exact card confirmed. Choose a finish when needed, then apply the suggestions.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load pricing for that card.");
@@ -251,6 +270,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         warnings: matches.length ? [] : ["No Pokémon TCG API results were found for that search."],
       });
       setStatus("review");
+      setOutcome(matches.length > 1 ? "Several possible matches" : matches.length === 1 ? "Match found" : "No reliable match");
       setMessage(matches.length ? "Manual search results are ready. Choose the exact card." : "No API results found. Manual entry remains available.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Manual search failed.");
@@ -319,6 +339,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     </div> : null}
 
     {status !== "crop" && processedPreview ? <img src={processedPreview} alt="Processed card crop" className="mx-auto max-h-80 rounded-xl bg-black object-contain" /> : null}
+    {outcome ? <p role="status" className="inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white dark:bg-white dark:text-slate-900">State: {outcome}</p> : null}
     {message && status !== "crop" ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
 
     {status !== "analyzing" ? <div className="flex gap-2">

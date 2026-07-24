@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
+    "test:scanner": "node --experimental-strip-types --test tests/cardScanParsing.test.ts",
     "preview": "vite preview --host 0.0.0.0",
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync android",
