@@ -1,7 +1,8 @@
 import { Camera, ImagePlus, LoaderCircle, RotateCcw, ScanLine, SwitchCamera, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { compressSaleImage } from "../../services/images/saleImageService";
-import { scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
+import { confirmPokemonCardMatch, scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
+import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
 type Props = {
   onClose: () => void;
@@ -68,6 +69,11 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
     try {
       const result = await scanPokemonCard(image, "raw_card", undefined, force);
       if (run !== runRef.current) return;
+      if ("correctedFile" in result && result.correctedFile && result.cardDetected) {
+        if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
+        setFile(result.correctedFile);
+        setPreview(URL.createObjectURL(result.correctedFile));
+      }
       setSuggestion(result.suggestion); setHash(result.hash);
     } catch (scanError) {
       if (run === runRef.current) setError(scanError instanceof Error ? scanError.message : "Card analysis failed.");
@@ -133,6 +139,9 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
   }
 
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => setSuggestion((current) => current ? { ...current, [key]: value } : current);
+  const chooseMatch = async (match: NonNullable<CardScanSuggestion["possibleMatches"]>[number]) => {
+    if (suggestion) setSuggestion(await confirmPokemonCardMatch(suggestion, match));
+  };
   const hasUsefulSuggestion = Boolean(suggestion && (suggestion.cardName || suggestion.collectorNumber || suggestion.condition || suggestion.stickerPrice != null || suggestion.possibleMatches?.length));
 
   return <div className="fixed inset-0 z-[100] overflow-hidden bg-black text-white">
@@ -157,7 +166,8 @@ export function QuickCardScanner({ onClose, onApply }: Props) {
         {suggestion && hasUsefulSuggestion ? <section className="space-y-3 rounded-2xl bg-white p-4 text-slate-950"><div className="grid gap-3 sm:grid-cols-2">{([
           ["cardName", "Card Name"], ["collectorNumber", "Collector Number"], ["cardSet", "Set"], ["language", "Language"], ["condition", "Condition"], ["stickerPrice", "Sticker Price"]
         ] as const).map(([key, label]) => <label key={key} className="text-xs font-black">{label}<span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px]">{suggestion.fieldConfidence[key] || "low"}</span><input type={key === "stickerPrice" ? "number" : "text"} min={key === "stickerPrice" ? 0 : undefined} step={key === "stickerPrice" ? "0.01" : undefined} value={suggestion[key] ?? ""} onChange={(event) => edit(key, key === "stickerPrice" ? (event.target.value ? Number(event.target.value) : null) : event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-base" /></label>)}</div>
-          {suggestion.possibleMatches?.length ? <div className="space-y-2"><div className="flex justify-between text-xs font-black"><span>Possible Pokémon TCG matches</span><span className="text-slate-400">Try another match</span></div>{suggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-slate-200 p-2 text-xs">{match.imageUrl ? <img src={match.imageUrl} alt="" loading="lazy" className="h-28 w-20 rounded object-contain" /> : null}<div className="flex-1"><p className="font-black">{match.cardName} · {match.collectorNumber}</p><p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p><p>{match.marketPrice != null ? `$${match.marketPrice.toFixed(2)} market · ` : ""}{match.matchConfidence} match</p><button onClick={() => setSuggestion((current) => current ? { ...current, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName, possibleMatches: [] } : current)} className="mt-2 rounded-lg bg-violet-600 px-3 py-2 font-black text-white">Use This Card</button></div></article>)}<button onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700">Edit Manually</button></div> : null}
+          {suggestion.possibleMatches?.length ? <div className="space-y-2"><div className="flex justify-between text-xs font-black"><span>Possible Matches</span><span className="text-slate-400">Try another match</span></div>{suggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-slate-200 p-2 text-xs">{match.imageUrl ? <a href={match.imageUrl} target="_blank" rel="noreferrer"><img src={match.imageUrl} alt="" loading="lazy" className="h-28 w-20 rounded object-contain" /></a> : null}<div className="flex-1"><p className="font-black">{match.cardName} · {match.collectorNumber}</p><p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p><p>{match.similarityScore != null ? `${Math.round(match.similarityScore * 100)}% visual · ` : ""}{match.marketPrice != null ? `$${match.marketPrice.toFixed(2)} market · ` : ""}{match.ocrAgreement ? `OCR ${match.ocrAgreement}` : `${match.matchConfidence} match`}</p><div className="mt-2 flex gap-2"><button onClick={() => void chooseMatch(match)} className="rounded-lg bg-violet-600 px-3 py-2 font-black text-white">Use This Card</button>{match.imageUrl ? <a href={match.imageUrl} target="_blank" rel="noreferrer" className="rounded-lg bg-slate-100 px-3 py-2 font-black">View Larger</a> : null}</div></div></article>)}<div className="flex flex-wrap gap-3"><button onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700">None of These / Enter Manually</button><button onClick={() => void cropCard()} className="text-xs font-black text-violet-700">Crop Again</button><button onClick={retake} className="text-xs font-black text-violet-700">Retake Photo</button></div></div> : null}
+          <TcgplayerPricingPanel suggestion={suggestion} isSlab={false} onChange={setSuggestion} />
           {suggestion.warnings?.map((warning) => <p key={warning} className="text-xs text-amber-700">{warning}</p>)}
           {suggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}
           <p className="text-xs text-slate-500">Suggestions are not saved until you review the inventory form and press Save. Sticker price never fills Actual Bought Price.</p></section> : null}

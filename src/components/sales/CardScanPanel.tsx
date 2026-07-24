@@ -1,7 +1,8 @@
 import { ScanLine, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { InventoryPurchase, PokemonProductCategory } from "../../types/models";
-import { scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
+import { confirmPokemonCardMatch, scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
+import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
 type Props = {
   imageFile?: File;
@@ -34,6 +35,11 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     }
   }
 
+  async function chooseMatch(match: NonNullable<CardScanSuggestion["possibleMatches"]>[number]) {
+    if (!suggestion) return;
+    setSuggestion(await confirmPokemonCardMatch(suggestion, match));
+  }
+
   useEffect(() => {
     if (imageFile) void scan();
   }, [imageFile, backImageFile]);
@@ -52,7 +58,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     {message ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
     {suggestion && !hasUsefulSuggestion ? <div className="space-y-2 rounded-xl bg-amber-100 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-100"><strong>No readable card information was found.</strong><p>Retake or replace the photo, crop closer to the card, or use the normal form for manual entry.</p>{suggestion.technicalDetails ? <details className="text-xs"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}</div> : null}
     {suggestion && hasUsefulSuggestion ? <div className="space-y-3"><div className="grid gap-2 sm:grid-cols-3">{field("cardName", "Card name")}{field("collectorNumber", "Collector number")}{field("cardSet", "Set / code")}{field("language", "Language")}{field("condition", "Condition")}{field("stickerPrice", "Sticker / asking price", "number")}{category === "graded_card" ? <>{field("gradingCompany", "Grading company")}{field("grade", "Grade")}{field("certificateNumber", "Certificate number")}</> : null}</div>
-      {suggestion.possibleMatches?.length ? <div className="space-y-2"><div className="flex items-center justify-between"><p className="text-xs font-black">Possible Pokémon TCG matches</p><span className="text-[10px] text-slate-500">Try another match below</span></div>{suggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-violet-200 bg-white p-2 text-xs dark:bg-slate-900">{match.imageUrl ? <img src={match.imageUrl} alt="" loading="lazy" className="h-24 w-16 rounded object-contain" /> : null}<div className="min-w-0 flex-1"><p className="font-black">{match.cardName} · {match.collectorNumber}</p><p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p><p>{match.marketPrice != null ? `$${match.marketPrice.toFixed(2)} market · ` : ""}{match.matchConfidence} match</p><button type="button" onClick={() => setSuggestion((current) => current ? { ...current, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName, possibleMatches: [] } : current)} className="mt-2 rounded-lg bg-violet-600 px-3 py-1.5 font-black text-white">Use This Card</button></div></article>)}<button type="button" onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700 dark:text-violet-300">Edit Manually</button></div> : null}
+      {suggestion.possibleMatches?.length ? <div className="space-y-2"><div className="flex items-center justify-between"><p className="text-xs font-black">Possible Pokémon TCG matches</p><span className="text-[10px] text-slate-500">Try another match below</span></div>{suggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-violet-200 bg-white p-2 text-xs dark:bg-slate-900">{match.imageUrl ? <img src={match.imageUrl} alt="" loading="lazy" className="h-24 w-16 rounded object-contain" /> : null}<div className="min-w-0 flex-1"><p className="font-black">{match.cardName} · {match.collectorNumber}</p><p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p><p>{match.marketPrice != null ? `$${match.marketPrice.toFixed(2)} market · ` : ""}{match.matchConfidence} match</p><button type="button" onClick={() => void chooseMatch(match)} className="mt-2 rounded-lg bg-violet-600 px-3 py-1.5 font-black text-white">Use This Card</button></div></article>)}<button type="button" onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700 dark:text-violet-300">Edit Manually</button></div> : null}
+      <TcgplayerPricingPanel suggestion={suggestion} isSlab={category === "graded_card"} onChange={setSuggestion} />
       {suggestion.warnings?.map((warning) => <p key={warning} className="text-xs text-amber-700 dark:text-amber-300">{warning}</p>)}
       {suggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs dark:bg-slate-900"><summary className="cursor-pointer font-black">Technical Details</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(suggestion.technicalDetails, null, 2)}</pre></details> : null}
       {duplicateCertificate ? <p className="rounded-xl bg-rose-100 p-2 text-sm font-black text-rose-800">Possible duplicate slab certificate.</p> : null}<button type="button" onClick={() => { onApply(suggestion, hash); setMessage("Suggestions applied. Confirm the normal inventory form, then Save."); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white"><Sparkles size={17} />Apply Suggestions</button></div> : null}

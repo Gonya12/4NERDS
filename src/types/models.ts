@@ -172,6 +172,10 @@ export interface InventoryPurchase {
   purchaseDate: string;
   totalCost: number;
   marketValue?: number;
+  marketPriceSource?: string;
+  marketPriceVariant?: string;
+  marketPriceUpdatedAt?: string;
+  marketPriceCheckedAt?: string;
   isRawCard: boolean;
   buyPercentage?: number;
   targetBuyPrice?: number;

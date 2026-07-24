@@ -145,7 +145,7 @@ export function SalesControlPage() {
   });
   const blankPurchase = () => ({
     itemName: "", category: "raw_card" as PokemonProductCategory, quantity: "1", purchaseDate: localDateTime(),
-    totalCost: "", marketValue: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
+    totalCost: "", marketValue: "", marketPriceSource: "", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
     purchaseSource: "" as PurchaseSource | "", seller: "", eventId: "", purchasedByWorkerId: "",
     notes: "", status: "in_stock" as InventoryStatus, quantitySold: "0", soldPrice: "", soldDate: "",
     soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: "",
@@ -268,7 +268,7 @@ export function SalesControlPage() {
     setEditingPurchase(purchase);
     setPurchaseForm(purchase ? {
       itemName: purchase.itemName, category: purchase.category, quantity: String(purchase.quantity), purchaseDate: purchase.purchaseDate.slice(0, 16),
-      totalCost: String(purchase.totalCost), marketValue: purchase.marketValue === undefined ? "" : String(purchase.marketValue), isRawCard: purchase.isRawCard,
+      totalCost: String(purchase.totalCost), marketValue: purchase.marketValue === undefined ? "" : String(purchase.marketValue), marketPriceSource: purchase.marketPriceSource || "", marketPriceVariant: purchase.marketPriceVariant || "", marketPriceUpdatedAt: purchase.marketPriceUpdatedAt || "", marketPriceCheckedAt: purchase.marketPriceCheckedAt || "", isRawCard: purchase.isRawCard,
       buyPercentage: String(purchase.buyPercentage || defaultBuyPercentage), purchaseSource: purchase.purchaseSource || "", seller: purchase.seller || "",
       eventId: purchase.eventId || "", purchasedByWorkerId: purchase.purchasedByWorkerId || "", notes: purchase.notes || "", status: purchase.status,
       quantitySold: String(purchase.quantitySold || 0), soldPrice: purchase.soldPrice === undefined ? "" : String(purchase.soldPrice),
@@ -489,6 +489,8 @@ export function SalesControlPage() {
       const saved = await saveInventoryPurchase({
         ...editingPurchase, imageUrl: imageRemoved ? undefined : editingPurchase?.imageUrl, imagePath: imageRemoved ? undefined : editingPurchase?.imagePath, itemName: purchaseForm.itemName, category: purchaseForm.category, quantity,
         purchaseDate: safeDateFromLocalInput(purchaseForm.purchaseDate).toISOString(), totalCost: Number(purchaseForm.totalCost), marketValue: market,
+        marketPriceSource: purchaseForm.marketPriceSource || undefined, marketPriceVariant: purchaseForm.marketPriceVariant || undefined,
+        marketPriceUpdatedAt: purchaseForm.marketPriceUpdatedAt || undefined, marketPriceCheckedAt: purchaseForm.marketPriceCheckedAt || undefined,
         isRawCard: purchaseForm.isRawCard, buyPercentage: purchaseForm.isRawCard ? percentage : undefined,
         targetBuyPrice: purchaseForm.isRawCard && market && percentage ? roundMoney(market * percentage / 100) : undefined,
         purchaseSource: purchaseForm.purchaseSource || undefined, seller: purchaseForm.seller, eventId: purchaseForm.eventId || undefined,
@@ -855,6 +857,8 @@ export function SalesControlPage() {
         openPurchase();
         void pickFile(file);
         if (!scan) return;
+        const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
+        const useRawMarket = (scan.suggestedType || "raw_card") === "raw_card" && selectedPrice?.market != null;
         setPurchaseForm((current) => ({
           ...current,
           category: scan.suggestedType || "raw_card",
@@ -869,6 +873,11 @@ export function SalesControlPage() {
           gradingCompany: scan.gradingCompany || current.gradingCompany,
           grade: scan.grade || current.grade,
           certificateNumber: scan.certificateNumber || current.certificateNumber,
+          marketValue: useRawMarket ? String(selectedPrice.market) : current.marketValue,
+          marketPriceSource: useRawMarket ? "TCGplayer" : current.marketPriceSource,
+          marketPriceVariant: useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
+          marketPriceUpdatedAt: useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
+          marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
           scanConfidence: scan.overallConfidence,
           scanStatus: "needs_review",
           imageHash: hash || "",
@@ -894,16 +903,25 @@ export function SalesControlPage() {
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
-            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash) => setPurchaseForm((current) => ({
-              ...current, category: scan.suggestedType || current.category, isRawCard: (scan.suggestedType || current.category) === "raw_card",
+            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash) => setPurchaseForm((current) => {
+              const nextCategory = scan.suggestedType || current.category;
+              const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
+              const useRawMarket = nextCategory === "raw_card" && selectedPrice?.market != null;
+              return {
+              ...current, category: nextCategory, isRawCard: nextCategory === "raw_card",
               itemName: scan.cardName || current.itemName, cardName: scan.cardName || current.cardName,
               collectorNumber: scan.collectorNumber || current.collectorNumber, cardSet: scan.cardSet || current.cardSet,
               cardLanguage: scan.language || current.cardLanguage, cardCondition: scan.condition || current.cardCondition,
               stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
               gradingCompany: scan.gradingCompany || current.gradingCompany, grade: scan.grade || current.grade,
               certificateNumber: scan.certificateNumber || current.certificateNumber, scanConfidence: scan.overallConfidence,
+              marketValue: useRawMarket ? String(selectedPrice.market) : current.marketValue,
+              marketPriceSource: useRawMarket ? "TCGplayer" : current.marketPriceSource,
+              marketPriceVariant: useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
+              marketPriceUpdatedAt: useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
+              marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
               scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
-            }))} /> : null}
+            };})} /> : null}
             {editor === "purchase" ? <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-3 dark:border-slate-700">
               <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
               <input value={purchaseForm.collectorNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />

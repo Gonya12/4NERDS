@@ -1,11 +1,19 @@
 import type { Worker } from "tesseract.js";
 import type { CardCondition, PokemonProductCategory } from "../../types/models";
 import { compressSaleImage } from "../images/saleImageService";
+import { detectAndCorrectCard, visualCardMatches } from "./visualCardMatcher";
 
 export type ScanConfidence = "high" | "medium" | "low";
 export type CardMatch = {
   id: string; cardName: string; collectorNumber: string; setName: string;
-  rarity?: string; imageUrl?: string; marketPrice?: number; matchConfidence: ScanConfidence;
+  rarity?: string; imageUrl?: string; marketPrice?: number; matchConfidence: ScanConfidence; similarityScore?: number;
+  ocrAgreement?: "agree" | "conflict" | "unknown";
+};
+export type TcgplayerPriceVariant = {
+  variant: string; market?: number; low?: number; mid?: number; high?: number; directLow?: number;
+};
+export type TcgplayerPricing = {
+  url?: string; updatedAt?: string; checkedAt: string; variants: TcgplayerPriceVariant[]; selectedVariant?: string;
 };
 export type CardScanSuggestion = {
   suggestedType: Extract<PokemonProductCategory, "raw_card" | "graded_card"> | null;
@@ -24,12 +32,35 @@ export type CardScanSuggestion = {
   fieldConfidence: Record<string, ScanConfidence>;
   possibleMatches?: CardMatch[];
   warnings: string[];
+  tcgplayerPricing?: TcgplayerPricing;
   technicalDetails?: {
     fullText: string; topText: string; bottomText: string; stickerText: string;
     confidence: Record<string, number>; parsed: Record<string, string | number | null>;
     apiQuery: string; apiMatchCount: number;
   };
 };
+
+const supportedPriceVariants = ["normal", "holofoil", "reverseHolofoil", "firstEditionHolofoil", "firstEditionNormal", "unlimitedHolofoil", "unlimitedNormal"];
+
+export async function confirmPokemonCardMatch(suggestion: CardScanSuggestion, match: CardMatch) {
+  let pricing: TcgplayerPricing = { checkedAt: new Date().toISOString(), variants: [] };
+  try {
+    const response = await fetch(`https://api.pokemontcg.io/v2/cards/${encodeURIComponent(match.id)}?select=id,name,number,set,rarity,images,tcgplayer`, { signal: AbortSignal.timeout(8_000) });
+    if (response.ok) {
+      const payload = await response.json() as { data?: { tcgplayer?: { url?: string; updatedAt?: string; prices?: Record<string, { market?: number; low?: number; mid?: number; high?: number; directLow?: number }> } } };
+      const tcgplayer = payload.data?.tcgplayer;
+      const variants = supportedPriceVariants.flatMap((variant) => {
+        const price = tcgplayer?.prices?.[variant];
+        return price ? [{ variant, market: price.market, low: price.low, mid: price.mid, high: price.high, directLow: price.directLow }] : [];
+      });
+      pricing = { url: tcgplayer?.url, updatedAt: tcgplayer?.updatedAt, checkedAt: new Date().toISOString(), variants, selectedVariant: variants.length === 1 ? variants[0].variant : undefined };
+    }
+  } catch { /* Pricing is optional and manual market value remains available. */ }
+  return {
+    ...suggestion, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName,
+    possibleMatches: [], tcgplayerPricing: pricing
+  };
+}
 
 type OcrRegion = { text: string; confidence: number };
 let workerPromise: Promise<Worker> | null = null;
@@ -249,7 +280,7 @@ async function findPokemonCards(cardName: string | null, collectorNumber: string
 
 export async function scanPokemonCard(front: File, requestedType: PokemonProductCategory, back?: File, force = false) {
   const hash = `${await imageHash(front)}:${back ? await imageHash(back) : ""}`;
-  const cacheKey = `4nerds_local_ocr_v2_${hash}`;
+  const cacheKey = `4nerds_hybrid_visual_v1_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);
@@ -257,8 +288,9 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
     } catch { /* Local caching is optional. */ }
   }
 
-  const suggestion = await serializedOcr(async () => {
-    const frontImage = await imageElement(front);
+  const analysis = await serializedOcr(async () => {
+    const corrected = await detectAndCorrectCard(front);
+    const frontImage = await imageElement(corrected.file);
     const qualityWarnings = photoQualityWarnings(frontImage);
     const full = await recognize(crop(frontImage, 0.01, 0.01, 0.98, 0.98, 1, false), "6");
     const top = await recognizeBest(frontImage, [0.03, 0.01, 0.94, 0.27], "7", 2.5);
@@ -280,8 +312,12 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
     const condition = conditionFrom(stickerText);
     const stickerPrice = priceFrom(stickerText);
     const slab = slabFields(`${top.text}\n${label.text}`);
-    const possibleMatches = await findPokemonCards(cardName, collectorNumber, confidence(top.confidence));
+    const visual = await visualCardMatches(corrected.file, cardName, collectorNumber);
+    const textMatches = visual.matches.length ? [] : await findPokemonCards(cardName, collectorNumber, confidence(top.confidence));
+    const possibleMatches = visual.matches.length ? visual.matches : textMatches;
     const warnings: string[] = [...qualityWarnings];
+    warnings.push(corrected.detected ? "Card boundary detected and perspective corrected." : "Automatic card boundary detection failed. Using the full photo; crop again if background dominates.");
+    if (visual.warning) warnings.push(visual.warning);
     if (!cardName) warnings.push("Card name confidence was low; enter it manually or choose a possible match.");
     if (!collectorNumber) warnings.push("Collector number was not clear enough to suggest.");
     if (!possibleMatches.length && (cardName || collectorNumber)) warnings.push("No Pokémon TCG API match was found. OCR suggestions remain editable.");
@@ -304,7 +340,7 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
       confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence },
       parsed: { cardName, collectorNumber, condition, stickerPrice }, apiQuery, apiMatchCount: possibleMatches.length
     });
-    return {
+    const suggestion = {
       suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
       cardName, collectorNumber, cardSet: null, language: null, condition, stickerPrice,
       gradingCompany: slab.gradingCompany, grade: slab.grade, certificateNumber: slab.certificateNumber,
@@ -317,8 +353,9 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
         apiQuery, apiMatchCount: possibleMatches.length
       }
     } satisfies CardScanSuggestion;
+    return { suggestion, correctedFile: corrected.file, cardDetected: corrected.detected };
   }).finally(scheduleWorkerTermination);
 
-  try { localStorage.setItem(cacheKey, JSON.stringify(suggestion)); } catch { /* Cache is optional. */ }
-  return { suggestion, hash, cached: false };
+  try { localStorage.setItem(cacheKey, JSON.stringify(analysis.suggestion)); } catch { /* Cache is optional. */ }
+  return { ...analysis, hash, cached: false };
 }

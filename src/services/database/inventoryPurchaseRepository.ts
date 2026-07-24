@@ -17,6 +17,10 @@ type PurchaseRow = {
   purchase_date: string;
   total_cost: number;
   market_value?: number | null;
+  market_price_source?: string | null;
+  market_price_variant?: string | null;
+  market_price_updated_at?: string | null;
+  market_price_checked_at?: string | null;
   is_raw_card: boolean;
   buy_percentage?: number | null;
   target_buy_price?: number | null;
@@ -65,6 +69,10 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     purchaseDate: row.purchase_date,
     totalCost: Number(row.total_cost || 0),
     marketValue: row.market_value === null || row.market_value === undefined ? undefined : Number(row.market_value),
+    marketPriceSource: row.market_price_source || undefined,
+    marketPriceVariant: row.market_price_variant || undefined,
+    marketPriceUpdatedAt: row.market_price_updated_at || undefined,
+    marketPriceCheckedAt: row.market_price_checked_at || undefined,
     isRawCard: Boolean(row.is_raw_card),
     buyPercentage: row.buy_percentage === null || row.buy_percentage === undefined ? undefined : Number(row.buy_percentage),
     targetBuyPrice: row.target_buy_price === null || row.target_buy_price === undefined ? undefined : Number(row.target_buy_price),
@@ -114,6 +122,10 @@ function toRow(value: InventoryPurchase): PurchaseRow {
     purchase_date: value.purchaseDate,
     total_cost: Number(value.totalCost || 0),
     market_value: value.marketValue ?? null,
+    market_price_source: value.marketPriceSource || null,
+    market_price_variant: value.marketPriceVariant || null,
+    market_price_updated_at: value.marketPriceUpdatedAt || null,
+    market_price_checked_at: value.marketPriceCheckedAt || null,
     is_raw_card: Boolean(value.isRawCard),
     buy_percentage: value.buyPercentage ?? null,
     target_buy_price: value.targetBuyPrice ?? null,
@@ -165,7 +177,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const { data, error } = await supabase.from("inventory_purchases")
     .select(columns)
@@ -217,6 +229,10 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     purchaseDate: input.purchaseDate || timestamp,
     totalCost: Number(input.totalCost || 0),
     marketValue: input.marketValue,
+    marketPriceSource: input.marketPriceSource,
+    marketPriceVariant: input.marketPriceVariant,
+    marketPriceUpdatedAt: input.marketPriceUpdatedAt,
+    marketPriceCheckedAt: input.marketPriceCheckedAt,
     isRawCard: Boolean(input.isRawCard),
     buyPercentage: input.buyPercentage,
     targetBuyPrice: input.targetBuyPrice,
