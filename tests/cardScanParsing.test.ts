@@ -40,6 +40,11 @@ test("manual search validates useful input without requiring a name", () => {
   assert.equal(manualCardSearchValidationError({ collectorNumber: "106" }), "");
 });
 
+test("does not turn an unrecognized collector number into an API number filter", () => {
+  assert.equal(buildManualPokemonQuery({ name: "Pikachu", collectorNumber: "AWA4/1EV01A" }), 'name:"Pikachu"');
+  assert.equal(parseCollectorNumber("AWA4/1EV01A"), null);
+});
+
 test("cleans noisy Charizard OCR without using raw text as the final name", () => {
   const evidence = buildNameEvidence("re Charizalo iT");
   assert.equal(evidence.candidates[0], "Charizard ex");

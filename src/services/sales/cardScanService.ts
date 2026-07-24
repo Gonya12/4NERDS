@@ -131,6 +131,7 @@ export type ManualCardSearchPage = {
   totalCount: number;
   hasMore: boolean;
   normalizedTerms: ReturnType<typeof normalizeManualCardSearchTerms>;
+  warnings?: string[];
 };
 
 function abortError() {
@@ -520,20 +521,32 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
   const normalizedTerms = normalizeManualCardSearchTerms(input);
   const page = Math.max(1, Math.floor(input.page || 1));
   const pageSize = Math.min(20, Math.max(1, Math.floor(input.pageSize || 20)));
-  const query = buildManualPokemonQuery(normalizedTerms);
+  const collector = parseCollectorNumber(normalizedTerms.collectorNumber);
+  const ignoredCollector = Boolean(normalizedTerms.collectorNumber && !collector);
+  const safeTerms = { ...normalizedTerms, collectorNumber: collector?.normalized || "" };
+  const query = buildManualPokemonQuery(safeTerms);
   const cacheKey = JSON.stringify({ query, language: normalizedTerms.language.toLocaleLowerCase(), page, pageSize });
   const cached = manualSearchCache.get(cacheKey);
   if (cached) return Promise.resolve(cached);
   const existing = manualSearchInFlight.get(cacheKey);
   if (existing) return existing;
 
-  const promise = fetchPokemonApi({ q: query, page, pageSize }, signal).then((payload) => {
-    const cards = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+  const fallbackQuery = normalizedTerms.set
+    ? buildManualPokemonQuery({ ...safeTerms, set: "" })
+    : "";
+  const promise = (async () => {
+    let payload = await fetchPokemonApi({ q: query, page, pageSize }, signal);
+    let rows = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+    // A set name is optional. If it is stale or malformed, name/number results
+    // are more useful than an empty result or an upstream query error.
+    if (!rows.length && fallbackQuery && fallbackQuery !== query) {
+      payload = await fetchPokemonApi({ q: fallbackQuery, page, pageSize }, signal);
+      rows = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+    }
     const evidence = buildNameEvidence(normalizedTerms.name);
-    const collector = parseCollectorNumber(normalizedTerms.collectorNumber);
     const ranked = normalizedTerms.name || collector
-      ? rankPokemonCards(cards, evidence, collector)
-      : cards.map((card) => ({ ...card, matchScore: 50, reasons: ["set search candidate"] }));
+      ? rankPokemonCards(rows, evidence, collector)
+      : rows.map((card) => ({ ...card, matchScore: 50, reasons: ["set search candidate"] }));
     const matches = ranked.map((card) => cardMatch(card, card.matchScore, card.reasons));
     const totalCount = Number(payload.totalCount || matches.length);
     const result: ManualCardSearchPage = {
@@ -543,11 +556,12 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
       totalCount,
       hasMore: page * pageSize < totalCount,
       normalizedTerms,
+      warnings: ignoredCollector ? ["Collector number was ignored because its format was not recognized."] : undefined,
     };
     if (manualSearchCache.size >= 75) manualSearchCache.delete(manualSearchCache.keys().next().value as string);
     manualSearchCache.set(cacheKey, result);
     return result;
-  }).finally(() => {
+  })().finally(() => {
     manualSearchInFlight.delete(cacheKey);
   });
   manualSearchInFlight.set(cacheKey, promise);

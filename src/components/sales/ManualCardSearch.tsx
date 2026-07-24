@@ -98,6 +98,7 @@ export function ManualCardSearch({
   const [loading, setLoading] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState("");
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [searched, setSearched] = useState(false);
   const [selected, setSelected] = useState<CardScanSuggestion>();
   const [largeMatch, setLargeMatch] = useState<CardMatch>();
@@ -122,6 +123,7 @@ export function ManualCardSearch({
     setHasMore(false);
     setTotalCount(0);
     setError("");
+    setWarnings([]);
     setSearched(false);
     setSelected(undefined);
     setLoading(false);
@@ -161,6 +163,7 @@ export function ManualCardSearch({
       setHasMore(response.hasMore);
       setTotalCount(response.totalCount);
       setSearched(true);
+      setWarnings(response.warnings || []);
       if (!append) {
         const nextRecent = [
           normalized,
@@ -254,6 +257,7 @@ export function ManualCardSearch({
               setSelected(undefined);
               setSearched(false);
               setError("");
+              setWarnings([]);
             }} className="min-h-11 rounded-xl bg-slate-200 px-5 text-sm font-black dark:bg-slate-800">Clear</button>
           </div>
           {terms.language ? <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-4">Language is preserved in the draft. The official Pokémon TCG API catalog may not include every non-English printing.</p> : null}
@@ -271,6 +275,7 @@ export function ManualCardSearch({
         </div> : null}
 
         {error ? <p role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-black text-rose-800 dark:bg-rose-950/50 dark:text-rose-200">{error}</p> : null}
+        {warnings.map((warning) => <p key={warning} role="status" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">{warning} Showing results using the remaining search fields.</p>)}
         {loading && !results.length ? <p role="status" className="rounded-xl bg-violet-50 p-4 text-sm font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200"><LoaderCircle className="mr-2 inline animate-spin" size={18} />Searching the official card catalog…</p> : null}
 
         {selected ? <section className="space-y-3 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">

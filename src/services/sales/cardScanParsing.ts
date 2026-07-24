@@ -361,7 +361,9 @@ export function manualCardSearchValidationError(input: ManualCardSearchTerms) {
 export function buildManualPokemonQuery(input: ManualCardSearchTerms) {
   const normalized = normalizeManualCardSearchTerms(input);
   const collector = parseCollectorNumber(normalized.collectorNumber);
-  const collectorValue = collector?.numerator || normalized.collectorNumber.replace(/\/.*$/, "").replace(/\s+/g, "");
+  // Invalid OCR must not become a Lucene number filter. Callers can retain the
+  // original value for a warning while safely continuing with the name/set.
+  const collectorValue = collector?.numerator || "";
   const setLooksLikeId = Boolean(normalized.set && !/\s/.test(normalized.set) && /^[a-z0-9-]{2,18}$/i.test(normalized.set));
   return [
     normalized.name ? `name:"${normalized.name}"` : "",

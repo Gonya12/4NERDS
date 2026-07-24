@@ -29,6 +29,18 @@ function validQuery(value: string) {
     && /^[\p{L}\p{N}\s"'./:&()_*-]+$/u.test(value);
 }
 
+function safeQuery(value: unknown) {
+  return String(value || "").normalize("NFKC").replace(/[\r\n\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function upstreamMessage(status: number) {
+  if (status === 400) return "The card search query was not accepted. Try searching by card name only.";
+  if (status === 401 || status === 403) return "The Pokémon TCG API authentication is unavailable.";
+  if (status === 429) return "The Pokémon TCG API rate limit was reached. Try again shortly.";
+  if (status >= 500) return "The Pokémon TCG API is temporarily unavailable. Try again shortly.";
+  return "The Pokémon TCG API request could not be completed.";
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
@@ -41,7 +53,7 @@ Deno.serve(async (request) => {
   }
 
   const cardId = String(input.id || "").trim();
-  const query = String(input.q || "").trim();
+  const query = safeQuery(input.q);
   if (cardId && !/^[a-z0-9-]{2,80}$/i.test(cardId)) {
     return json({ error: "Invalid Pokémon card ID." }, 400);
   }
@@ -51,15 +63,20 @@ Deno.serve(async (request) => {
 
   const page = Math.min(100, Math.max(1, Math.floor(Number(input.page) || 1)));
   const pageSize = Math.min(20, Math.max(1, Math.floor(Number(input.pageSize) || 20)));
+  const params = new URLSearchParams({ select: selectedFields, page: String(page), pageSize: String(pageSize) });
+  if (!cardId) params.set("q", query);
   const endpoint = cardId
-    ? `${pokemonCardsUrl}/${encodeURIComponent(cardId)}?select=${selectedFields}`
-    : `${pokemonCardsUrl}?q=${encodeURIComponent(query)}&page=${page}&pageSize=${pageSize}&select=${selectedFields}`;
+    ? `${pokemonCardsUrl}/${encodeURIComponent(cardId)}?${params.toString()}`
+    : `${pokemonCardsUrl}?${params.toString()}`;
   const apiKey = Deno.env.get("POKEMON_TCG_API_KEY");
   const headers = apiKey ? { "X-Api-Key": apiKey } : undefined;
 
   try {
+    console.info("pokemon-card-search request", { stage: "upstream_request", cardId: Boolean(cardId), query, page, pageSize, endpoint });
     const upstream = await fetch(endpoint, { headers });
     const body = await upstream.text();
+    console.info("pokemon-card-search response", { stage: "upstream_response", status: upstream.status, body: body.slice(0, 800) });
+    if (!upstream.ok) return json({ success: false, code: upstream.status === 400 ? "INVALID_SEARCH_QUERY" : upstream.status === 429 ? "RATE_LIMITED" : upstream.status >= 500 ? "UPSTREAM_UNAVAILABLE" : "UPSTREAM_REQUEST_FAILED", message: upstreamMessage(upstream.status) }, upstream.status);
     return new Response(body, {
       status: upstream.status,
       headers: {
@@ -68,7 +85,8 @@ Deno.serve(async (request) => {
         "Cache-Control": upstream.ok ? "public, max-age=120" : "no-store",
       },
     });
-  } catch {
-    return json({ error: "The Pokémon TCG API could not be reached." }, 502);
+  } catch (error) {
+    console.error("pokemon-card-search failure", { stage: "network", message: error instanceof Error ? error.message : "Unknown error" });
+    return json({ success: false, code: "UPSTREAM_CONNECTION_FAILED", message: "The Pokémon TCG API could not be reached. Try again shortly." }, 502);
   }
 });
