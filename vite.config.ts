@@ -12,7 +12,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules/tesseract.js") || id.includes("node_modules/tesseract.js-core")) return "scanner-tesseract";
-          if (id.includes("node_modules/@huggingface/transformers") || id.includes("node_modules/onnxruntime-web")) return "scanner-transformers";
         }
       }
     }
@@ -59,8 +58,9 @@ export default defineConfig({
         globIgnores: [
           "**/scanner-*.js",
           "**/cardScanService-*.js",
+          "**/cardImageProcessor-*.js",
+          "**/cardImageWorker-*.js",
           "**/CardScanPanel-*.js",
-          "**/QuickCardScanner-*.js",
           "**/BatchInventoryImporter-*.js",
           "**/TcgplayerPricingPanel-*.js"
         ],

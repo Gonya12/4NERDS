@@ -1,2 +1,1 @@
-[functions.card-scan]
-verify_jwt = false
+# The scanner is fully client-side and does not require a paid AI Edge Function.

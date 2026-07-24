@@ -38,7 +38,6 @@ import { getAutoLinkEventForSale, getEligibleSaleEvents, isPaidAndConfirmedEvent
 
 const CardScanPanel = lazy(() => import("../components/sales/CardScanPanel").then((module) => ({ default: module.CardScanPanel })));
 const BatchInventoryImporter = lazy(() => import("../components/sales/BatchInventoryImporter").then((module) => ({ default: module.BatchInventoryImporter })));
-const QuickCardScanner = lazy(() => import("../components/sales/QuickCardScanner").then((module) => ({ default: module.QuickCardScanner })));
 
 type Editor = "sale" | "purchase" | "expense" | null;
 
@@ -130,7 +129,6 @@ export function SalesControlPage() {
   const [exportEventId, setExportEventId] = useState("");
   const [exporting, setExporting] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
-  const [quickScannerOpen, setQuickScannerOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -313,6 +311,15 @@ export function SalesControlPage() {
     } catch (error) {
       setImageStatus(error instanceof Error ? error.message : "Could not prepare image.");
     }
+  }
+
+  function useProcessedScanFile(file?: File) {
+    if (!file) return;
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+    setImageFile(file);
+    setImageRemoved(false);
+    setPreviewUrl(URL.createObjectURL(file));
+    setImageStatus(`Perspective-corrected card ready to upload on Save · ${(file.size / 1024).toFixed(0)} KB`);
   }
 
   function removeImage() {
@@ -831,7 +838,7 @@ export function SalesControlPage() {
         </div>
       </div>
 
-      {!editor && !quickScannerOpen ? <button onClick={() => setQuickScannerOpen(true)} aria-label="Scan Pokémon card" className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex min-h-14 items-center gap-2 rounded-2xl bg-violet-600 px-4 font-black text-white shadow-xl transition active:scale-95 lg:bottom-8"><ScanLine size={21} /> Scan Card</button> : null}
+      {!editor ? <button onClick={() => openSale(undefined, events, true)} aria-label="Add sale with camera" className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex min-h-14 items-center gap-2 rounded-2xl bg-violet-600 px-4 font-black text-white shadow-xl transition active:scale-95 lg:bottom-8"><Camera size={21} /> Add Sale</button> : null}
 
       {exportOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:items-center sm:p-4">
@@ -853,39 +860,6 @@ export function SalesControlPage() {
         setPurchases((current) => [{ ...saved, ownershipShares: input.ownershipShares || [] }, ...current.filter((row) => row.id !== saved.id)]);
       }} /> : null}
 
-      {quickScannerOpen ? <QuickCardScanner onClose={() => setQuickScannerOpen(false)} onApply={(file, scan, hash) => {
-        setQuickScannerOpen(false);
-        openPurchase();
-        void pickFile(file);
-        if (!scan) return;
-        const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
-        const useRawMarket = (scan.suggestedType || "raw_card") === "raw_card" && selectedPrice?.market != null;
-        setPurchaseForm((current) => ({
-          ...current,
-          category: scan.suggestedType || "raw_card",
-          isRawCard: (scan.suggestedType || "raw_card") === "raw_card",
-          itemName: scan.cardName || current.itemName,
-          cardName: scan.cardName || current.cardName,
-          collectorNumber: scan.collectorNumber || current.collectorNumber,
-          cardSet: scan.cardSet || current.cardSet,
-          cardLanguage: scan.language || current.cardLanguage,
-          cardCondition: scan.condition || current.cardCondition,
-          stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
-          gradingCompany: scan.gradingCompany || current.gradingCompany,
-          grade: scan.grade || current.grade,
-          certificateNumber: scan.certificateNumber || current.certificateNumber,
-          marketValue: useRawMarket ? String(selectedPrice.market) : current.marketValue,
-          marketPriceSource: useRawMarket ? "TCGplayer" : current.marketPriceSource,
-          marketPriceVariant: useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
-          marketPriceUpdatedAt: useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
-          marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
-          scanConfidence: scan.overallConfidence,
-          scanStatus: "needs_review",
-          imageHash: hash || "",
-          scanResult: scan as unknown as Record<string, unknown>
-        }));
-      }} /> : null}
-
       {editor ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:p-4">
           <section onPaste={handleEditorPaste} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { if (event.defaultPrevented) return; event.preventDefault(); void pickFile(event.dataTransfer.files[0]); }} className="max-h-[95dvh] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-5 dark:bg-slate-900">
@@ -893,7 +867,10 @@ export function SalesControlPage() {
 
             {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              {imageFile ? <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan) => setSaleForm((current) => ({ ...current, itemName: scan.cardName || current.itemName, category: scan.suggestedType || current.category, isRawCard: (scan.suggestedType || current.category) === "raw_card" }))} /> : null}
+              {imageFile ? <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan, _hash, processed) => {
+                useProcessedScanFile(processed);
+                setSaleForm((current) => ({ ...current, itemName: scan.cardName || current.itemName, category: scan.suggestedType || current.category, isRawCard: (scan.suggestedType || current.category) === "raw_card" }));
+              }} /> : null}
               {eventLinkNotice ? <p className={`rounded-xl p-3 text-sm font-black ${selectedSaleEvent ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>{eventLinkNotice}</p> : null}
               <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => changeSaleDate(event.target.value)} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
               <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
@@ -904,7 +881,9 @@ export function SalesControlPage() {
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
-            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash) => setPurchaseForm((current) => {
+            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash, processed) => {
+              useProcessedScanFile(processed);
+              setPurchaseForm((current) => {
               const nextCategory = scan.suggestedType || current.category;
               const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
               const useRawMarket = nextCategory === "raw_card" && selectedPrice?.market != null;
@@ -922,7 +901,8 @@ export function SalesControlPage() {
               marketPriceUpdatedAt: useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
               marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
               scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
-            };})} /> : null}
+            };});
+            }} /> : null}
             {editor === "purchase" ? <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-3 dark:border-slate-700">
               <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
               <input value={purchaseForm.collectorNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
