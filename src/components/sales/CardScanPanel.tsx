@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { InventoryPurchase, PokemonProductCategory } from "../../types/models";
 import type { CropPoint } from "../../services/sales/cardImageProcessor";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
+import { ManualCardSearch } from "./ManualCardSearch";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
 type Props = {
@@ -11,6 +12,7 @@ type Props = {
   category: PokemonProductCategory;
   inventory: InventoryPurchase[];
   onApply: (suggestion: CardScanSuggestion, hash: string, processedFile?: File) => void;
+  onRetakePhoto?: () => void;
 };
 type ScanOutcome = "Match found" | "Several possible matches" | "No reliable match" | "Timed out" | "Cancelled" | "Processing error";
 
@@ -91,7 +93,7 @@ function CornerCropEditor({
   </div>;
 }
 
-export function CardScanPanel({ imageFile, backImageFile, category, inventory, onApply }: Props) {
+export function CardScanPanel({ imageFile, backImageFile, category, inventory, onApply, onRetakePhoto }: Props) {
   const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">("crop");
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState<CardScanStage>("Preparing image");
@@ -101,7 +103,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
   const [corners, setCorners] = useState<CropPoint[]>(defaultCorners);
   const [cropConfidence, setCropConfidence] = useState<number | null>(null);
   const [detectingCrop, setDetectingCrop] = useState(false);
-  const [manualSearch, setManualSearch] = useState("");
+  const [manualSearchOpen, setManualSearchOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [outcome, setOutcome] = useState<ScanOutcome>();
   const preview = useFilePreview(imageFile);
@@ -193,7 +195,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         ? "Several possible matches found. Choose the exact card."
         : matchCount === 1
           ? "One possible match found. Confirm it before applying."
-          : "No reliable match was found. Search manually, adjust the crop, or enter the card manually.");
+          : "We could not identify this card automatically.");
     } catch (error) {
       if (run !== runRef.current) return;
       setStatus("failed");
@@ -229,51 +231,6 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
       setMessage("Exact card confirmed. Choose a finish when needed, then apply the suggestions.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load pricing for that card.");
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  async function runManualSearch() {
-    const query = manualSearch.trim();
-    if (!query) return;
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    setSearching(true);
-    try {
-      const { searchPokemonCards } = await import("../../services/sales/cardScanService");
-      const matches = await searchPokemonCards(query, suggestion?.collectorNumber || null, controller.signal);
-      setSuggestion((current) => current ? {
-        ...current,
-        correctedNameCandidate: matches[0]?.cardName || query,
-        correctedNameConfidence: matches[0]?.matchConfidence || "low",
-        possibleMatches: matches,
-      } : {
-        suggestedType: category === "graded_card" ? "graded_card" : "raw_card",
-        cardName: null,
-        collectorNumber: null,
-        cardSet: null,
-        language: null,
-        condition: null,
-        stickerPrice: null,
-        gradingCompany: null,
-        grade: null,
-        certificateNumber: null,
-        labelInformation: null,
-        barcodeText: null,
-        overallConfidence: "low",
-        fieldConfidence: {},
-        correctedNameCandidate: matches[0]?.cardName || query,
-        correctedNameConfidence: matches[0]?.matchConfidence || "low",
-        possibleMatches: matches,
-        warnings: matches.length ? [] : ["No Pokémon TCG API results were found for that search."],
-      });
-      setStatus("review");
-      setOutcome(matches.length > 1 ? "Several possible matches" : matches.length === 1 ? "Match found" : "No reliable match");
-      setMessage(matches.length ? "Manual search results are ready. Choose the exact card." : "No API results found. Manual entry remains available.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Manual search failed.");
     } finally {
       setSearching(false);
     }
@@ -316,8 +273,13 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         <p className="font-black text-violet-900 dark:text-violet-100">Pokémon card scanner</p>
         <p className="text-xs text-violet-700 dark:text-violet-300">Free local OCR. Suggestions are never saved until the normal form is saved.</p>
       </div>
-      {status === "analyzing" ? <button type="button" onClick={() => void cancelAnalysis()} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-rose-700 px-3 text-sm font-black text-white"><X size={17} />Cancel</button> : null}
+      <div className="flex flex-wrap justify-end gap-2">
+        <button type="button" onClick={() => setManualSearchOpen(true)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"><Search size={17} />Search Card Manually</button>
+        {status === "analyzing" ? <button type="button" onClick={() => void cancelAnalysis()} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-rose-700 px-3 text-sm font-black text-white"><X size={17} />Cancel</button> : null}
+      </div>
     </div>
+
+    {!imageFile && status !== "analyzing" ? <p className="rounded-xl bg-white/70 p-3 text-sm font-bold text-violet-800 dark:bg-slate-900/60 dark:text-violet-200">No photo is required. Search the official card catalog now, or add a photo when you want to use local OCR.</p> : null}
 
     {status === "crop" && imageFile ? <div className="space-y-3">
       <div className="rounded-xl bg-white/70 p-2 text-xs text-slate-600 dark:bg-slate-900/60 dark:text-slate-300">
@@ -341,24 +303,22 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
     {status !== "crop" && processedPreview ? <img src={processedPreview} alt="Processed card crop" className="mx-auto max-h-80 rounded-xl bg-black object-contain" /> : null}
     {outcome ? <p role="status" className="inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white dark:bg-white dark:text-slate-900">State: {outcome}</p> : null}
     {message && status !== "crop" ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
-
-    {status !== "analyzing" ? <div className="flex gap-2">
-      <input
-        value={manualSearch}
-        onChange={(event) => setManualSearch(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runManualSearch(); } }}
-        placeholder="Manual Pokémon card search"
-        className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900"
-      />
-      <button type="button" disabled={searching || !manualSearch.trim()} onClick={() => void runManualSearch()} className="rounded-xl bg-slate-900 px-3 text-white disabled:opacity-40 dark:bg-white dark:text-slate-900" aria-label="Search Pokémon cards">
-        {searching ? <LoaderCircle className="animate-spin" size={18} /> : <Search size={18} />}
-      </button>
+    {outcome === "No reliable match" && hasUsefulSuggestion ? <div className="grid gap-2 sm:grid-cols-2">
+      <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
+      <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Crop and Retry</button>
+      <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">Retake Photo</button>
+      <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
     </div> : null}
 
     {suggestion && !hasUsefulSuggestion ? <div className="space-y-2 rounded-xl bg-amber-100 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
-      <strong>No readable card information was found.</strong>
-      <p>Adjust the crop, retake the photo, search manually, or use the normal form.</p>
-      <button type="button" onClick={() => setStatus("crop")} className="rounded-lg bg-amber-900 px-3 py-2 font-black text-white">Adjust Crop</button>
+      <strong>We could not identify this card automatically.</strong>
+      <p>The photo and every existing form value are still available.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-lg bg-violet-700 px-3 py-2 font-black text-white">Search Card Manually</button>
+        <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-lg bg-amber-900 px-3 py-2 font-black text-white">Crop and Retry</button>
+        <button type="button" onClick={onRetakePhoto} className="min-h-11 rounded-lg bg-slate-200 px-3 py-2 font-black text-slate-900 disabled:opacity-40" disabled={!onRetakePhoto}>Retake Photo</button>
+        <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-lg bg-slate-200 px-3 py-2 font-black text-slate-900">Enter Everything Manually</button>
+      </div>
     </div> : null}
 
     {suggestion && hasUsefulSuggestion ? <div className="space-y-3">
@@ -408,10 +368,32 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
       <p className="text-xs text-slate-500">Sticker price never fills Actual Bought Price. A single photo is not a physical condition grade.</p>
     </div> : null}
 
-    {status === "failed" ? <div className="grid gap-2 sm:grid-cols-3">
-      <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop</button>
-      <button type="button" onClick={() => void scan(true, false)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><ScanLine size={17} />Retry</button>
-      <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Manually</button>
+    {status === "failed" ? <div className="space-y-2">
+      <p className="text-sm font-black text-rose-700 dark:text-rose-300">We could not identify this card automatically.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
+        <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Crop and Retry</button>
+        <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><ScanLine className="mr-1 inline" size={17} />Retake Photo</button>
+        <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
+      </div>
     </div> : null}
+
+    <ManualCardSearch
+      open={manualSearchOpen}
+      category={category}
+      baseSuggestion={suggestion}
+      initialName={suggestion?.cardName || (suggestion?.correctedNameConfidence !== "low" ? suggestion?.correctedNameCandidate : "") || ""}
+      initialCollectorNumber={suggestion?.collectorNumber || ""}
+      initialSet={suggestion?.cardSet || ""}
+      initialLanguage={suggestion?.language || ""}
+      onClose={() => setManualSearchOpen(false)}
+      onApply={(confirmed) => {
+        setSuggestion(confirmed);
+        setStatus("review");
+        setOutcome("Match found");
+        setMessage("Manual card match applied to the current unsaved form.");
+        onApply(confirmed, hash, processedFile);
+      }}
+    />
   </section>;
 }

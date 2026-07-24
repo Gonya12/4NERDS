@@ -39,7 +39,13 @@ type PurchaseRow = {
   card_name?: string | null;
   collector_number?: string | null;
   card_set?: string | null;
+  card_set_id?: string | null;
+  card_set_code?: string | null;
+  card_rarity?: string | null;
   card_language?: string | null;
+  pokemon_tcg_card_id?: string | null;
+  official_card_image_url?: string | null;
+  tcgplayer_url?: string | null;
   card_condition?: InventoryPurchase["cardCondition"] | null;
   sticker_price?: number | null;
   grading_company?: string | null;
@@ -91,7 +97,13 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     cardName: row.card_name || undefined,
     collectorNumber: row.collector_number || undefined,
     cardSet: row.card_set || undefined,
+    cardSetId: row.card_set_id || undefined,
+    cardSetCode: row.card_set_code || undefined,
+    cardRarity: row.card_rarity || undefined,
     cardLanguage: row.card_language || undefined,
+    pokemonTcgCardId: row.pokemon_tcg_card_id || undefined,
+    officialCardImageUrl: row.official_card_image_url || undefined,
+    tcgplayerUrl: row.tcgplayer_url || undefined,
     cardCondition: row.card_condition || undefined,
     stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
     gradingCompany: row.grading_company || undefined,
@@ -144,7 +156,13 @@ function toRow(value: InventoryPurchase): PurchaseRow {
     card_name: value.cardName || null,
     collector_number: value.collectorNumber || null,
     card_set: value.cardSet || null,
+    card_set_id: value.cardSetId || null,
+    card_set_code: value.cardSetCode || null,
+    card_rarity: value.cardRarity || null,
     card_language: value.cardLanguage || null,
+    pokemon_tcg_card_id: value.pokemonTcgCardId || null,
+    official_card_image_url: value.officialCardImageUrl || null,
+    tcgplayer_url: value.tcgplayerUrl || null,
     card_condition: value.cardCondition || null,
     sticker_price: value.stickerPrice ?? null,
     grading_company: value.gradingCompany || null,
@@ -163,6 +181,23 @@ function toRow(value: InventoryPurchase): PurchaseRow {
   };
 }
 
+function withoutManualSearchColumns(row: PurchaseRow) {
+  const {
+    card_set_id: _cardSetId,
+    card_set_code: _cardSetCode,
+    card_rarity: _cardRarity,
+    pokemon_tcg_card_id: _pokemonTcgCardId,
+    official_card_image_url: _officialCardImageUrl,
+    tcgplayer_url: _tcgplayerUrl,
+    ...legacy
+  } = row;
+  return legacy;
+}
+
+function isMissingColumnError(error?: { code?: string; message?: string } | null) {
+  return Boolean(error && (error.code === "42703" || error.code === "PGRST204" || /column .* does not exist|schema cache/i.test(error.message || "")));
+}
+
 function read(key: string) {
   try { return JSON.parse(localStorage.getItem(key) || "[]") as InventoryPurchase[]; } catch { return []; }
 }
@@ -177,11 +212,23 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_language,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
-  const { data, error } = await supabase.from("inventory_purchases")
+  const enhanced = await supabase.from("inventory_purchases")
     .select(columns)
     .order("purchase_date", { ascending: false }).limit(limit);
+  let data = enhanced.data as unknown as PurchaseRow[] | null;
+  let error = enhanced.error;
+  if (isMissingColumnError(error)) {
+    const legacyColumns = columns
+      .replace(",card_set_id,card_set_code,card_rarity", "")
+      .replace(",pokemon_tcg_card_id,official_card_image_url,tcgplayer_url", "");
+    const legacy = await supabase.from("inventory_purchases")
+      .select(legacyColumns)
+      .order("purchase_date", { ascending: false }).limit(limit);
+    data = legacy.data as unknown as PurchaseRow[] | null;
+    error = legacy.error;
+  }
   completeTrace(data?.length || 0, error);
   recordSupabaseRequest("inventory_purchases", "listInventoryPurchases", data?.length || 0);
   if (error) throw new Error(error.message);
@@ -251,7 +298,13 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     cardName: input.cardName?.trim() || undefined,
     collectorNumber: input.collectorNumber?.trim() || undefined,
     cardSet: input.cardSet?.trim() || undefined,
+    cardSetId: input.cardSetId?.trim() || undefined,
+    cardSetCode: input.cardSetCode?.trim() || undefined,
+    cardRarity: input.cardRarity?.trim() || undefined,
     cardLanguage: input.cardLanguage?.trim() || undefined,
+    pokemonTcgCardId: input.pokemonTcgCardId?.trim() || undefined,
+    officialCardImageUrl: input.officialCardImageUrl,
+    tcgplayerUrl: input.tcgplayerUrl,
     cardCondition: input.cardCondition,
     stickerPrice: input.stickerPrice,
     gradingCompany: input.gradingCompany?.trim() || undefined,
@@ -274,7 +327,12 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     write(cacheKey, values);
     return value;
   }
-  const { data, error } = await supabase.from("inventory_purchases").upsert(toRow(value)).select("*").single();
+  const row = toRow(value);
+  let result = await supabase.from("inventory_purchases").upsert(row).select("*").single();
+  if (isMissingColumnError(result.error)) {
+    result = await supabase.from("inventory_purchases").upsert(withoutManualSearchColumns(row)).select("*").single();
+  }
+  const { data, error } = result;
   recordSupabaseRequest("inventory_purchases", "saveInventoryPurchase", data ? 1 : 0);
   if (error) throw new Error(error.message);
   return fromRow(data as PurchaseRow);

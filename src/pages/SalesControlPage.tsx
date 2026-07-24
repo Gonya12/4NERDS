@@ -138,6 +138,9 @@ export function SalesControlPage() {
   const blankSale = () => ({
     eventId: "", eventDayId: "", itemName: "", category: "raw_card" as PokemonProductCategory,
     quantity: "1", soldPrice: "", boughtPrice: "", marketValue: "", boughtFrom: "",
+    marketPriceSource: "", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "", tcgplayerUrl: "",
+    cardName: "", collectorNumber: "", cardSet: "", cardSetId: "", cardSetCode: "", cardRarity: "", cardLanguage: "", cardCondition: "", stickerPrice: "",
+    pokemonTcgCardId: "", officialCardImageUrl: "",
     purchaseSource: "" as PurchaseSource | "", paymentMethod: "cash" as SalePaymentMethod,
     soldByWorkerId: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
     inventoryPurchaseId: "", notes: "", soldAt: localDateTime(), ownershipShares: [] as OwnershipShare[]
@@ -149,6 +152,7 @@ export function SalesControlPage() {
     notes: "", status: "in_stock" as InventoryStatus, quantitySold: "0", soldPrice: "", soldDate: "",
     soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: "",
     cardName: "", collectorNumber: "", cardSet: "", cardLanguage: "", cardCondition: "", stickerPrice: "",
+    cardSetId: "", cardSetCode: "", cardRarity: "", pokemonTcgCardId: "", officialCardImageUrl: "", tcgplayerUrl: "",
     gradingCompany: "", grade: "", certificateNumber: "", scanConfidence: "", scanStatus: "not_scanned", imageHash: "", scanResult: undefined as Record<string, unknown> | undefined,
     ownershipShares: [] as OwnershipShare[]
   });
@@ -249,6 +253,12 @@ export function SalesControlPage() {
       eventId: sale.eventId || "", eventDayId: sale.eventDayId || "", itemName: sale.itemName || "",
       category: sale.category || "raw_card", quantity: String(sale.quantity || 1), soldPrice: sale.soldPrice === undefined ? "" : String(sale.soldPrice),
       boughtPrice: sale.boughtPrice === undefined ? "" : String(sale.boughtPrice), marketValue: sale.marketValue === undefined ? "" : String(sale.marketValue),
+      marketPriceSource: sale.marketPriceSource || "", marketPriceVariant: sale.marketPriceVariant || "",
+      marketPriceUpdatedAt: sale.marketPriceUpdatedAt || "", marketPriceCheckedAt: sale.marketPriceCheckedAt || "", tcgplayerUrl: sale.tcgplayerUrl || "",
+      cardName: sale.cardName || "", collectorNumber: sale.collectorNumber || "", cardSet: sale.cardSet || "",
+      cardSetId: sale.cardSetId || "", cardSetCode: sale.cardSetCode || "", cardRarity: sale.cardRarity || "", cardLanguage: sale.cardLanguage || "",
+      cardCondition: sale.cardCondition || "", stickerPrice: sale.stickerPrice === undefined ? "" : String(sale.stickerPrice),
+      pokemonTcgCardId: sale.pokemonTcgCardId || "", officialCardImageUrl: sale.officialCardImageUrl || "",
       boughtFrom: sale.boughtFrom || "", purchaseSource: sale.purchaseSource || "", paymentMethod: sale.paymentMethod || "cash",
       soldByWorkerId: sale.soldByWorkerId || "", isRawCard: sale.isRawCard, buyPercentage: String(sale.buyPercentage || defaultBuyPercentage),
       inventoryPurchaseId: sale.inventoryPurchaseId || "", notes: sale.notes || "", soldAt: sale.soldAt.slice(0, 16), ownershipShares: sale.ownershipShares || []
@@ -274,7 +284,9 @@ export function SalesControlPage() {
       soldDate: purchase.soldDate?.slice(0, 16) || "", soldByWorkerId: purchase.soldByWorkerId || "", soldEventId: purchase.soldEventId || "",
       soldPaymentMethod: purchase.soldPaymentMethod || "cash", buyerNote: purchase.buyerNote || ""
       , cardName: purchase.cardName || "", collectorNumber: purchase.collectorNumber || "", cardSet: purchase.cardSet || "",
+      cardSetId: purchase.cardSetId || "", cardSetCode: purchase.cardSetCode || "", cardRarity: purchase.cardRarity || "",
       cardLanguage: purchase.cardLanguage || "", cardCondition: purchase.cardCondition || "", stickerPrice: purchase.stickerPrice === undefined ? "" : String(purchase.stickerPrice),
+      pokemonTcgCardId: purchase.pokemonTcgCardId || "", officialCardImageUrl: purchase.officialCardImageUrl || "", tcgplayerUrl: purchase.tcgplayerUrl || "",
       gradingCompany: purchase.gradingCompany || "", grade: purchase.grade || "", certificateNumber: purchase.certificateNumber || "",
       scanConfidence: purchase.scanConfidence || "", scanStatus: purchase.scanStatus || "not_scanned", imageHash: purchase.imageHash || "", scanResult: purchase.scanResult,
       ownershipShares: purchase.ownershipShares || []
@@ -435,7 +447,7 @@ export function SalesControlPage() {
 
   async function saveSale() {
     if (saleForm.soldPrice === "" || !saleForm.soldAt) { setMessage("Sold price and date sold are required."); return; }
-    if ([saleForm.soldPrice, saleForm.boughtPrice, saleForm.marketValue].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
+    if ([saleForm.soldPrice, saleForm.boughtPrice, saleForm.marketValue, saleForm.stickerPrice].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
     const saleOwnershipTotal = saleForm.ownershipShares.reduce((sum, share) => sum + share.ownershipPercentage, 0);
     if (!saleForm.inventoryPurchaseId && saleForm.ownershipShares.length && Math.abs(saleOwnershipTotal - 100) > 0.001) { setMessage("Profit ownership percentages must total 100%."); return; }
     setBusy(true); setMessage("");
@@ -448,6 +460,15 @@ export function SalesControlPage() {
         imageUrl: imageRemoved ? undefined : editingSale?.imageUrl, imagePath: imageRemoved ? undefined : editingSale?.imagePath, itemName: saleForm.itemName.trim() || undefined,
         category: saleForm.category, quantity: Math.max(1, Number(saleForm.quantity || 1)), soldPrice: Number(saleForm.soldPrice),
         boughtPrice: saleForm.boughtPrice === "" ? undefined : Number(saleForm.boughtPrice), marketValue: market,
+        marketPriceSource: saleForm.marketPriceSource || undefined, marketPriceVariant: saleForm.marketPriceVariant || undefined,
+        marketPriceUpdatedAt: saleForm.marketPriceUpdatedAt || undefined, marketPriceCheckedAt: saleForm.marketPriceCheckedAt || undefined,
+        tcgplayerUrl: saleForm.tcgplayerUrl || undefined, cardName: saleForm.cardName || undefined,
+        collectorNumber: saleForm.collectorNumber || undefined, cardSet: saleForm.cardSet || undefined,
+        cardSetId: saleForm.cardSetId || undefined, cardSetCode: saleForm.cardSetCode || undefined,
+        cardRarity: saleForm.cardRarity || undefined, cardLanguage: saleForm.cardLanguage || undefined,
+        cardCondition: saleForm.cardCondition as SalesRecord["cardCondition"] || undefined,
+        stickerPrice: saleForm.stickerPrice === "" ? undefined : Number(saleForm.stickerPrice),
+        pokemonTcgCardId: saleForm.pokemonTcgCardId || undefined, officialCardImageUrl: saleForm.officialCardImageUrl || undefined,
         boughtFrom: saleForm.boughtFrom.trim() || undefined, purchaseSource: saleForm.purchaseSource || undefined,
         paymentMethod: saleForm.paymentMethod, soldByWorkerId: saleForm.soldByWorkerId || undefined, isRawCard: saleForm.isRawCard,
         buyPercentage: saleForm.isRawCard ? percentage : undefined, targetBuyPrice: saleForm.isRawCard && market && percentage ? roundMoney(market * percentage / 100) : undefined,
@@ -489,7 +510,7 @@ export function SalesControlPage() {
     if (!purchaseForm.itemName.trim() || purchaseForm.totalCost === "") { setMessage("Item name and total cost are required."); return; }
     const duplicateCertificate = purchaseForm.certificateNumber.trim() && purchases.some((purchase) => purchase.id !== editingPurchase?.id && purchase.certificateNumber?.trim().toLowerCase() === purchaseForm.certificateNumber.trim().toLowerCase());
     if (duplicateCertificate && !window.confirm("Possible duplicate slab certificate. Save anyway?")) return;
-    if ([purchaseForm.totalCost, purchaseForm.marketValue, purchaseForm.soldPrice].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
+    if ([purchaseForm.totalCost, purchaseForm.marketValue, purchaseForm.soldPrice, purchaseForm.stickerPrice].some((value) => value !== "" && Number(value) < 0)) { setMessage("Prices cannot be negative."); return; }
     const quantity = Math.max(1, Number(purchaseForm.quantity || 1));
     const requestedSoldQuantity = Math.max(0, Number(purchaseForm.quantitySold || 0));
     if (requestedSoldQuantity > quantity) { setMessage("Quantity sold cannot be greater than the quantity purchased."); return; }
@@ -520,6 +541,9 @@ export function SalesControlPage() {
         soldPaymentMethod: quantitySold ? purchaseForm.soldPaymentMethod : undefined, buyerNote: purchaseForm.buyerNote || undefined
         , cardName: purchaseForm.cardName || undefined, collectorNumber: purchaseForm.collectorNumber || undefined,
         cardSet: purchaseForm.cardSet || undefined, cardLanguage: purchaseForm.cardLanguage || undefined,
+        cardSetId: purchaseForm.cardSetId || undefined, cardSetCode: purchaseForm.cardSetCode || undefined,
+        cardRarity: purchaseForm.cardRarity || undefined, pokemonTcgCardId: purchaseForm.pokemonTcgCardId || undefined,
+        officialCardImageUrl: purchaseForm.officialCardImageUrl || undefined, tcgplayerUrl: purchaseForm.tcgplayerUrl || undefined,
         cardCondition: purchaseForm.cardCondition as InventoryPurchase["cardCondition"] || undefined,
         stickerPrice: purchaseForm.stickerPrice === "" ? undefined : Number(purchaseForm.stickerPrice),
         gradingCompany: purchaseForm.gradingCompany || undefined, grade: purchaseForm.grade || undefined,
@@ -877,7 +901,7 @@ export function SalesControlPage() {
 
             {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              {imageFile ? <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan, _hash, processed) => {
+              <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan, _hash, processed) => {
                 useProcessedScanFile(processed);
                 setSaleForm((current) => {
                   const nextCategory = scan.suggestedType || current.category;
@@ -885,12 +909,42 @@ export function SalesControlPage() {
                   return {
                     ...current,
                     itemName: scan.cardName || current.itemName,
+                    cardName: scan.cardName || current.cardName,
+                    collectorNumber: scan.collectorNumber || current.collectorNumber,
+                    cardSet: scan.cardSet || current.cardSet,
+                    cardSetId: scan.cardSetId || current.cardSetId,
+                    cardSetCode: scan.cardSetCode || current.cardSetCode,
+                    cardRarity: scan.cardRarity || current.cardRarity,
+                    cardLanguage: scan.language || current.cardLanguage,
+                    cardCondition: scan.condition || current.cardCondition,
+                    stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
+                    pokemonTcgCardId: scan.pokemonTcgCardId || current.pokemonTcgCardId,
+                    officialCardImageUrl: scan.officialImageUrl || current.officialCardImageUrl,
                     category: nextCategory,
                     isRawCard: nextCategory === "raw_card",
-                    marketValue: nextCategory === "raw_card" && selectedPrice?.market != null ? String(selectedPrice.market) : current.marketValue
+                    marketValue: nextCategory === "raw_card" && selectedPrice?.market != null ? String(selectedPrice.market) : current.marketValue,
+                    marketPriceSource: scan.tcgplayerPricing ? "TCGplayer" : current.marketPriceSource,
+                    marketPriceVariant: scan.tcgplayerPricing?.selectedVariant || current.marketPriceVariant,
+                    marketPriceUpdatedAt: scan.tcgplayerPricing?.updatedAt || current.marketPriceUpdatedAt,
+                    marketPriceCheckedAt: scan.tcgplayerPricing?.checkedAt || current.marketPriceCheckedAt,
+                    tcgplayerUrl: scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl
                   };
                 });
-              }} /> : null}
+              }} onRetakePhoto={() => { setFacingMode("environment"); enterCameraMode(); }} />
+              <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-2 dark:border-slate-700">
+                <input value={saleForm.cardName} onChange={(event) => setSaleForm({ ...saleForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
+                <input value={saleForm.collectorNumber} onChange={(event) => setSaleForm({ ...saleForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
+                <input value={saleForm.cardSet} onChange={(event) => setSaleForm({ ...saleForm, cardSet: event.target.value })} placeholder="Set name" className={compactInputClass()} />
+                <input value={saleForm.cardLanguage} onChange={(event) => setSaleForm({ ...saleForm, cardLanguage: event.target.value })} placeholder="Language" className={compactInputClass()} />
+                <select value={saleForm.cardCondition} onChange={(event) => setSaleForm({ ...saleForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
+                {moneyInput(saleForm.stickerPrice, (value) => setSaleForm({ ...saleForm, stickerPrice: value }), "Sticker / asking price")}
+                {saleForm.pokemonTcgCardId || saleForm.marketPriceSource ? <p className="sm:col-span-2 text-xs text-slate-500">
+                  {saleForm.cardRarity ? `${saleForm.cardRarity} · ` : ""}{saleForm.cardSetCode ? `Set ${saleForm.cardSetCode} · ` : ""}
+                  {saleForm.pokemonTcgCardId ? `API ID ${saleForm.pokemonTcgCardId} · ` : ""}
+                  {saleForm.marketPriceSource ? `${saleForm.marketPriceSource}${saleForm.marketPriceVariant ? ` (${saleForm.marketPriceVariant})` : ""}` : ""}
+                  {saleForm.tcgplayerUrl ? <> · <a href={saleForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">TCGplayer product</a></> : null}
+                </p> : null}
+              </section>
               {eventLinkNotice ? <p className={`rounded-xl p-3 text-sm font-black ${selectedSaleEvent ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>{eventLinkNotice}</p> : null}
               <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => changeSaleDate(event.target.value)} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
               <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
@@ -911,6 +965,10 @@ export function SalesControlPage() {
               ...current, category: nextCategory, isRawCard: nextCategory === "raw_card",
               itemName: scan.cardName || current.itemName, cardName: scan.cardName || current.cardName,
               collectorNumber: scan.collectorNumber || current.collectorNumber, cardSet: scan.cardSet || current.cardSet,
+              cardSetId: scan.cardSetId || current.cardSetId, cardSetCode: scan.cardSetCode || current.cardSetCode,
+              cardRarity: scan.cardRarity || current.cardRarity, pokemonTcgCardId: scan.pokemonTcgCardId || current.pokemonTcgCardId,
+              officialCardImageUrl: scan.officialImageUrl || current.officialCardImageUrl,
+              tcgplayerUrl: scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl,
               cardLanguage: scan.language || current.cardLanguage, cardCondition: scan.condition || current.cardCondition,
               stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
               gradingCompany: scan.gradingCompany || current.gradingCompany, grade: scan.grade || current.grade,
@@ -922,7 +980,7 @@ export function SalesControlPage() {
               marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
               scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
             };});
-            }} /> : null}
+            }} onRetakePhoto={() => { setFacingMode("environment"); enterCameraMode(); }} /> : null}
             {editor === "purchase" ? <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-3 dark:border-slate-700">
               <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
               <input value={purchaseForm.collectorNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
@@ -931,6 +989,12 @@ export function SalesControlPage() {
               <select value={purchaseForm.cardCondition} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
               {moneyInput(purchaseForm.stickerPrice, (value) => setPurchaseForm({ ...purchaseForm, stickerPrice: value }), "Sticker / asking price")}
               {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl); setBackImageFile(file); setBackPreviewUrl(URL.createObjectURL(file)); }} /></label></> : null}
+              {purchaseForm.pokemonTcgCardId || purchaseForm.marketPriceSource ? <p className="sm:col-span-3 text-xs text-slate-500">
+                {purchaseForm.cardRarity ? `${purchaseForm.cardRarity} · ` : ""}{purchaseForm.cardSetCode ? `Set ${purchaseForm.cardSetCode} · ` : ""}
+                {purchaseForm.pokemonTcgCardId ? `API ID ${purchaseForm.pokemonTcgCardId} · ` : ""}
+                {purchaseForm.marketPriceSource ? `${purchaseForm.marketPriceSource}${purchaseForm.marketPriceVariant ? ` (${purchaseForm.marketPriceVariant})` : ""}` : ""}
+                {purchaseForm.tcgplayerUrl ? <> · <a href={purchaseForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">TCGplayer product</a></> : null}
+              </p> : null}
               <p className="sm:col-span-3 text-xs text-slate-500">Actual bought price remains the separate “Actual total cost” field below. Scan status: {purchaseForm.scanStatus.replace(/_/g, " ")}{purchaseForm.scanConfidence ? ` · ${purchaseForm.scanConfidence} confidence` : ""}</p>
             </section> : null}
             {editor === "purchase" ? <OwnershipEditor workers={workers} shares={purchaseForm.ownershipShares} totalCost={Number(purchaseForm.totalCost || 0)} paidByWorkerId={purchaseForm.purchasedByWorkerId} onChange={(ownershipShares) => setPurchaseForm({ ...purchaseForm, ownershipShares })} /> : null}

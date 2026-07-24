@@ -18,6 +18,22 @@ type SalesRow = {
   sold_price?: number | null;
   bought_price?: number | null;
   market_value?: number | null;
+  market_price_source?: string | null;
+  market_price_variant?: string | null;
+  market_price_updated_at?: string | null;
+  market_price_checked_at?: string | null;
+  tcgplayer_url?: string | null;
+  card_name?: string | null;
+  collector_number?: string | null;
+  card_set?: string | null;
+  card_set_id?: string | null;
+  card_set_code?: string | null;
+  card_rarity?: string | null;
+  card_language?: string | null;
+  card_condition?: SalesRecord["cardCondition"] | null;
+  sticker_price?: number | null;
+  pokemon_tcg_card_id?: string | null;
+  official_card_image_url?: string | null;
   bought_from?: string | null;
   purchase_source?: PurchaseSource | null;
   payment_method?: SalePaymentMethod | null;
@@ -46,6 +62,22 @@ function fromRow(row: SalesRow): SalesRecord {
     soldPrice: row.sold_price === null || row.sold_price === undefined ? undefined : Number(row.sold_price),
     boughtPrice: row.bought_price === null || row.bought_price === undefined ? undefined : Number(row.bought_price),
     marketValue: row.market_value === null || row.market_value === undefined ? undefined : Number(row.market_value),
+    marketPriceSource: row.market_price_source || undefined,
+    marketPriceVariant: row.market_price_variant || undefined,
+    marketPriceUpdatedAt: row.market_price_updated_at || undefined,
+    marketPriceCheckedAt: row.market_price_checked_at || undefined,
+    tcgplayerUrl: row.tcgplayer_url || undefined,
+    cardName: row.card_name || undefined,
+    collectorNumber: row.collector_number || undefined,
+    cardSet: row.card_set || undefined,
+    cardSetId: row.card_set_id || undefined,
+    cardSetCode: row.card_set_code || undefined,
+    cardRarity: row.card_rarity || undefined,
+    cardLanguage: row.card_language || undefined,
+    cardCondition: row.card_condition || undefined,
+    stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
+    pokemonTcgCardId: row.pokemon_tcg_card_id || undefined,
+    officialCardImageUrl: row.official_card_image_url || undefined,
     boughtFrom: row.bought_from || undefined,
     purchaseSource: row.purchase_source || undefined,
     paymentMethod: row.payment_method || undefined,
@@ -75,6 +107,22 @@ function toRow(sale: SalesRecord): SalesRow {
     sold_price: sale.soldPrice ?? null,
     bought_price: sale.boughtPrice ?? null,
     market_value: sale.marketValue ?? null,
+    market_price_source: sale.marketPriceSource || null,
+    market_price_variant: sale.marketPriceVariant || null,
+    market_price_updated_at: sale.marketPriceUpdatedAt || null,
+    market_price_checked_at: sale.marketPriceCheckedAt || null,
+    tcgplayer_url: sale.tcgplayerUrl || null,
+    card_name: sale.cardName || null,
+    collector_number: sale.collectorNumber || null,
+    card_set: sale.cardSet || null,
+    card_set_id: sale.cardSetId || null,
+    card_set_code: sale.cardSetCode || null,
+    card_rarity: sale.cardRarity || null,
+    card_language: sale.cardLanguage || null,
+    card_condition: sale.cardCondition || null,
+    sticker_price: sale.stickerPrice ?? null,
+    pokemon_tcg_card_id: sale.pokemonTcgCardId || null,
+    official_card_image_url: sale.officialCardImageUrl || null,
     bought_from: sale.boughtFrom || null,
     purchase_source: sale.purchaseSource || null,
     payment_method: sale.paymentMethod || null,
@@ -89,6 +137,33 @@ function toRow(sale: SalesRecord): SalesRow {
     created_at: sale.createdAt,
     updated_at: sale.updatedAt
   };
+}
+
+function withoutManualSearchColumns(row: SalesRow) {
+  const {
+    market_price_source: _marketPriceSource,
+    market_price_variant: _marketPriceVariant,
+    market_price_updated_at: _marketPriceUpdatedAt,
+    market_price_checked_at: _marketPriceCheckedAt,
+    tcgplayer_url: _tcgplayerUrl,
+    card_name: _cardName,
+    collector_number: _collectorNumber,
+    card_set: _cardSet,
+    card_set_id: _cardSetId,
+    card_set_code: _cardSetCode,
+    card_rarity: _cardRarity,
+    card_language: _cardLanguage,
+    card_condition: _cardCondition,
+    sticker_price: _stickerPrice,
+    pokemon_tcg_card_id: _pokemonTcgCardId,
+    official_card_image_url: _officialCardImageUrl,
+    ...legacy
+  } = row;
+  return legacy;
+}
+
+function isMissingColumnError(error?: { code?: string; message?: string } | null) {
+  return Boolean(error && (error.code === "42703" || error.code === "PGRST204" || /column .* does not exist|schema cache/i.test(error.message || "")));
 }
 
 function pendingSales() {
@@ -124,7 +199,7 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
-  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at";
+  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("sales_records", "listSalesRecordsPage", columns);
   const extended = await supabase
     .from("sales_records")
@@ -135,7 +210,17 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   let error = extended.error;
   completeTrace(data?.length || 0, error);
   recordSupabaseRequest("sales_records", "listSalesRecordsPage", data?.length || 0);
-  if (error && (error.code === "42703" || error.code === "PGRST204")) {
+  if (isMissingColumnError(error)) {
+    const currentSchema = await supabase
+      .from("sales_records")
+      .select("id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,notes,sold_at,pending_upload,created_at,updated_at")
+      .order("sold_at", { ascending: false })
+      .range(from, to);
+    data = currentSchema.data as unknown as SalesRow[] | null;
+    error = currentSchema.error;
+    recordSupabaseRequest("sales_records", "listSalesRecordsPage:currentSchemaFallback", data?.length || 0);
+  }
+  if (isMissingColumnError(error)) {
     const legacy = await supabase
       .from("sales_records")
       .select("id,event_id,event_day_id,image_url,image_path,item_name,sold_price,bought_price,bought_from,notes,sold_at,pending_upload,created_at,updated_at")
@@ -170,7 +255,12 @@ export async function saveSaleRecord(sale: SalesRecord) {
     savePendingSales([saved, ...pendingSales().filter((item) => item.id !== saved.id)]);
     return saved;
   }
-  const { data, error } = await supabase.from("sales_records").upsert(toRow(saved)).select("*").single();
+  const row = toRow(saved);
+  let result = await supabase.from("sales_records").upsert(row).select("*").single();
+  if (isMissingColumnError(result.error)) {
+    result = await supabase.from("sales_records").upsert(withoutManualSearchColumns(row)).select("*").single();
+  }
+  const { data, error } = result;
   recordSupabaseRequest("sales_records", "saveSaleRecord", data ? 1 : 0);
   if (error) throwSupabase(error.message);
   setSupabaseStatus({ connected: true, error: "", synced: true });
@@ -209,6 +299,22 @@ export async function createSaleRecord(input: Partial<SalesRecord>, imageFile?: 
     soldPrice: input.soldPrice,
     boughtPrice: input.boughtPrice,
     marketValue: input.marketValue,
+    marketPriceSource: input.marketPriceSource,
+    marketPriceVariant: input.marketPriceVariant,
+    marketPriceUpdatedAt: input.marketPriceUpdatedAt,
+    marketPriceCheckedAt: input.marketPriceCheckedAt,
+    tcgplayerUrl: input.tcgplayerUrl,
+    cardName: input.cardName,
+    collectorNumber: input.collectorNumber,
+    cardSet: input.cardSet,
+    cardSetId: input.cardSetId,
+    cardSetCode: input.cardSetCode,
+    cardRarity: input.cardRarity,
+    cardLanguage: input.cardLanguage,
+    cardCondition: input.cardCondition,
+    stickerPrice: input.stickerPrice,
+    pokemonTcgCardId: input.pokemonTcgCardId,
+    officialCardImageUrl: input.officialCardImageUrl,
     boughtFrom: input.boughtFrom,
     purchaseSource: input.purchaseSource,
     paymentMethod: input.paymentMethod,
@@ -248,7 +354,12 @@ export async function syncPendingSales() {
         const uploaded = await uploadSaleImage(file, sale.id);
         syncedSale = { ...syncedSale, imageUrl: uploaded.imageUrl, imagePath: uploaded.imagePath };
       }
-      const { error } = await supabase.from("sales_records").upsert(toRow({ ...syncedSale, pendingUpload: false, updatedAt: nowIso() }));
+      const row = toRow({ ...syncedSale, pendingUpload: false, updatedAt: nowIso() });
+      let result = await supabase.from("sales_records").upsert(row);
+      if (isMissingColumnError(result.error)) {
+        result = await supabase.from("sales_records").upsert(withoutManualSearchColumns(row));
+      }
+      const { error } = result;
       recordSupabaseRequest("sales_records", "syncPendingSales");
       if (error) throw error;
       synced += 1;

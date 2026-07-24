@@ -1,12 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildManualPokemonQuery,
   buildNameEvidence,
   conditionFromVisibleText,
+  manualCardSearchValidationError,
+  normalizeManualCardSearchTerms,
   parseCollectorNumber,
   rankPokemonCards,
   stickerPriceFromVisibleText,
 } from "../src/services/sales/cardScanParsing.ts";
+
+test("builds safe manual API queries and removes trailing punctuation", () => {
+  assert.equal(buildManualPokemonQuery({ name: "Charizard ex." }), 'name:"Charizard ex"');
+  assert.equal(
+    buildManualPokemonQuery({ name: 'Charizard ex\\"', collectorNumber: "125" }),
+    'name:"Charizard ex" number:125',
+  );
+  assert.equal(buildManualPokemonQuery({ collectorNumber: "106" }), "number:106");
+  assert.equal(
+    buildManualPokemonQuery({ set: "Pokemon 151", collectorNumber: "025/165" }),
+    'number:025 set.name:"Pokemon 151"',
+  );
+});
+
+test("splits a collector number typed after a card name", () => {
+  assert.deepEqual(normalizeManualCardSearchTerms({ name: "Pikachu 025/165" }), {
+    name: "Pikachu",
+    collectorNumber: "025/165",
+    set: "",
+    language: "",
+  });
+});
+
+test("manual search validates useful input without requiring a name", () => {
+  assert.match(manualCardSearchValidationError({ name: "x" }), /at least two/i);
+  assert.match(manualCardSearchValidationError({}), /card name, collector number, or set/i);
+  assert.equal(manualCardSearchValidationError({ collectorNumber: "106" }), "");
+});
 
 test("cleans noisy Charizard OCR without using raw text as the final name", () => {
   const evidence = buildNameEvidence("re Charizalo iT");

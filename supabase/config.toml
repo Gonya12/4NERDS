@@ -1,1 +1,4 @@
-# The scanner is fully client-side and does not require a paid AI Edge Function.
+# Local OCR stays client-side. This free proxy keeps the optional Pokémon TCG
+# API key off the device while allowing unauthenticated scanner lookups.
+[functions.pokemon-card-search]
+verify_jwt = false

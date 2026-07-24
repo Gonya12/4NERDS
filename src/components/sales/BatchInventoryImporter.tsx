@@ -1,11 +1,13 @@
-import { LoaderCircle, ScanLine, Upload, X } from "lucide-react";
+import { LoaderCircle, ScanLine, Search, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, Worker } from "../../types/models";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
+import { ManualCardSearch } from "./ManualCardSearch";
 import { OwnershipEditor } from "./OwnershipEditor";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
 type QueueStatus = "not_scanned" | "analyzing" | "needs_review" | "ready_to_import" | "imported" | "failed";
+type MatchStatus = "Automatically Matched" | "Manually Matched" | "Needs Review" | "Manual Entry" | "Failed";
 type QueueItem = {
   id: string;
   file: File;
@@ -15,6 +17,7 @@ type QueueItem = {
   scan?: CardScanSuggestion;
   hash?: string;
   actualCost: string;
+  matchStatus: MatchStatus;
   error?: string;
 };
 type Props = {
@@ -61,6 +64,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
   const [buyPercentage, setBuyPercentage] = useState("70");
   const [notes, setNotes] = useState("");
   const [ownershipShares, setOwnershipShares] = useState<OwnershipShare[]>([]);
+  const [manualSearchItemId, setManualSearchItemId] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
   const itemsRef = useRef<QueueItem[]>([]);
   const mountedRef = useRef(true);
@@ -91,6 +95,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
         preview: URL.createObjectURL(file),
         status: "not_scanned",
         actualCost: "",
+        matchStatus: "Needs Review",
       }));
     setItems((current) => [...current, ...next]);
   }
@@ -143,6 +148,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
             file: nextFile,
             preview: nextPreview,
             status: "needs_review",
+            matchStatus: result.suggestion.possibleMatches?.length ? "Needs Review" : "Failed",
             scan: result.suggestion,
             hash: result.hash,
             stage: undefined,
@@ -151,6 +157,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           if (controller.signal.aborted) break;
           patchItem(item.id, {
             status: "needs_review",
+            matchStatus: "Failed",
             scan: manualSuggestion(),
             stage: undefined,
             error: error instanceof Error ? error.message : "Local OCR could not read this image.",
@@ -185,7 +192,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
     try {
       const { confirmPokemonCardMatch } = await import("../../services/sales/cardScanService");
       const confirmed = await confirmPokemonCardMatch(item.scan, match);
-      patchItem(item.id, { scan: confirmed, status: "needs_review" });
+      patchItem(item.id, { scan: confirmed, status: "needs_review", matchStatus: "Automatically Matched" });
     } catch (error) {
       patchItem(item.id, { error: error instanceof Error ? error.message : "Could not confirm this card." });
     }
@@ -220,6 +227,12 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           marketPriceVariant: rawCard ? scan.tcgplayerPricing?.selectedVariant : undefined,
           marketPriceUpdatedAt: rawCard ? scan.tcgplayerPricing?.updatedAt : undefined,
           marketPriceCheckedAt: rawCard ? scan.tcgplayerPricing?.checkedAt : undefined,
+          cardSetId: scan.cardSetId,
+          cardSetCode: scan.cardSetCode,
+          cardRarity: scan.cardRarity,
+          pokemonTcgCardId: scan.pokemonTcgCardId,
+          officialCardImageUrl: scan.officialImageUrl,
+          tcgplayerUrl: scan.tcgplayerUrl || scan.tcgplayerPricing?.url,
           purchaseDate: new Date(`${purchaseDate}T12:00:00`).toISOString(),
           status: "in_stock",
           scanConfidence: scan.overallConfidence,
@@ -235,7 +248,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
         }, item.file);
         patchItem(item.id, { status: "imported" });
       } catch (error) {
-        patchItem(item.id, { status: "failed", error: error instanceof Error ? error.message : "Import failed" });
+        patchItem(item.id, { status: "failed", matchStatus: "Failed", error: error instanceof Error ? error.message : "Import failed" });
       }
     }
     setBusy(false);
@@ -290,7 +303,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
             {item.status !== "imported" && !busy ? <button onClick={() => removeItem(item.id)} className="absolute right-1 top-1 rounded-full bg-black/70 p-1.5 text-white" aria-label="Remove image"><X size={14} /></button> : null}
           </div>
           <div className="flex items-center justify-between">
-            <strong className="capitalize">{item.status.replace(/_/g, " ")}</strong>
+            <strong>{item.status === "imported" ? "Imported" : item.matchStatus}</strong>
             {item.scan ? <span className="text-xs">{item.scan.overallConfidence} confidence</span> : null}
           </div>
           {item.stage ? <p className="text-xs font-bold text-violet-700"><LoaderCircle className="mr-1 inline animate-spin" size={13} />{item.stage}</p> : null}
@@ -308,12 +321,38 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
             </div>
             <input type="number" min="0" step="0.01" value={item.actualCost} onChange={(event) => patchItem(item.id, { actualCost: event.target.value })} placeholder="Actual bought price for this card" className="w-full rounded-lg border p-2 dark:bg-slate-950" />
             <TcgplayerPricingPanel suggestion={item.scan} isSlab={item.scan.suggestedType === "graded_card"} onChange={(scan) => patchItem(item.id, { scan })} />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => setManualSearchItemId(item.id)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 text-xs font-black text-white"><Search size={15} />Search This Card</button>
+              <button type="button" onClick={() => patchItem(item.id, { matchStatus: "Manual Entry" })} className="min-h-10 rounded-lg bg-slate-200 px-3 text-xs font-black dark:bg-slate-800">Enter Manually</button>
+            </div>
             <button disabled={item.status === "imported" || Boolean(item.scan.possibleMatches?.length && !item.scan.cardName)} onClick={() => patchItem(item.id, { status: "ready_to_import" })} className="rounded-lg bg-emerald-100 px-3 py-2 text-xs font-black text-emerald-800 disabled:opacity-40">Approve draft for import</button>
           </div> : null}
           {item.error ? <p className="text-xs font-bold text-rose-600">{item.error}</p> : null}
         </article>)}
       </div>
       <button disabled={busy || !ownershipValid || !items.some((item) => item.status === "ready_to_import")} onClick={() => void importReady()} className="btn-primary min-h-12 w-full disabled:opacity-40">Import Approved Items</button>
+      {(() => {
+        const item = items.find((row) => row.id === manualSearchItemId);
+        return <ManualCardSearch
+          open={Boolean(item)}
+          category={(item?.scan?.suggestedType || "raw_card") as PokemonProductCategory}
+          baseSuggestion={item?.scan}
+          initialName={item?.scan?.cardName || (item?.scan?.correctedNameConfidence !== "low" ? item?.scan?.correctedNameCandidate : "") || ""}
+          initialCollectorNumber={item?.scan?.collectorNumber || ""}
+          initialSet={item?.scan?.cardSet || ""}
+          initialLanguage={item?.scan?.language || ""}
+          onClose={() => setManualSearchItemId("")}
+          onApply={(scan) => {
+            if (!item) return;
+            patchItem(item.id, {
+              scan,
+              status: "needs_review",
+              matchStatus: "Manually Matched",
+              error: undefined,
+            });
+          }}
+        />;
+      })()}
     </section>
   </div>;
 }

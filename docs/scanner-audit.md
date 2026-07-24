@@ -13,11 +13,13 @@
 | --- | --- |
 | `src/pages/HomePage.tsx` | Floating camera shortcut to `/sales?mode=sale&initialMode=camera`. |
 | `src/pages/SalesControlPage.tsx` | The one camera implementation for Add Sale and Add Purchase; owns capture, gallery, camera switching, compression, previews, and normal Save. |
-| `src/components/sales/CardScanPanel.tsx` | Crop-quality review, manual four-corner adjustment, Analyze/Cancel, candidate confirmation, manual API search, technical OCR details, and applying suggestions to the unsaved form. |
-| `src/components/sales/BatchInventoryImporter.tsx` | Separate per-image draft queue, mobile/desktop concurrency limit, review, exact-card confirmation, finish, condition, and per-card actual cost. |
+| `src/components/sales/CardScanPanel.tsx` | Crop-quality review, manual four-corner adjustment, Analyze/Cancel, candidate confirmation, always-available manual search, technical OCR details, and applying suggestions to the unsaved form. |
+| `src/components/sales/ManualCardSearch.tsx` | Reusable structured search, recent searches, pagination, official-image comparison, finish/pricing review, and unsaved draft application. |
+| `src/components/sales/BatchInventoryImporter.tsx` | Separate per-image draft queue, mobile/desktop concurrency limit, isolated manual recovery, exact-card confirmation, finish, condition, and per-card actual cost. |
 | `src/services/sales/cardImageProcessor.ts` | Lazy image-worker lifecycle, cancellation, automatic detection, perspective crop, and older-browser bounding-box fallback. |
 | `src/workers/cardImageWorker.ts` | Downscaled edge detection and perspective warp off the main thread. |
-| `src/services/sales/cardScanService.ts` | One reusable lazy Tesseract worker, sequential region OCR, timeouts, Pokémon TCG API queries/ranking, confirmation, and TCGplayer price retrieval. |
+| `src/services/sales/cardScanService.ts` | One reusable lazy Tesseract worker, sequential region OCR, timeouts, cached/cancelable Pokémon TCG API queries, ranking, confirmation, and TCGplayer price retrieval. |
+| `supabase/functions/pokemon-card-search/index.ts` | Free selected-field API proxy that keeps `POKEMON_TCG_API_KEY` server-side and forwards it only as `X-Api-Key`. |
 | `src/services/sales/cardScanParsing.ts` | OCR normalization, Pokémon-name dictionary correction, suffix preservation, collector-number parsing, sticker parsing, fuzzy/token similarity, and ranking reasons. |
 | `src/components/sales/TcgplayerPricingPanel.tsx` | Finish selection, market/low/mid/high/direct-low display, update/check dates, and 75/80/custom targets. |
 | `src/services/database/inventoryPurchaseRepository.ts` | Canonical Supabase read/write mapping, including scanner and price-provenance fields. |
@@ -44,10 +46,12 @@
 4. Worker-based perspective correction and portrait normalization.
 5. One lazy Tesseract worker; top, collector-number, sticker/label, then full fallback only when needed.
 6. Local normalization and Pokémon dictionary/fuzzy candidate generation.
-7. At most three selected-field Pokémon TCG API v2 queries, sequentially stopped when enough records exist.
+7. At most three selected-field Pokémon TCG API v2 queries for OCR recovery, sequentially stopped when enough records exist.
 8. Ranked official images with score and evidence; no first-result auto-selection.
 9. Explicit **Use This Card**, then TCGplayer finish selection and pricing.
-10. Suggestions apply only to the draft; the user still presses the existing Save button.
+10. A reusable 20-card paginated manual search is available before scanning and from every recovery surface.
+11. Repeated manual queries are cached and deduplicated; outdated requests are aborted.
+12. Suggestions apply only to the draft; the user still presses the existing Save button.
 
 The Pokémon TCG API searches card records; it does not analyze images.
 
@@ -55,11 +59,13 @@ The Pokémon TCG API searches card records; it does not analyze images.
 
 Artwork embeddings are not practical for this PWA today. A useful implementation would require a large model plus a maintained embedding index for thousands of cards. The prior code did neither reliably and was inappropriate for mobile memory. It was removed. Crop + OCR + collector number + fuzzy API ranking is the honest low-memory default.
 
-## Database fields preserved
+## Database fields preserved and extended
 
 `card_name`, `collector_number`, `card_set`, `card_language`, `card_condition`, `sticker_price`, `grading_company`, `grade`, `certificate_number`, `front_image_url`, `front_image_path`, `back_image_url`, `back_image_path`, `scan_confidence`, `scan_status`, `image_hash`, `scan_result`, `market_price_source`, `market_price_variant`, `market_price_updated_at`, and `market_price_checked_at`.
 
-No new field is required. If an older Supabase project lacks scanner fields, run `card-scanner-schema-sync.sql`; if it lacks pricing provenance, run `tcgplayer-pricing-schema-sync.sql`. Both are additive and repeatable.
+Manual search adds `card_set_id`, `card_set_code`, `card_rarity`, `pokemon_tcg_card_id`, `official_card_image_url`, and `tcgplayer_url` to inventory. Sales receive the same card identity plus TCGplayer provenance. Run `manual-card-search-schema-sync.sql` once; it is additive and repeatable. Repositories fall back to the prior schema until that migration is applied.
+
+Deploy `pokemon-card-search` and configure its `POKEMON_TCG_API_KEY` secret to use the authenticated API allowance. When the function is not deployed, the app falls back to the public anonymous Pokémon TCG API without exposing a secret.
 
 ## Repeatable verification matrix
 
@@ -76,8 +82,14 @@ No real scanner sample images were present in the repository or attachment, so n
 
 ## Exact local tests performed
 
-- `npm run test:scanner`: 5 tests, all passing.
+- `npm run test:scanner`: 8 tests, all passing.
 - `npm run build`: TypeScript and Vite production build passing.
+- Live manual search for `Charizard ex.` returned 14 official-image results; adding collector number `125` narrowed it to the exact Obsidian Flames card.
+- Its single Holofoil finish auto-selected, displayed market/low/mid/high/direct-low values, and applied only the $5.44 Market Value. Sold Price and Actual Bought Price stayed blank.
+- A real `Charizard ex` API record without TCGplayer pricing remained selectable; Market Value, Actual Total Cost, and Sticker Price all stayed blank.
+- 375-pixel mobile viewport had one-column 311-pixel result cards, 44-pixel result buttons, and no horizontal overflow.
+- Two failed bulk drafts each exposed **Search This Card**. Manually matching the first preserved its photo, LP condition, and $12.34 sticker while the second draft stayed unchanged and Failed.
+- Browser console produced no warnings or errors during these flows.
 - 390×844 browser viewport: dashboard loaded; floating shortcut opened Add Sale directly in live-camera mode.
 - Camera modal: cancel, gallery, centered shutter, switch-camera, and manual fallback controls were present.
 - Camera cancel exposed Take Photo, Upload, Paste Image, and Continue Without Photo; no save occurred.

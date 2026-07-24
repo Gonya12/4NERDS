@@ -51,9 +51,36 @@ export type RankablePokemonCard = {
   name: string;
   number: string;
   rarity?: string;
-  set?: { name?: string; printedTotal?: number; total?: number };
+  set?: {
+    id?: string;
+    name?: string;
+    ptcgoCode?: string;
+    releaseDate?: string;
+    printedTotal?: number;
+    total?: number;
+  };
   images?: { small?: string; large?: string };
-  tcgplayer?: { prices?: Record<string, Record<string, number | null>> };
+  tcgplayer?: {
+    url?: string;
+    updatedAt?: string;
+    prices?: Record<string, Record<string, number | null>>;
+  };
+  subtypes?: string[];
+  supertype?: string;
+};
+
+export type ManualCardSearchTerms = {
+  name?: string | null;
+  collectorNumber?: string | null;
+  set?: string | null;
+  language?: string | null;
+};
+
+export type NormalizedManualCardSearchTerms = {
+  name: string;
+  collectorNumber: string;
+  set: string;
+  language: string;
 };
 
 export type RankedPokemonCard = RankablePokemonCard & {
@@ -263,4 +290,60 @@ export function buildPokemonApiQueries(evidence: NameEvidence, collector: Collec
     evidence.baseCandidate ? `name:${evidence.baseCandidate.slice(0, Math.min(6, evidence.baseCandidate.length))}*` : "",
   ].filter(Boolean);
   return [...new Set(queries)].slice(0, 3);
+}
+
+function cleanManualTerm(value: string | null | undefined, allowSlash = false) {
+  const unsafe = allowSlash
+    ? /[^\p{L}\p{N}' /&.-]+/gu
+    : /[^\p{L}\p{N}' &.-]+/gu;
+  return (value || "")
+    .normalize("NFKC")
+    .replace(/["\\]/g, " ")
+    .replace(unsafe, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[.,;:!?]+$/g, "")
+    .trim();
+}
+
+export function normalizeManualCardSearchTerms(input: ManualCardSearchTerms): NormalizedManualCardSearchTerms {
+  let name = cleanManualTerm(input.name, true);
+  let collectorNumber = cleanManualTerm(input.collectorNumber, true);
+  if (!collectorNumber) {
+    const trailingCollector = name.match(/(?:^|\s)([A-Z]{0,4}\d{2,4}\/[A-Z]{0,4}\d{1,4}|[A-Z]{0,4}\d{2,4})$/iu);
+    const nameWithoutCollector = trailingCollector ? name.slice(0, trailingCollector.index).trim() : "";
+    if (trailingCollector && /\p{L}/u.test(nameWithoutCollector)) {
+      name = nameWithoutCollector;
+      collectorNumber = trailingCollector[1];
+    }
+  }
+  return {
+    name,
+    collectorNumber,
+    set: cleanManualTerm(input.set),
+    language: cleanManualTerm(input.language),
+  };
+}
+
+export function manualCardSearchValidationError(input: ManualCardSearchTerms) {
+  const normalized = normalizeManualCardSearchTerms(input);
+  const usefulNameCharacters = normalized.name.replace(/[^\p{L}\p{N}]/gu, "");
+  if (normalized.name && usefulNameCharacters.length < 2) {
+    return "Enter at least two useful characters in the card name.";
+  }
+  if (!normalized.name && !normalized.collectorNumber && !normalized.set) {
+    return "Enter a card name, collector number, or set.";
+  }
+  return "";
+}
+
+export function buildManualPokemonQuery(input: ManualCardSearchTerms) {
+  const normalized = normalizeManualCardSearchTerms(input);
+  const collector = parseCollectorNumber(normalized.collectorNumber);
+  const collectorValue = collector?.numerator || normalized.collectorNumber.replace(/\/.*$/, "").replace(/\s+/g, "");
+  const setLooksLikeId = Boolean(normalized.set && !/\s/.test(normalized.set) && /^[a-z0-9-]{2,18}$/i.test(normalized.set));
+  return [
+    normalized.name ? `name:"${normalized.name}"` : "",
+    collectorValue ? `number:${collectorValue}` : "",
+    normalized.set ? (setLooksLikeId ? `set.id:${normalized.set}` : `set.name:"${normalized.set}"`) : "",
+  ].filter(Boolean).join(" ");
 }

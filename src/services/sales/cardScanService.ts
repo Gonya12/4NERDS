@@ -1,15 +1,20 @@
 import type { Worker } from "tesseract.js";
 import type { CardCondition, PokemonProductCategory } from "../../types/models";
+import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
 import { compressSaleImage } from "../images/saleImageService";
 import { automaticallyPrepareCard, terminateCardImageWorker } from "./cardImageProcessor";
 import {
+  buildManualPokemonQuery,
   buildNameEvidence,
   buildPokemonApiQueries,
   conditionFromVisibleText,
   extractRawNameCandidate,
+  manualCardSearchValidationError,
+  normalizeManualCardSearchTerms,
   parseCollectorNumber,
   rankPokemonCards,
   stickerPriceFromVisibleText,
+  type ManualCardSearchTerms,
   type RankablePokemonCard,
 } from "./cardScanParsing";
 
@@ -19,9 +24,16 @@ export type CardMatch = {
   cardName: string;
   collectorNumber: string;
   setName: string;
+  setId?: string;
+  setCode?: string;
+  setReleaseDate?: string;
   rarity?: string;
   imageUrl?: string;
+  largeImageUrl?: string;
   marketPrice?: number;
+  supertype?: string;
+  subtypes?: string[];
+  tcgplayerPricing?: TcgplayerPricing;
   matchConfidence: ScanConfidence;
   matchScore: number;
   reasons: string[];
@@ -61,6 +73,11 @@ export type CardScanSuggestion = {
   correctedNameCandidate?: string;
   correctedNameConfidence?: ScanConfidence;
   officialImageUrl?: string;
+  cardSetId?: string;
+  cardSetCode?: string;
+  cardRarity?: string;
+  pokemonTcgCardId?: string;
+  tcgplayerUrl?: string;
   warnings: string[];
   tcgplayerPricing?: TcgplayerPricing;
   technicalDetails?: {
@@ -99,6 +116,22 @@ let workerPromise: Promise<Worker> | null = null;
 let workerIdleTimer: number | undefined;
 let ocrQueue: Promise<unknown> = Promise.resolve();
 const searchCache = new Map<string, CardMatch[]>();
+const manualSearchCache = new Map<string, ManualCardSearchPage>();
+const manualSearchInFlight = new Map<string, Promise<ManualCardSearchPage>>();
+
+export type ManualCardSearchInput = ManualCardSearchTerms & {
+  page?: number;
+  pageSize?: number;
+};
+
+export type ManualCardSearchPage = {
+  matches: CardMatch[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+  normalizedTerms: ReturnType<typeof normalizeManualCardSearchTerms>;
+};
 
 function abortError() {
   return new DOMException("Card scan cancelled.", "AbortError");
@@ -336,20 +369,117 @@ function photoQualityWarnings(image: HTMLImageElement) {
 
 function marketPrice(card: RankablePokemonCard) {
   const values = Object.values(card.tcgplayer?.prices || {})
-    .flatMap((group) => [group.market, group.mid, group.low])
+    .map((group) => group.market)
     .filter((value): value is number => typeof value === "number");
   return values[0];
 }
 
-function fetchWithTimeout(url: string, signal?: AbortSignal, timeoutMs = 8_000) {
+function pricingFromCard(card: RankablePokemonCard): TcgplayerPricing {
+  const variants = Object.entries(card.tcgplayer?.prices || {}).map(([variant, price]) => ({
+    variant,
+    market: typeof price.market === "number" ? price.market : undefined,
+    low: typeof price.low === "number" ? price.low : undefined,
+    mid: typeof price.mid === "number" ? price.mid : undefined,
+    high: typeof price.high === "number" ? price.high : undefined,
+    directLow: typeof price.directLow === "number" ? price.directLow : undefined,
+  }));
+  return {
+    url: card.tcgplayer?.url,
+    updatedAt: card.tcgplayer?.updatedAt,
+    checkedAt: new Date().toISOString(),
+    variants,
+    selectedVariant: variants.length === 1 ? variants[0].variant : undefined,
+    targetPercent: 75,
+  };
+}
+
+function cardMatch(card: RankablePokemonCard, matchScore: number, reasons: string[]): CardMatch {
+  return {
+    id: card.id,
+    cardName: card.name,
+    collectorNumber: card.number,
+    setName: card.set?.name || "",
+    setId: card.set?.id,
+    setCode: card.set?.ptcgoCode || card.set?.id,
+    setReleaseDate: card.set?.releaseDate,
+    rarity: card.rarity,
+    imageUrl: card.images?.small,
+    largeImageUrl: card.images?.large,
+    marketPrice: marketPrice(card),
+    supertype: card.supertype,
+    subtypes: card.subtypes,
+    tcgplayerPricing: pricingFromCard(card),
+    matchConfidence: confidenceFromMatchScore(matchScore),
+    matchScore,
+    reasons,
+  };
+}
+
+function fetchWithTimeout(url: string, signal?: AbortSignal, timeoutMs = 8_000, init?: RequestInit) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
-  return fetch(url, { signal: controller.signal }).finally(() => {
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => {
     window.clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
   });
+}
+
+const pokemonCardSelect = "id,name,number,set,rarity,images,tcgplayer,subtypes,supertype";
+
+type PokemonApiPayload = {
+  data?: RankablePokemonCard[] | RankablePokemonCard;
+  page?: number;
+  pageSize?: number;
+  count?: number;
+  totalCount?: number;
+};
+
+function pokemonApiError(status: number, payload?: { error?: string; message?: string }) {
+  if (status === 429) return new Error("Pokémon TCG API rate limit reached. Wait a moment, then try again.");
+  return new Error(payload?.error || payload?.message || `Pokémon TCG API request failed (${status}).`);
+}
+
+async function fetchPokemonApi(
+  request: { q?: string; id?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<PokemonApiPayload> {
+  checkAbort(signal);
+  if (isSupabaseConfigured && supabaseUrl && supabasePublishableKey) {
+    try {
+      const proxied = await fetchWithTimeout(
+        `${supabaseUrl}/functions/v1/pokemon-card-search`,
+        signal,
+        8_000,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabasePublishableKey,
+            Authorization: `Bearer ${supabasePublishableKey}`,
+          },
+          body: JSON.stringify(request),
+        },
+      );
+      const payload = await proxied.json().catch(() => ({})) as PokemonApiPayload & { error?: string; message?: string };
+      if (!proxied.ok) throw pokemonApiError(proxied.status, payload);
+      return payload;
+    } catch (error) {
+      if (signal?.aborted) throw abortError();
+      if (error instanceof Error && /rate limit/i.test(error.message)) throw error;
+      // Local mode and projects that have not deployed the function can use the
+      // public anonymous allowance without exposing a server secret.
+    }
+  }
+
+  const url = request.id
+    ? `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(request.id)}?select=${pokemonCardSelect}`
+    : `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(request.q || "")}&page=${request.page || 1}&pageSize=${request.pageSize || 20}&select=${pokemonCardSelect}`;
+  const response = await fetchWithTimeout(url, signal);
+  const payload = await response.json().catch(() => ({})) as PokemonApiPayload & { error?: string; message?: string };
+  if (!response.ok) throw pokemonApiError(response.status, payload);
+  return payload;
 }
 
 export async function searchPokemonCards(cardName: string | null, collectorNumber: string | null, signal?: AbortSignal) {
@@ -364,13 +494,9 @@ export async function searchPokemonCards(cardName: string | null, collectorNumbe
   for (const query of queries) {
     checkAbort(signal);
     try {
-      const response = await fetchWithTimeout(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}&pageSize=10&select=id,name,number,set,rarity,images,tcgplayer`,
-        signal,
-      );
-      if (!response.ok) continue;
-      const payload = await response.json() as { data?: RankablePokemonCard[] };
-      for (const card of payload.data || []) cards.set(card.id, card);
+      const payload = await fetchPokemonApi({ q: query, page: 1, pageSize: 10 }, signal);
+      const rows = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+      for (const card of rows) cards.set(card.id, card);
       if (cards.size >= 10) break;
     } catch (error) {
       if (signal?.aborted) throw abortError();
@@ -378,66 +504,83 @@ export async function searchPokemonCards(cardName: string | null, collectorNumbe
   }
   const matches = rankPokemonCards([...cards.values()], evidence, collector)
     .slice(0, 5)
-    .map((card): CardMatch => ({
-      id: card.id,
-      cardName: card.name,
-      collectorNumber: card.number,
-      setName: card.set?.name || "",
-      rarity: card.rarity,
-      imageUrl: card.images?.small,
-      marketPrice: marketPrice(card),
-      matchConfidence: confidenceFromMatchScore(card.matchScore),
-      matchScore: card.matchScore,
-      reasons: card.reasons,
-    }));
+    .map((card) => cardMatch(card, card.matchScore, card.reasons));
   if (searchCache.size >= 50) searchCache.delete(searchCache.keys().next().value as string);
   searchCache.set(cacheKey, matches);
   return matches;
 }
 
+export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?: AbortSignal) {
+  const validationError = manualCardSearchValidationError(input);
+  if (validationError) return Promise.reject(new Error(validationError));
+  const normalizedTerms = normalizeManualCardSearchTerms(input);
+  const page = Math.max(1, Math.floor(input.page || 1));
+  const pageSize = Math.min(20, Math.max(1, Math.floor(input.pageSize || 20)));
+  const query = buildManualPokemonQuery(normalizedTerms);
+  const cacheKey = JSON.stringify({ query, language: normalizedTerms.language.toLocaleLowerCase(), page, pageSize });
+  const cached = manualSearchCache.get(cacheKey);
+  if (cached) return Promise.resolve(cached);
+  const existing = manualSearchInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = fetchPokemonApi({ q: query, page, pageSize }, signal).then((payload) => {
+    const cards = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+    const evidence = buildNameEvidence(normalizedTerms.name);
+    const collector = parseCollectorNumber(normalizedTerms.collectorNumber);
+    const ranked = normalizedTerms.name || collector
+      ? rankPokemonCards(cards, evidence, collector)
+      : cards.map((card) => ({ ...card, matchScore: 50, reasons: ["set search candidate"] }));
+    const matches = ranked.map((card) => cardMatch(card, card.matchScore, card.reasons));
+    const totalCount = Number(payload.totalCount || matches.length);
+    const result: ManualCardSearchPage = {
+      matches,
+      page,
+      pageSize,
+      totalCount,
+      hasMore: page * pageSize < totalCount,
+      normalizedTerms,
+    };
+    if (manualSearchCache.size >= 75) manualSearchCache.delete(manualSearchCache.keys().next().value as string);
+    manualSearchCache.set(cacheKey, result);
+    return result;
+  }).finally(() => {
+    manualSearchInFlight.delete(cacheKey);
+  });
+  manualSearchInFlight.set(cacheKey, promise);
+  return promise;
+}
+
 export async function confirmPokemonCardMatch(suggestion: CardScanSuggestion, match: CardMatch, signal?: AbortSignal) {
-  let pricing: TcgplayerPricing = { checkedAt: new Date().toISOString(), variants: [], targetPercent: 75 };
-  try {
-    const response = await fetchWithTimeout(
-      `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(match.id)}?select=id,name,number,set,rarity,images,tcgplayer`,
-      signal,
-    );
-    if (response.ok) {
-      const payload = await response.json() as {
-        data?: { tcgplayer?: { url?: string; updatedAt?: string; prices?: Record<string, { market?: number; low?: number; mid?: number; high?: number; directLow?: number }> } };
-      };
-      const tcgplayer = payload.data?.tcgplayer;
-      const variants = Object.entries(tcgplayer?.prices || {}).map(([variant, price]) => ({
-        variant,
-        market: price.market,
-        low: price.low,
-        mid: price.mid,
-        high: price.high,
-        directLow: price.directLow,
-      }));
-      pricing = {
-        url: tcgplayer?.url,
-        updatedAt: tcgplayer?.updatedAt,
-        checkedAt: new Date().toISOString(),
-        variants,
-        selectedVariant: variants.length === 1 ? variants[0].variant : undefined,
-        targetPercent: 75,
-      };
+  let pricing = match.tcgplayerPricing || { checkedAt: new Date().toISOString(), variants: [], targetPercent: 75 };
+  let detailedMatch = match;
+  if (!match.tcgplayerPricing) {
+    try {
+      const payload = await fetchPokemonApi({ id: match.id }, signal);
+      const card = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+      if (card) {
+        pricing = pricingFromCard(card);
+        detailedMatch = cardMatch(card, match.matchScore, match.reasons);
+      }
+    } catch (error) {
+      if (signal?.aborted) throw abortError();
     }
-  } catch (error) {
-    if (signal?.aborted) throw abortError();
   }
   return {
     ...suggestion,
-    cardName: match.cardName,
-    collectorNumber: match.collectorNumber,
-    cardSet: match.setName,
-    officialImageUrl: match.imageUrl,
+    cardName: detailedMatch.cardName,
+    collectorNumber: detailedMatch.collectorNumber,
+    cardSet: detailedMatch.setName,
+    cardSetId: detailedMatch.setId,
+    cardSetCode: detailedMatch.setCode,
+    cardRarity: detailedMatch.rarity,
+    pokemonTcgCardId: detailedMatch.id,
+    officialImageUrl: detailedMatch.largeImageUrl || detailedMatch.imageUrl,
+    tcgplayerUrl: pricing.url,
     fieldConfidence: {
       ...suggestion.fieldConfidence,
-      cardName: match.matchConfidence,
-      collectorNumber: match.matchConfidence,
-      cardSet: match.matchConfidence,
+      cardName: detailedMatch.matchConfidence,
+      collectorNumber: detailedMatch.matchConfidence,
+      cardSet: detailedMatch.matchConfidence,
     },
     possibleMatches: [],
     tcgplayerPricing: pricing,
