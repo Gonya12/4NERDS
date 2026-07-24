@@ -300,7 +300,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <button onClick={() => navigate("/sales?mode=sale")} className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-glow transition duration-180 hover:-translate-y-1 hover:brightness-105 active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale">
+      <button onClick={() => navigate("/sales?mode=sale&initialMode=camera")} className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-glow transition duration-180 hover:-translate-y-1 hover:brightness-105 active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale with camera">
         <Camera size={24} />
       </button>
       {showLegend ? (

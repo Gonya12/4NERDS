@@ -3,6 +3,7 @@ import { fileToDataUrl } from "../images/saleImageService";
 import { compressSaleImage } from "../images/saleImageService";
 import { isSupabaseConfigured, supabase } from "../../utils/supabase";
 import { z } from "zod";
+import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from "@supabase/supabase-js";
 
 export type ScanConfidence = "high" | "medium" | "low";
 export type CardScanSuggestion = {
@@ -51,8 +52,19 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
   const preparedBack = back ? await compressSaleImage(back) : undefined;
   const { data, error } = await supabase.functions.invoke("card-scan", {
     body: { frontImage: await fileToDataUrl(preparedFront), backImage: preparedBack ? await fileToDataUrl(preparedBack) : undefined, requestedType },
+    signal: AbortSignal.timeout(60_000),
   });
-  if (error || data?.error || data?.success === false) throw new Error(data?.error || error?.message || "Card analysis failed.");
+  if (error) {
+    if (error instanceof FunctionsHttpError) {
+      const response = error.context as Response;
+      const details = await response.clone().json().catch(() => null) as { error?: string } | null;
+      throw new Error(details?.error || `Card scanner returned HTTP ${response.status}.`);
+    }
+    if (error instanceof FunctionsRelayError) throw new Error("The scanner function relay failed. Confirm card-scan is deployed to this Supabase project.");
+    if (error instanceof FunctionsFetchError) throw new Error("The scanner function was not reached. Check deployment, internet access, and CORS/preflight configuration.");
+    throw new Error(error.message || "Card analysis failed.");
+  }
+  if (data?.error || data?.success === false) throw new Error(data?.error || "Card analysis failed.");
   const candidate = data?.suggestions ? {
     suggestedType: data.cardType || requestedType, ...data.suggestions,
     cardSet: data.suggestions.setName ?? data.suggestions.cardSet ?? null,

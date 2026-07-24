@@ -196,10 +196,13 @@ export function SalesControlPage() {
     setLoading(false);
     setSyncing(false);
     loadInFlightRef.current = false;
-    if (new URLSearchParams(location.search).get("mode") === "sale" && !editor) openSale(undefined, eventRows);
   }
 
   useEffect(() => { void loadData(); }, [location.search]);
+  useEffect(() => {
+    const entryParams = new URLSearchParams(location.search);
+    if (entryParams.get("mode") === "sale") openSale(undefined, events, entryParams.get("initialMode") === "camera");
+  }, [location.search]);
   useEffect(() => () => stopCamera(), []);
   useEffect(() => {
     if (!cameraMode) return;
@@ -230,7 +233,7 @@ export function SalesControlPage() {
     setEditingExpense(undefined);
   }
 
-  function openSale(sale?: SalesRecord, availableEvents = events) {
+  function openSale(sale?: SalesRecord, availableEvents = events, openCameraOnMount = false) {
     cleanPreview();
     setEditingSale(sale);
     setEventLinkManuallyChanged(Boolean(sale));
@@ -253,6 +256,11 @@ export function SalesControlPage() {
     } : { ...blankSale(), eventId: automatic?.event.id || "", eventDayId: automatic?.eventDay.id || "" });
     setPreviewUrl(sale?.imageUrl || "");
     setEditor("sale");
+    if (!sale && openCameraOnMount) {
+      setFacingMode("environment");
+      setCameraMode(true);
+      setCameraError("");
+    }
   }
 
   function openPurchase(purchase?: InventoryPurchase) {
@@ -616,23 +624,30 @@ export function SalesControlPage() {
     return <div tabIndex={0} onPaste={(event) => { const file = imageFromClipboard(event); if (file) { event.preventDefault(); void pickFile(file); } }} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
       <div><p className="font-black text-ink dark:text-white">{label}</p><p className="text-xs text-slate-500">Take, upload, or paste a photo. You can also continue without one.</p></div>
       {cameraMode ? <>
-        <div className="relative mx-auto flex aspect-[3/4] max-h-[50dvh] min-h-56 w-full max-w-sm items-center justify-center overflow-hidden rounded-2xl bg-black">
+        <div className="relative mx-auto flex aspect-[3/4] max-h-[62dvh] min-h-64 w-full max-w-md items-center justify-center overflow-hidden rounded-3xl bg-black shadow-2xl">
           <video ref={videoRef} playsInline muted className={`size-full object-contain ${cameraReady ? "block" : "invisible"}`} />
           {!cameraReady ? <div className="absolute inset-0 flex items-center justify-center p-5 text-center text-sm font-bold text-white">{cameraError || "Starting camera…"}</div> : null}
+          {cameraReady ? <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 aspect-[2.5/3.5] h-[68%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border-2 border-dashed border-white/65 shadow-[0_0_0_999px_rgba(0,0,0,0.12)]" /> : null}
+          <button type="button" onClick={() => { stopCamera(); setCameraMode(false); setCameraError(""); }} className="absolute left-3 top-3 z-10 rounded-full bg-black/60 p-2.5 text-white backdrop-blur" aria-label="Cancel camera"><X size={20} /></button>
+          <div className="absolute inset-x-0 bottom-0 z-10 grid grid-cols-3 items-center bg-gradient-to-t from-black/80 via-black/45 to-transparent px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-12 text-white">
+            <button type="button" onClick={() => inputRef.current?.click()} className="flex size-12 items-center justify-center justify-self-start rounded-full bg-black/55 backdrop-blur" aria-label="Upload from gallery"><ImagePlus size={22} /></button>
+            <button type="button" onClick={() => void capturePhoto()} disabled={!cameraReady || cameraSwitching} className="size-20 justify-self-center rounded-full border-[7px] border-coral bg-white shadow-[0_0_0_3px_rgba(255,255,255,0.65)] transition active:scale-90 disabled:opacity-40" aria-label="Capture photo"><span className="sr-only">Capture</span></button>
+            <button type="button" onClick={() => void switchCamera()} disabled={!cameraReady || cameraSwitching} className="flex size-12 items-center justify-center justify-self-end rounded-full bg-black/55 backdrop-blur disabled:opacity-40" aria-label="Switch camera"><SwitchCamera size={22} /></button>
+          </div>
           <canvas ref={canvasRef} className="hidden" />
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <button type="button" onClick={() => void capturePhoto()} disabled={!cameraReady || cameraSwitching} className="min-h-11 rounded-xl bg-coral px-3 text-sm font-black text-white disabled:opacity-50"><Camera className="mr-1 inline" size={16} /> Capture</button>
-          <button type="button" onClick={() => void switchCamera()} disabled={!cameraReady || cameraSwitching} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-50 dark:bg-slate-800"><SwitchCamera className="mr-1 inline" size={16} /> {cameraSwitching ? "Switching…" : "Switch Camera"}</button>
-          <button type="button" onClick={() => { stopCamera(); setCameraMode(false); setCameraError(""); }} className="col-span-2 min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black sm:col-span-1 dark:bg-slate-800"><X className="mr-1 inline" size={16} /> Cancel Camera</button>
-        </div>
+        {cameraError ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <button type="button" onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800"><Upload className="mr-1 inline" size={16} /> Upload</button>
+          {pasteSupported ? <button type="button" onClick={() => void pasteImageFromClipboard()} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800"><ClipboardPaste className="mr-1 inline" size={16} /> Paste Image</button> : null}
+          <button type="button" onClick={() => { stopCamera(); setCameraMode(false); setImageStatus("Continuing without a photo."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Continue Without Photo</button>
+        </div> : null}
       </> : previewUrl ? <>
         <button type="button" onClick={() => setLargePreviewOpen(true)} className="block w-full overflow-hidden rounded-xl bg-white dark:bg-slate-900"><img src={previewUrl} alt={`${label} preview`} loading="lazy" className="mx-auto max-h-[360px] w-full object-contain" /></button>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <button type="button" onClick={enterCameraMode} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><RotateCcw className="mr-1 inline" size={15} /> Retake</button>
           <button type="button" onClick={() => inputRef.current?.click()} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800"><ImagePlus className="mr-1 inline" size={15} /> Replace</button>
           <button type="button" onClick={removeImage} className="min-h-11 rounded-xl bg-rose-100 px-2 text-sm font-black text-rose-700 dark:bg-rose-950/40"><Trash2 className="mr-1 inline" size={15} /> Remove</button>
-          <button type="button" onClick={removeImage} className="min-h-11 rounded-xl bg-slate-200 px-2 text-sm font-black dark:bg-slate-800">Continue Without Photo</button>
+          <button type="button" onClick={() => setImageStatus("Photo selected. Complete the sale details, then Save.")} className="min-h-11 rounded-xl bg-emerald-600 px-2 text-sm font-black text-white">Use Photo</button>
         </div>
       </> : <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <button type="button" onClick={enterCameraMode} className="min-h-11 rounded-xl bg-coral px-2 text-sm font-black text-white"><Camera className="mr-1 inline" size={15} /> Take Photo</button>

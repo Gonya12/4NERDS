@@ -1,5 +1,5 @@
 import { ScanLine, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { InventoryPurchase, PokemonProductCategory } from "../../types/models";
 import { scanPokemonCard, type CardScanSuggestion } from "../../services/sales/cardScanService";
 
@@ -30,6 +30,10 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
       setStatus("failed"); setMessage(error instanceof Error ? error.message : "Card analysis failed.");
     }
   }
+
+  useEffect(() => {
+    if (imageFile) void scan();
+  }, [imageFile, backImageFile]);
 
   const duplicateCertificate = suggestion?.certificateNumber && inventory.some((row) => row.certificateNumber?.trim().toLowerCase() === suggestion.certificateNumber?.trim().toLowerCase());
   const field = (key: keyof CardScanSuggestion, label: string, type: "text" | "number" = "text") => {
