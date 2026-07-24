@@ -31,6 +31,9 @@ export type CardScanSuggestion = {
   overallConfidence: ScanConfidence;
   fieldConfidence: Record<string, ScanConfidence>;
   possibleMatches?: CardMatch[];
+  correctedNameCandidate?: string;
+  correctedNameConfidence?: ScanConfidence;
+  officialImageUrl?: string;
   warnings: string[];
   tcgplayerPricing?: TcgplayerPricing;
   technicalDetails?: {
@@ -57,7 +60,7 @@ export async function confirmPokemonCardMatch(suggestion: CardScanSuggestion, ma
     }
   } catch { /* Pricing is optional and manual market value remains available. */ }
   return {
-    ...suggestion, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName,
+    ...suggestion, cardName: match.cardName, collectorNumber: match.collectorNumber, cardSet: match.setName, officialImageUrl: match.imageUrl,
     possibleMatches: [], tcgplayerPricing: pricing
   };
 }
@@ -248,17 +251,56 @@ function marketPrice(card: { tcgplayer?: { prices?: Record<string, Record<string
   return prices[0];
 }
 
+function nameEvidence(raw: string) {
+  const normalized = raw
+    .replace(/[^\p{L}\p{N}'-]+/gu, " ")
+    .replace(/\b(?:BASIC|STAGE\s*[12]|HP\s*\d*)\b/gi, " ")
+    .replace(/\s+/g, " ").trim();
+  const tokens = normalized.split(" ").filter((token) => token.length > 1 && !/^(?:re|the|card|ability)$/i.test(token));
+  const suffixToken = tokens.find((token) => /^(?:ex|gx|v|max|vmax|vstar|break|it)$/i.test(token));
+  const suffix = suffixToken?.toLowerCase() === "it" ? "ex" : suffixToken?.toUpperCase() === "EX" ? "ex" : suffixToken?.toUpperCase();
+  const words = tokens.filter((token) => token !== suffixToken && /[A-Za-z]{3}/.test(token));
+  const strongestWord = [...words].sort((a, b) => b.length - a.length)[0]?.toLowerCase() || "";
+  const cleanedFull = [strongestWord, suffix].filter(Boolean).join(" ");
+  return { raw, cleanedFull, strongestWord, suffix: suffix || "" };
+}
+
+function levenshtein(left: string, right: string) {
+  const a = left.toLowerCase(); const b = right.toLowerCase();
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let previous = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const saved = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = saved;
+    }
+  }
+  return row[b.length];
+}
+
+function fuzzyNameSimilarity(evidence: ReturnType<typeof nameEvidence>, officialName: string) {
+  const official = officialName.toLowerCase();
+  const baseOfficial = official.replace(/\b(?:ex|gx|vmax|vstar|v|break)\b/gi, "").trim();
+  const distanceScore = evidence.strongestWord ? 1 - levenshtein(evidence.strongestWord, baseOfficial) / Math.max(evidence.strongestWord.length, baseOfficial.length, 1) : 0;
+  const prefixScore = evidence.strongestWord && baseOfficial.startsWith(evidence.strongestWord.slice(0, Math.min(5, evidence.strongestWord.length))) ? 0.75 : 0;
+  const suffixScore = evidence.suffix && official.includes(evidence.suffix.toLowerCase()) ? 0.12 : 0;
+  return Math.min(1, Math.max(distanceScore, prefixScore) + suffixScore);
+}
+
 async function findPokemonCards(cardName: string | null, collectorNumber: string | null, nameConfidence: ScanConfidence): Promise<CardMatch[]> {
   if (!cardName && !collectorNumber) return [];
   const numerator = collectorNumber?.split("/")[0].replace(/[^A-Za-z0-9]/g, "") || "";
   const denominator = collectorNumber?.split("/")[1]?.replace(/\D/g, "") || "";
-  const cleanName = cardName?.replace(/"/g, "").trim() || "";
-  const nameQueryValue = cleanName.includes(" ") ? `"${cleanName}"` : cleanName;
-  const clauses = [
-    cleanName ? `${nameConfidence === "high" ? "!" : ""}name:${nameQueryValue}` : "",
+  const evidence = nameEvidence(cardName || "");
+  const queries = [
+    evidence.cleanedFull ? `name:"${evidence.cleanedFull}"${numerator ? ` number:${numerator}` : ""}` : "",
+    evidence.strongestWord ? `name:${evidence.strongestWord}` : "",
+    evidence.strongestWord ? `name:${evidence.strongestWord.slice(0, Math.min(5, evidence.strongestWord.length))}*` : "",
     numerator ? `number:${numerator}` : ""
   ].filter(Boolean);
-  const cacheKey = clauses.join(" ");
+  void nameConfidence;
+  const cacheKey = queries.join("|");
   const cached = searchCache.get(cacheKey);
   if (cached) return cached;
   const request = (async () => {
@@ -272,23 +314,17 @@ async function findPokemonCards(cardName: string | null, collectorNumber: string
       const payload = await response.json() as { data?: ApiCard[] };
       return payload.data || [];
     };
-    let cards = await fetchCards(cacheKey);
-    if (!cards.length && cardName && numerator) {
-      const [nameMatches, numberMatches] = await Promise.all([
-        fetchCards(clauses[0]), fetchCards(`number:${numerator}`)
-      ]);
-      cards = [...new Map([...nameMatches, ...numberMatches].map((card) => [card.id, card])).values()];
-    }
+    const batches = await Promise.all(queries.map(fetchCards));
+    const cards = [...new Map(batches.flat().map((card) => [card.id, card])).values()];
     return cards.map((card) => {
-      let score = 0;
-      if (cardName && card.name.toLowerCase() === cardName.toLowerCase()) score += 4;
-      else if (cardName && card.name.toLowerCase().includes(cardName.toLowerCase())) score += 2;
+      const similarity = fuzzyNameSimilarity(evidence, card.name);
+      let score = similarity * 6;
       if (numerator && card.number.toLowerCase() === numerator.toLowerCase()) score += 4;
       if (denominator && (String(card.set?.printedTotal || "") === denominator || String(card.set?.total || "") === denominator)) score += 3;
       return {
       id: card.id, cardName: card.name, collectorNumber: card.number,
       setName: card.set?.name || "", rarity: card.rarity, imageUrl: card.images?.small,
-      marketPrice: marketPrice(card), matchConfidence: score >= 8 ? "high" as const : score >= 4 ? "medium" as const : "low" as const,
+      marketPrice: marketPrice(card), matchConfidence: score >= 8 ? "high" as const : score >= 4.25 ? "medium" as const : "low" as const,
       score
     }; }).sort((a, b) => b.score - a.score).slice(0, 5).map(({ score: _score, ...card }) => card);
   } catch {
@@ -314,7 +350,7 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
   };
   stage("Preparing image");
   const hash = `${await imageHash(front)}:${back ? await imageHash(back) : ""}`;
-  const cacheKey = `4nerds_hybrid_visual_v1_${hash}`;
+  const cacheKey = `4nerds_name_correction_v1_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);
@@ -349,26 +385,28 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
       const labelSource = back ? await imageElement(await compressSaleImage(back)) : frontImage;
       label = await recognizeBest(labelSource, [0.02, 0.01, 0.96, 0.40], "11", 2.5);
     }
-    const cardName = cardNameFrom(top.text, top.confidence) || cardNameFrom(full.text, full.confidence);
+    const rawNameCandidate = cardNameFrom(top.text, top.confidence) || cardNameFrom(full.text, full.confidence);
     const collectorNumber = collectorNumberFrom(`${bottom.text}\n${full.text}`, bottom.confidence);
     const stickerText = `${sticker.text}\n${bottom.text}\n${full.text}`;
     const condition = conditionFrom(stickerText);
     const stickerPrice = priceFrom(stickerText);
     const slab = slabFields(`${top.text}\n${label.text}`);
     stage("Visual matching");
-    const visual = await timed(visualCardMatches(corrected.file, cardName, collectorNumber), 18_000, "Visual matching took too long; using OCR search instead.")
+    const visual = await timed(visualCardMatches(corrected.file, rawNameCandidate, collectorNumber), 18_000, "Visual matching took too long; using OCR search instead.")
       .catch(() => ({ matches: [] as CardMatch[], warning: "Visual matching was skipped because it took too long." }));
     stage("Searching Pokémon cards");
-    const textMatches = visual.matches.length ? [] : await timed(findPokemonCards(cardName, collectorNumber, confidence(top.confidence)), 15_000, "Pokémon card search timed out.");
+    const textMatches = visual.matches.length ? [] : await timed(findPokemonCards(rawNameCandidate, collectorNumber, confidence(top.confidence)), 15_000, "Pokémon card search timed out.");
     const possibleMatches = visual.matches.length ? visual.matches : textMatches;
+    const correctedNameCandidate = possibleMatches[0]?.cardName;
+    const correctedNameConfidence = possibleMatches[0]?.matchConfidence;
     const warnings: string[] = [...qualityWarnings];
     warnings.push(corrected.detected ? "Card boundary detected and perspective corrected." : "Automatic card boundary detection failed. Using the full photo; crop again if background dominates.");
     if (visual.warning) warnings.push(visual.warning);
-    if (!cardName) warnings.push("Card name confidence was low; enter it manually or choose a possible match.");
+    if (!correctedNameCandidate) warnings.push("No reliable corrected card name was found. Search manually or choose from possible matches.");
     if (!collectorNumber) warnings.push("Collector number was not clear enough to suggest.");
-    if (!possibleMatches.length && (cardName || collectorNumber)) warnings.push("No Pokémon TCG API match was found. OCR suggestions remain editable.");
+    if (!possibleMatches.length && (rawNameCandidate || collectorNumber)) warnings.push("No Pokémon TCG API match was found. Raw OCR remains available only in Technical Details.");
     const fieldConfidence = {
-      cardName: confidence(top.confidence), collectorNumber: confidence(bottom.confidence),
+      cardName: correctedNameConfidence || "low" as const, collectorNumber: confidence(bottom.confidence),
       cardSet: possibleMatches.length ? "medium" as const : "low" as const, language: "low" as const,
       condition: condition ? confidence(sticker.confidence) : "low" as const,
       stickerPrice: stickerPrice != null ? confidence(sticker.confidence) : "low" as const,
@@ -377,26 +415,28 @@ export async function scanPokemonCard(front: File, requestedType: PokemonProduct
       certificateNumber: slab.certificateNumber ? confidence(label.confidence || top.confidence) : "low" as const,
     };
     const strongest = Math.max(full.confidence, top.confidence, bottom.confidence, sticker.confidence, label.confidence);
+    const evidence = nameEvidence(rawNameCandidate || "");
     const apiQuery = [
-      cardName ? `${confidence(top.confidence) === "high" ? "!" : ""}name:${cardName.includes(" ") ? `"${cardName}"` : cardName}` : "",
+      evidence.cleanedFull ? `name:"${evidence.cleanedFull}"` : evidence.strongestWord ? `name:${evidence.strongestWord}` : "",
       collectorNumber ? `number:${collectorNumber.split("/")[0].replace(/[^A-Za-z0-9]/g, "")}` : ""
     ].filter(Boolean).join(" ");
     if (import.meta.env.DEV) console.info("[Local card OCR:result]", {
       fullText: full.text, topText: top.text, bottomText: bottom.text, stickerText: sticker.text,
       confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence },
-      parsed: { cardName, collectorNumber, condition, stickerPrice }, apiQuery, apiMatchCount: possibleMatches.length
+      parsed: { correctedNameCandidate, collectorNumber, condition, stickerPrice }, apiQuery, apiMatchCount: possibleMatches.length
     });
     stage("Preparing review");
     const suggestion = {
       suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
-      cardName, collectorNumber, cardSet: null, language: null, condition, stickerPrice,
+      cardName: null, correctedNameCandidate, correctedNameConfidence,
+      collectorNumber, cardSet: null, language: null, condition, stickerPrice,
       gradingCompany: slab.gradingCompany, grade: slab.grade, certificateNumber: slab.certificateNumber,
       labelInformation: label.text || null, barcodeText: null, overallConfidence: confidence(strongest),
       fieldConfidence, possibleMatches, warnings,
       technicalDetails: {
         fullText: full.text, topText: top.text, bottomText: bottom.text, stickerText: sticker.text,
         confidence: { full: full.confidence, top: top.confidence, bottom: bottom.confidence, sticker: sticker.confidence, label: label.confidence },
-        parsed: { cardName, collectorNumber, condition, stickerPrice },
+        parsed: { correctedNameCandidate, collectorNumber, condition, stickerPrice },
         apiQuery, apiMatchCount: possibleMatches.length
       }
     } satisfies CardScanSuggestion;
