@@ -19,7 +19,8 @@ Deno.serve(async (request) => {
         text: `Analyze this Pokémon product image as a careful inventory assistant. Requested type: ${requestedType || "unknown"}.
 Return suggestions only. Do not infer actual purchase cost. Sticker/asking price is a separate field.
 Inspect the top for card name, bottom for collector number/set, stickers for condition/asking price, and slab labels for company/grade/certificate.
-Use null when unclear. Confidence values must be high, medium, or low.`,
+Use null when unclear. Never assume condition. Only return stickerPrice when a visible price sticker or explicit dollar amount is present.
+Do not estimate market value, bought price, or sold price. Confidence values must be high, medium, or low.`,
       },
       { type: "input_image", image_url: frontImage, detail: "high" },
     ];
@@ -80,7 +81,27 @@ Use null when unclear. Confidence values must be high, medium, or low.`,
     if (!response.ok) throw new Error(payload?.error?.message || "Card analysis failed.");
     const outputText = payload.output_text || payload.output?.flatMap((item: any) => item.content || []).find((item: any) => item.type === "output_text")?.text;
     if (!outputText) throw new Error("Card analysis returned no result.");
-    return new Response(outputText, { headers: { ...cors, "Content-Type": "application/json" } });
+    const scan = JSON.parse(outputText);
+    return new Response(JSON.stringify({
+      success: true,
+      cardType: scan.suggestedType,
+      suggestions: {
+        cardName: scan.cardName,
+        collectorNumber: scan.collectorNumber,
+        setName: scan.cardSet,
+        language: scan.language,
+        condition: scan.condition,
+        stickerPrice: scan.stickerPrice,
+        gradingCompany: scan.gradingCompany,
+        grade: scan.grade,
+        certificateNumber: scan.certificateNumber,
+        labelInformation: scan.labelInformation,
+        barcodeText: scan.barcodeText,
+      },
+      confidence: scan.fieldConfidence,
+      overallConfidence: scan.overallConfidence,
+      warnings: [],
+    }), { headers: { ...cors, "Content-Type": "application/json" } });
   } catch (error) {
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Card analysis failed." }), { status: 400, headers: { ...cors, "Content-Type": "application/json" } });
   }
