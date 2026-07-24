@@ -21,7 +21,7 @@ export function TcgplayerPricingPanel({ suggestion, isSlab, onChange }: Props) {
   return <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs text-slate-800">
     <strong>{isSlab ? "Raw card market reference" : "TCGplayer pricing"}</strong>
     {isSlab ? <p>Reference only. Raw-card prices are not graded-slab market values and will not be applied automatically.</p> : null}
-    {!pricing.variants.length ? <p className="font-black text-amber-700">TCGplayer market price unavailable. Enter market value manually.</p> : <label className="block font-bold">
+    {!pricing.variants.length ? <p className="font-black text-amber-700">No TCGplayer price is listed for this printing. Market Value remains blank and editable.</p> : <label className="block font-bold">
       Physical finish / version
       <select
         value={pricing.selectedVariant || ""}
@@ -56,7 +56,7 @@ export function TcgplayerPricingPanel({ suggestion, isSlab, onChange }: Props) {
           % = <b>{money(selected.market * targetPercent / 100)}</b>
         </label>
       </div> : null}
-    </> : pricing.variants.length ? <p className="font-bold text-amber-700">Select the finish printed on the physical card before applying market value.</p> : null}
+    </> : pricing.variants.length ? <p className="font-bold text-amber-700">Choose the card finish to load its market price.</p> : null}
     <p>Source: TCGplayer · Updated: {pricing.updatedAt || "Unavailable"} · Checked: {new Date(pricing.checkedAt).toLocaleString()}</p>
     {pricing.url ? <a href={pricing.url} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">Open on TCGplayer</a> : null}
   </section>;
