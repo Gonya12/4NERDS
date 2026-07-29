@@ -1,5 +1,5 @@
-import { BadgeDollarSign, ChevronDown, ChevronUp, Copy, Download, Eye, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { BadgeDollarSign, ChevronDown, ChevronUp, Copy, Download, Eye, MoreVertical, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, Worker } from "../../types/models";
 import { effectiveSaleOwnership, expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { formatMoney } from "../../utils/paymentMath";
@@ -95,6 +95,8 @@ export function FinancialSpreadsheet(props: Props) {
   const [soldModalOpen, setSoldModalOpen] = useState(false);
   const [soldTargetKeys, setSoldTargetKeys] = useState<string[]>([]);
   const [soldDraft, setSoldDraft] = useState({ date: new Date().toISOString().slice(0, 10), eventId: "", workerId: "", payment: "", prices: {} as Record<string, string>, quantities: {} as Record<string, string> });
+  const [newRowKey, setNewRowKey] = useState("");
+  const knownRowKeys = useRef<Set<string> | undefined>(undefined);
   const pageSize = 25;
 
   const eventMap = useMemo(() => new Map(props.events.map((event) => [event.id, event.name])), [props.events]);
@@ -114,6 +116,19 @@ export function FinancialSpreadsheet(props: Props) {
       return ascending ? result : -result;
     });
   }, [rows, query, typeFilter, sortKey, ascending]);
+  useEffect(() => {
+    const nextKeys = new Set(rows.map((row) => row.key));
+    if (!knownRowKeys.current) {
+      knownRowKeys.current = nextKeys;
+      return;
+    }
+    const added = rows.find((row) => !knownRowKeys.current?.has(row.key));
+    knownRowKeys.current = nextKeys;
+    if (!added) return;
+    setNewRowKey(added.key);
+    const timer = window.setTimeout(() => setNewRowKey(""), 1_400);
+    return () => window.clearTimeout(timer);
+  }, [rows]);
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const visibleRows = filteredRows.slice(page * pageSize, page * pageSize + pageSize);
   const imageRows = filteredRows.filter((row) => Boolean(row.image));
@@ -310,13 +325,40 @@ export function FinancialSpreadsheet(props: Props) {
           <button onClick={() => setSelected(new Set())} className="ml-auto font-bold text-slate-500">Clear</button>
         </div> : null}
       </div>
-      <div className="max-w-full overflow-x-auto overscroll-x-contain">
+      <div className="space-y-2 p-3 lg:hidden">
+        {visibleRows.map((row) => {
+          const isSelected = selected.has(row.key);
+          return <article key={row.key} className={`mobile-record-card ${newRowKey === row.key ? "is-new" : ""} ${isSelected ? "ring-2 ring-sky-400" : ""}`}>
+            <div className="flex items-start gap-3">
+              <input aria-label={`Select ${row.item}`} type="checkbox" checked={isSelected} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.key); else next.delete(row.key); return next; })} className="mt-1" />
+              <button type="button" onClick={() => openFullEditor(row)} className="flex min-w-0 flex-1 items-start gap-3 text-left">
+                {row.image ? <img src={row.image} alt="" loading="lazy" className="size-14 shrink-0 rounded-xl bg-slate-100 object-contain dark:bg-slate-900" /> : <span className="grid size-14 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-900"><Eye size={18} /></span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-black text-slate-950 dark:text-white">{row.item}</span>
+                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-500"><span className="capitalize">{row.type}</span><span>·</span><span>{row.status}</span>{row.worker ? <><span>·</span><span>{row.worker}</span></> : null}</span>
+                  <span className="mt-2 grid grid-cols-3 gap-2 text-xs"><span><small className="block text-slate-500">Cost</small><b>{formatMoney(row.bought)}</b></span><span><small className="block text-slate-500">Sold</small><b>{formatMoney(row.sold)}</b></span><span><small className="block text-slate-500">Profit</small><b className={row.profit >= 0 ? "text-emerald-600" : "text-rose-600"}>{formatMoney(row.profit)}</b></span></span>
+                </span>
+              </button>
+              <details className="relative shrink-0">
+                <summary className="grid size-10 cursor-pointer place-items-center rounded-xl bg-slate-100 dark:bg-slate-800" aria-label={`Actions for ${row.item}`}><MoreVertical size={18} /></summary>
+                <div className="absolute right-0 top-11 z-30 w-44 space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  <button type="button" onClick={() => openFullEditor(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Open details</button>
+                  <button type="button" onClick={() => void props.onDuplicate(row.type, row.id)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Duplicate</button>
+                  <button type="button" onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30">Delete</button>
+                </div>
+              </details>
+            </div>
+            <p className="mt-2 text-right text-[10px] font-bold text-slate-500">{new Date(row.date).toLocaleDateString()}</p>
+          </article>;
+        })}
+      </div>
+      <div className="hidden max-w-full overflow-x-auto overscroll-x-contain lg:block">
         <table className="min-w-[1080px] border-separate border-spacing-0 text-left text-xs">
           <thead className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-950"><tr><th className="sticky left-0 z-30 w-10 border-b border-r border-slate-200 bg-slate-100 p-2 dark:border-slate-800 dark:bg-slate-950"><input type="checkbox" checked={visibleRows.length > 0 && visibleRows.every((row) => selected.has(row.key))} onChange={(event) => setSelected((current) => { const next = new Set(current); visibleRows.forEach((row) => event.target.checked ? next.add(row.key) : next.delete(row.key)); return next; })} /></th>{allColumns.filter((column) => visibleColumns.has(column.key)).map((column) => <th key={column.key} className={`resize-x overflow-hidden whitespace-nowrap border-b border-r border-slate-200 p-3 font-black dark:border-slate-800 ${column.key === "item" ? "sticky left-10 z-20 bg-slate-100 dark:bg-slate-950" : ""}`}><button onClick={() => { if (["item", "type", "status", "bought", "sold", "profit", "date"].includes(column.key)) { if (sortKey === column.key) setAscending(!ascending); else { setSortKey(column.key as SortKey); setAscending(true); } } }} className="inline-flex items-center gap-1">{column.label}{sortKey === column.key ? ascending ? <ChevronUp size={12} /> : <ChevronDown size={12} /> : null}</button></th>)}</tr></thead>
           <tbody>{visibleRows.map((row) => {
             const soldInventory = row.type === "purchase" && (row.original as InventoryPurchase).status === "sold";
             const isSelected = selected.has(row.key);
-            return <tr key={row.key} onClick={(event) => { if (window.matchMedia("(max-width: 1023px)").matches && !(event.target as HTMLElement).closest("button,input,select,a")) openFullEditor(row); }} className={`group cursor-pointer transition-colors ${isSelected ? "bg-sky-50 ring-1 ring-inset ring-sky-200 dark:bg-sky-950/40 dark:ring-sky-800" : soldInventory ? "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-950 dark:text-slate-400 dark:hover:bg-slate-800" : "bg-white hover:bg-orange-50/40 dark:bg-slate-900 dark:hover:bg-slate-800"}`}><td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-inherit p-2 dark:border-slate-800"><input aria-label={`Select ${row.item}`} type="checkbox" checked={isSelected} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.key); else next.delete(row.key); return next; })} /></td>{allColumns.filter((column) => visibleColumns.has(column.key)).map((column) => <td key={column.key} onClick={() => { if (!window.matchMedia("(min-width: 1024px)").matches) return; if (column.key === "photo") openFullEditor(row); else if (!["type", "profit", "margin", "actions"].includes(column.key)) beginEdit(row); }} className={`whitespace-nowrap border-b border-r border-slate-100 p-2 align-middle dark:border-slate-800 ${column.key === "item" ? "sticky left-10 z-10 bg-inherit" : ""} ${soldInventory && !["photo", "status", "actions"].includes(column.key) ? "opacity-65" : ""}`}>{cell(column.key, row)}</td>)}</tr>;
+            return <tr key={row.key} className={`group cursor-pointer transition-colors ${newRowKey === row.key ? "record-row-new" : ""} ${isSelected ? "bg-sky-50 ring-1 ring-inset ring-sky-200 dark:bg-sky-950/40 dark:ring-sky-800" : soldInventory ? "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-950 dark:text-slate-400 dark:hover:bg-slate-800" : "bg-white hover:bg-orange-50/40 dark:bg-slate-900 dark:hover:bg-slate-800"}`}><td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-inherit p-2 dark:border-slate-800"><input aria-label={`Select ${row.item}`} type="checkbox" checked={isSelected} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.key); else next.delete(row.key); return next; })} /></td>{allColumns.filter((column) => visibleColumns.has(column.key)).map((column) => <td key={column.key} onClick={() => { if (column.key === "photo") openFullEditor(row); else if (!["type", "profit", "margin", "actions"].includes(column.key)) beginEdit(row); }} className={`whitespace-nowrap border-b border-r border-slate-100 p-2 align-middle dark:border-slate-800 ${column.key === "item" ? "sticky left-10 z-10 bg-inherit" : ""} ${soldInventory && !["photo", "status", "actions"].includes(column.key) ? "opacity-65" : ""}`}>{cell(column.key, row)}</td>)}</tr>;
           })}</tbody>
         </table>
       </div>

@@ -1,10 +1,11 @@
-import { CalendarDays, History, Home, PlusCircle, Settings } from "lucide-react";
+import { CalendarDays, History, Home, PlusCircle, Settings, WalletCards } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/events", label: "Events", icon: CalendarDays },
-  { to: "/events/new", label: "Add Event", icon: PlusCircle },
+  { to: "/events/new", label: "Add", icon: PlusCircle },
+  { to: "/sales", label: "Sales", icon: WalletCards },
   { to: "/past", label: "Past", icon: History },
   { to: "/settings", label: "Settings", icon: Settings }
 ];
@@ -12,7 +13,7 @@ const items = [
 export function BottomNav() {
   return (
     <nav aria-label="Primary navigation" className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-slate-200/80 bg-white/90 px-2 pt-1.5 shadow-[0_-12px_36px_-24px_rgba(15,23,42,0.45)] backdrop-blur-xl lg:hidden dark:border-slate-800/90 dark:bg-night-950/92">
-      <div className="mx-auto grid max-w-md grid-cols-5 gap-1">
+      <div className="mx-auto grid max-w-lg grid-cols-6 gap-0.5">
         {items.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}

@@ -12,7 +12,7 @@ import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
-import { ActionCard, AppButton, DashboardSkeleton, ResponsiveModal } from "../components/sales/SalesDashboardPrimitives";
+import { ActionCard, AppButton, DashboardSkeleton, FloatingActionButton, ResponsiveModal, Tooltip } from "../components/sales/SalesDashboardPrimitives";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses, saveBusinessExpense } from "../services/database/businessExpenseRepository";
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
@@ -109,6 +109,7 @@ export function SalesControlPage() {
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [usingCachedData, setUsingCachedData] = useState(Boolean(cachedSales.length || cachedPurchases.length || cachedExpenses.length));
+  const [lastRefreshed, setLastRefreshed] = useState<Date>();
   const loadInFlightRef = useRef(false);
   const [imageFile, setImageFile] = useState<File>();
   const [backImageFile, setBackImageFile] = useState<File>();
@@ -139,7 +140,7 @@ export function SalesControlPage() {
   const [pendingTransactionPath, setPendingTransactionPath] = useState("");
   const [chooserSelection, setChooserSelection] = useState<{ key: string; label: string }>();
   const chooserTimerRef = useRef<number | undefined>(undefined);
-  const addTransactionButtonRef = useRef<HTMLButtonElement>(null);
+  const addTransactionTriggerRef = useRef<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -211,6 +212,7 @@ export function SalesControlPage() {
     setUsingCachedData(errors.length > 0);
     setLoading(false);
     setSyncing(false);
+    setLastRefreshed(new Date());
     loadInFlightRef.current = false;
   }
 
@@ -868,15 +870,16 @@ export function SalesControlPage() {
           <div className="flex flex-wrap items-center gap-3"><p className="eyebrow">Financial control</p><SyncStatusBadge syncing={syncing} /></div>
           <h1 className="mt-1 text-3xl font-black tracking-tight text-white sm:text-4xl">Sales Control</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Track sales, inventory, business costs, ownership, and trades from one fast workspace.</p>
+          <p className="mt-2 text-xs font-bold text-slate-500">{lastRefreshed ? `Last refreshed ${lastRefreshed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : usingCachedData ? "Showing cached records while refreshing" : "Preparing live financial data"}</p>
         </div>
-        <AppButton ref={addTransactionButtonRef} onClick={() => setAddSheet("main")} className="w-full shrink-0 sm:w-auto sm:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
+        <AppButton onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; setAddSheet("main"); }} className="hidden shrink-0 lg:inline-flex lg:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
       </header>
       <ResponsiveModal
         open={Boolean(addSheet)}
         title={addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"}
         description={addSheet === "main" ? "Choose a transaction type. You can add one item, multiple items, or a complete lot." : addSheet === "purchase_cost" ? "Choose an inventory source or business cost category." : "Use a single record or enter a multi-item lot."}
         onClose={closeAddSheet}
-        restoreFocusRef={addTransactionButtonRef}
+        restoreFocusRef={addTransactionTriggerRef}
         size="lg"
         dismissible={!chooserSelection}
       >
@@ -988,6 +991,12 @@ export function SalesControlPage() {
             {hasMoreSales ? <AppButton variant="ghost" onClick={() => void loadMoreSales()} className="col-span-2">Load more sales</AppButton> : null}
           </div>
         </section>
+      </div>
+      <div className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-2 lg:hidden">
+        <Tooltip label="Quick camera sale">
+          <button type="button" onClick={() => openSale(undefined, events, true)} aria-label="Quick camera sale" className="grid size-12 place-items-center rounded-2xl border border-slate-700 bg-slate-900 text-orange-300 shadow-xl active:scale-95"><Camera size={20} /></button>
+        </Tooltip>
+        <FloatingActionButton label="Add transaction" onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; setAddSheet("main"); }}><Plus size={20} /> Add</FloatingActionButton>
       </div>
 
       {exportOpen ? (
