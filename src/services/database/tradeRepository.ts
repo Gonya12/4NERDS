@@ -5,7 +5,7 @@ import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
-import { transactionReview } from "../../utils/transactionMath";
+import { missingHistoricalCostBasisItems, transactionReview } from "../../utils/transactionMath";
 import { roundMoney } from "../../utils/paymentMath";
 import { buildFinancialTransactionPayload } from "./financialTransactionPayload";
 
@@ -397,6 +397,8 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
 export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
   if (input.transactionType === "trade" || input.transactionType === "cash_trade") return completeTrade(input, inventory, onProgress);
   if (input.status !== "draft") throw new Error("Only a draft transaction can be completed.");
+  const missingBasis = missingHistoricalCostBasisItems(input);
+  if (missingBasis.length) throw new Error(`Cost basis required for: ${missingBasis.map((item) => item.itemName || "Unnamed item").join(", ")}.`);
   const timestamp = nowIso();
   let transaction: TradeTransaction = { ...input, status: "draft" };
   onProgress?.("transaction");

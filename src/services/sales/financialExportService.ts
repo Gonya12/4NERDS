@@ -5,7 +5,7 @@ import type { FinancialDateRange } from "../../utils/financialDateRange";
 import { financialDateBounds, isWithinFinancialRange } from "../../utils/financialDateRange";
 import { roundMoney } from "../../utils/paymentMath";
 import { expenseCategoryLabels, inventoryQuantitySummary, pokemonCategoryLabels } from "../../utils/salesControl";
-import { dailyFinancialSummary, transactionReview } from "../../utils/transactionMath";
+import { dailyFinancialSummary, hasKnownHistoricalCostBasis, transactionReview } from "../../utils/transactionMath";
 import { tradeSummary } from "../../utils/tradeMath";
 export { createCsv, downloadCsv, financialExportFilename } from "./financialCsvService";
 
@@ -48,7 +48,7 @@ export type FinancialExportData = {
 
 const transactionHeaders = [
   "Transaction ID", "Transaction Date", "Transaction Time", "Transaction Type", "Transaction Subtype", "Status",
-  "Entry Mode", "Item Count", "Customer or Seller", "Event", "Event Day", "Payment Method", "Cash Received",
+  "Item Mode", "Item Count", "Customer or Seller", "Event", "Event Day", "Payment Method", "Cash Received",
   "Cash Paid", "Bundle Total", "Allocation Method", "Market Value In", "Market Value Out", "Agreed Value In",
   "Agreed Value Out", "Total Cost Basis", "Gross Profit", "Estimated Trade Gain/Loss", "Operating Expense",
   "Entered By", "Notes", "Created At", "Updated At"
@@ -152,8 +152,8 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       transaction.purchaseSource || transaction.expenseCategory || "", transaction.status, transaction.itemMode, transaction.items.length,
       transaction.tradePartner || "", eventName(input.events, transaction.eventId), transaction.eventDayId || "", transaction.paymentMethod || "",
       transaction.cashReceived, transaction.cashPaid, transaction.bundleTotal ?? "", transaction.pricingMode,
-      summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed, review.basis,
-      transaction.transactionType === "sale" ? review.grossProfit : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.estimatedGainLoss : "",
+      summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed, transaction.transactionType === "sale" && !review.basisComplete ? "" : review.basis,
+      transaction.transactionType === "sale" ? review.grossProfit ?? "" : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.estimatedGainLoss : "",
       operatingExpense || "", workerName(input.workers, transaction.enteredByWorkerId || transaction.paidByWorkerId), transaction.notes || "",
       transaction.createdAt, transaction.updatedAt
     ];
@@ -175,6 +175,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   const inventoryById = new Map(input.purchases.map((row) => [row.id, row]));
   const itemRows: ExportValue[][] = transactions.flatMap((transaction) => transaction.items.map((item) => {
     const inventory = inventoryById.get(item.inventoryPurchaseId || item.createdInventoryPurchaseId || "");
+    const basisKnown = item.direction !== "outgoing" || hasKnownHistoricalCostBasis(item);
     const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.allocatedCostBasis;
     return [
       transaction.id, item.id, transaction.tradeDate, transaction.transactionType, item.direction, item.itemName, pokemonCategoryLabels[item.itemType],
@@ -185,7 +186,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       item.grade || inventory?.grade || "", item.certificateNumber || inventory?.certificateNumber || "", shareValue(item, input.workers, "gonzalo"),
       shareValue(item, input.workers, "thiago"), item.ownershipShares.filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
       ownershipBreakdown(item, input.workers), item.marketValue, item.tradePercentage ?? "", item.agreedTradeValue, item.boughtPrice ?? "",
-      basis, item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null ? "" : roundMoney(item.soldPrice - basis),
+      basisKnown ? basis : "", item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null || !basisKnown ? "" : roundMoney(item.soldPrice - basis),
       inventory?.marketPriceVariant || "", inventory?.marketValue ?? "", inventory?.tcgplayerUrl || "", eventName(input.events, transaction.eventId),
       item.imageUrl || transaction.generalImageUrl || "", item.notes || ""
     ];
@@ -247,7 +248,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     id: item.createdSalesRecordId || item.id, financialTransactionId: transaction.id, financialTransactionItemId: item.id,
     eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
     itemName: item.itemName, category: item.itemType, quantity: item.quantity, soldPrice: item.soldPrice,
-    boughtPrice: item.historicalCostBasis, marketValue: item.marketValue, paymentMethod: transaction.paymentMethod,
+    boughtPrice: hasKnownHistoricalCostBasis(item) ? item.historicalCostBasis : undefined, marketValue: item.marketValue, paymentMethod: transaction.paymentMethod,
     soldByWorkerId: transaction.enteredByWorkerId, isRawCard: item.itemType === "raw_card", inventoryPurchaseId: item.inventoryPurchaseId,
     notes: item.notes, soldAt: transaction.tradeDate, pendingUpload: false, createdAt: item.createdAt, updatedAt: item.updatedAt,
     ownershipShares: item.ownershipShares

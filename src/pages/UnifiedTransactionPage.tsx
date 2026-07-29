@@ -6,6 +6,7 @@ import { CardScanPanel } from "../components/sales/CardScanPanel";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { IncomingBatchPricing } from "../components/sales/IncomingBatchPricing";
 import { TransactionItemPricing } from "../components/sales/TransactionItemPricing";
+import { TransactionSaleReview } from "../components/sales/TransactionSaleReview";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, Toast, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
@@ -21,7 +22,7 @@ import type { BusinessExpenseCategory, CardCondition, Event, FinancialTransactio
 import { formatMoney } from "../utils/paymentMath";
 import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
-import { allocateTransactionTotal, transactionReview, type AllocationMethod } from "../utils/transactionMath";
+import { allocateTransactionTotal, hasKnownHistoricalCostBasis, missingHistoricalCostBasisItems, transactionReview, type AllocationMethod } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 
 const input = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-950";
@@ -233,7 +234,8 @@ export function UnifiedTransactionPage() {
     const item: TradeItem = {
       ...blankTradeItem(transaction.id, "outgoing"), inventoryPurchaseId: purchase.id, itemName: purchase.itemName,
       itemType: purchase.category, quantity: Math.max(1, purchase.quantity - purchase.quantitySold),
-      marketValue: Number(purchase.marketValue || 0), historicalCostBasis: purchase.totalCost,
+      marketValue: Number(purchase.marketValue || 0), historicalCostBasis: Number(purchase.totalCost ?? 0),
+      zeroCostBasisConfirmed: false,
       soldPrice: Number(purchase.marketValue || 0), imageUrl: purchase.frontImageUrl || purchase.imageUrl,
       imagePath: purchase.frontImagePath || purchase.imagePath, collectorNumber: purchase.collectorNumber,
       cardSet: purchase.cardSet, cardSetId: purchase.cardSetId, cardSetCode: purchase.cardSetCode,
@@ -274,6 +276,12 @@ export function UnifiedTransactionPage() {
     setMessage("");
     const relevant = transaction.transactionType === "expense" ? transaction.items : transaction.items.filter((item) => item.itemName.trim());
     if (!relevant.length) { setMessage("Add at least one item or expense description."); return; }
+    const missingBasis = missingHistoricalCostBasisItems(transaction);
+    if (missingBasis.length) {
+      setMessage(`Cost basis required for: ${missingBasis.map((item) => item.itemName || "Unnamed item").join(", ")}. Enter the historical cost or explicitly confirm a true $0 cost basis.`);
+      setStep(2);
+      return;
+    }
     if (transaction.transactionType !== "expense" && relevant.some((item) => !ownershipIsValid(item))) { setMessage("Every item must have ownership totaling 100%."); return; }
     if (transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009) { setMessage("Allocate the complete bundle total before saving."); return; }
     setBusy(true);
@@ -386,11 +394,14 @@ export function UnifiedTransactionPage() {
       <div className="space-y-2">{transaction.items.map((item) => <article key={item.id} className="surface-card grid gap-3 p-3 sm:grid-cols-[4rem_1fr_auto] sm:items-center">
         {item.imageUrl || transaction.generalImageUrl ? <img src={item.imageUrl || transaction.generalImageUrl} alt="" className="size-16 rounded-xl object-contain" /> : <div className="grid size-16 place-items-center rounded-xl bg-slate-100 text-slate-400"><PackagePlus size={20} /></div>}
         <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><b className="truncate">{item.itemName || "Details pending"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${item.direction === "outgoing" ? "bg-orange-100 text-orange-700" : item.direction === "incoming" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>{item.direction}</span></div><div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 sm:grid-cols-4"><span>Qty <b className="text-slate-700">{item.quantity}</b></span><span>Market <b className="text-slate-700">{formatMoney(item.marketValue)}</b></span><span>Basis <b className="text-slate-700">{formatMoney(item.historicalCostBasis || item.allocatedCostBasis)}</b></span><span>{transaction.transactionType === "sale" ? "Sold" : "Cost"} <b className="text-slate-700">{formatMoney(transaction.transactionType === "sale" ? item.soldPrice || 0 : item.boughtPrice || 0)}</b></span></div><p className="mt-1 truncate text-xs text-slate-500">{item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
-        <div className="flex items-center justify-end gap-1"><button type="button" onClick={() => setEditing(item)} className="min-h-10 rounded-lg bg-violet-100 px-3 text-xs font-black text-violet-700">Edit</button><button type="button" onClick={() => { const duplicateId = crypto.randomUUID(); const duplicate = { ...item, id: duplicateId, inventoryPurchaseId: undefined, images: item.images?.map((image) => ({ ...image, id: crypto.randomUUID(), transactionItemId: duplicateId })) }; setTransaction({ ...transaction, items: [...transaction.items, duplicate] }); }} aria-label={`Duplicate ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-slate-100"><Copy size={15} /></button><button type="button" onClick={() => setTransaction({ ...transaction, items: transaction.items.filter((row) => row.id !== item.id) })} aria-label={`Remove ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-rose-50 text-rose-600"><Trash2 size={15} /></button></div>
+        <div className="flex items-center justify-end gap-1"><button type="button" onClick={() => setEditing(item)} className="min-h-10 rounded-lg bg-violet-100 px-3 text-xs font-black text-violet-700">Edit</button><button type="button" onClick={() => { const duplicateId = crypto.randomUUID(); const duplicate = { ...item, id: duplicateId, inventoryPurchaseId: undefined, zeroCostBasisConfirmed: false, images: item.images?.map((image) => ({ ...image, id: crypto.randomUUID(), transactionItemId: duplicateId })) }; setTransaction({ ...transaction, items: [...transaction.items, duplicate] }); }} aria-label={`Duplicate ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-slate-100"><Copy size={15} /></button><button type="button" onClick={() => setTransaction({ ...transaction, items: transaction.items.filter((row) => row.id !== item.id) })} aria-label={`Remove ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-rose-50 text-rose-600"><Trash2 size={15} /></button></div>
       </article>)}</div>
     </section> : null}
 
-    {step === 2 ? <section className="space-y-3"><div className="surface-card p-4"><p className="eyebrow">Transaction Review</p><h2 className="text-xl font-black">{typeLabel} · {transaction.items.length} item{transaction.items.length === 1 ? "" : "s"}</h2><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Cash received", transaction.transactionType === "sale" ? review.sold : 0],["Cash paid", transaction.transactionType === "purchase" ? review.bought : transaction.transactionType === "expense" ? Number(transaction.bundleTotal || 0) : 0],["Cost basis", review.basis],["Gross profit", review.grossProfit]].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">{label}</small><b>{formatMoney(Number(value))}</b></div>)}</div>{transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009 ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Bundle allocation is off by {formatMoney(review.bundleDifference)}.</p> : null}{transaction.items.some((item) => transaction.transactionType !== "expense" && !ownershipIsValid(item)) ? <p className="mt-2 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">One or more item ownership splits do not total 100%.</p> : null}{transaction.items.some((item) => !item.historicalCostBasis && transaction.transactionType === "sale") ? <p className="mt-2 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-700">One or more sold items has a missing cost basis.</p> : null}</div><div className="surface-card p-4"><h3 className="font-black">Owner profit shares</h3>{Array.from(review.ownerProfit.entries()).map(([workerId, amount]) => <p key={workerId} className="mt-1 text-sm">{workers.find((row) => row.id === workerId)?.name || "Owner"}: <b>{formatMoney(amount)}</b></p>)}{!review.ownerProfit.size ? <p className="text-sm text-slate-500">Calculated from each item’s ownership after items are assigned.</p> : null}</div></section> : null}
+    {step === 2 ? transaction.transactionType === "sale"
+      ? <TransactionSaleReview transaction={transaction} workers={workers} onEditCostBasis={setEditing} />
+      : <section className="space-y-3"><div className="surface-card p-4"><p className="eyebrow">Transaction Review</p><h2 className="text-xl font-black">{typeLabel} · {transaction.items.length} item{transaction.items.length === 1 ? "" : "s"}</h2><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Cash received", 0],["Cash paid", transaction.transactionType === "purchase" ? review.bought : Number(transaction.bundleTotal || 0)],["Cost basis", review.basis],["Gross profit", review.grossProfit ?? 0]].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">{label}</small><b>{formatMoney(Number(value))}</b></div>)}</div>{transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009 ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Bundle allocation is off by {formatMoney(review.bundleDifference)}.</p> : null}{transaction.items.some((item) => transaction.transactionType !== "expense" && !ownershipIsValid(item)) ? <p className="mt-2 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">One or more item ownership splits do not total 100%.</p> : null}</div></section>
+      : null}
 
     <ResponsiveModal
       open={Boolean(editing)}
@@ -436,11 +447,37 @@ export function UnifiedTransactionPage() {
               setEditing(item);
               updateItem(item);
             })}</label>
-            {transaction.transactionType === "sale" ? <label><span className="text-xs font-black">Original Cost Basis</span>{editing.inventoryPurchaseId ? <input type="number" value={editing.historicalCostBasis} readOnly className={`${input} bg-slate-100`} /> : moneyInput(editing.historicalCostBasis, (historicalCostBasis) => {
-              const item = { ...editing, historicalCostBasis };
-              setEditing(item);
-              updateItem(item);
-            })}{editing.inventoryPurchaseId ? <small className="block text-slate-500">Historical cost basis loaded from inventory</small> : null}</label> : null}
+            {transaction.transactionType === "sale" ? <div className="space-y-2">
+              <label><span className="text-xs font-black">Original Cost Basis</span>
+                {editing.inventoryPurchaseId && hasKnownHistoricalCostBasis(editing) && editing.historicalCostBasis > 0
+                  ? <input type="number" value={editing.historicalCostBasis} readOnly className={`${input} bg-slate-100`} />
+                  : <input
+                    type="number"
+                    min="0"
+                    step=".01"
+                    value={editing.historicalCostBasis > 0 || editing.zeroCostBasisConfirmed ? editing.historicalCostBasis : ""}
+                    placeholder="Cost basis required"
+                    onChange={(event) => {
+                      const raw = event.target.value;
+                      const item = { ...editing, historicalCostBasis: raw === "" ? 0 : Math.max(0, Number(raw)), zeroCostBasisConfirmed: false };
+                      setEditing(item);
+                      updateItem(item);
+                    }}
+                    className={input}
+                  />}
+              </label>
+              {editing.inventoryPurchaseId && editing.historicalCostBasis > 0 ? <small className="block text-slate-500">Historical cost basis loaded from inventory total cost.</small> : null}
+              {!hasKnownHistoricalCostBasis(editing) ? <button type="button" onClick={() => {
+                const item = { ...editing, historicalCostBasis: 0, zeroCostBasisConfirmed: true };
+                setEditing(item);
+                updateItem(item);
+              }} className="min-h-10 w-full rounded-xl border border-amber-400 bg-amber-50 px-3 text-xs font-black text-amber-900">Confirm this item had a $0 cost basis</button> : null}
+              {editing.zeroCostBasisConfirmed ? <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 p-2 text-xs font-bold text-emerald-800"><span>$0 cost basis explicitly confirmed</span><button type="button" onClick={() => {
+                const item = { ...editing, zeroCostBasisConfirmed: false };
+                setEditing(item);
+                updateItem(item);
+              }} className="rounded-lg bg-white px-2 py-1 font-black">Undo</button></div> : null}
+            </div> : null}
             <label><span className="text-xs font-black">Collector number</span><input value={editing.collectorNumber || ""} onChange={(event) => {
               const item = { ...editing, collectorNumber: event.target.value };
               setEditing(item);

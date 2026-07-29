@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createCsv, financialExportFilename, type CsvTable } from "../src/services/sales/financialCsvService.ts";
 
@@ -20,4 +21,10 @@ test("CSV uses BOM, CRLF, quoting, and formula-injection protection", () => {
 
 test("CSV filenames are descriptive and range-specific", () => {
   assert.equal(financialExportFilename("daily", "2026-07-01_to_2026-07-29"), "4Nerds_Daily_Summary_2026-07-01_to_2026-07-29.csv");
+});
+
+test("CSV and XLSX shared transaction export schema uses Item Mode", () => {
+  const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
+  assert.ok(source.includes('"Item Mode"'));
+  assert.ok(!source.includes('"Entry Mode"'));
 });
