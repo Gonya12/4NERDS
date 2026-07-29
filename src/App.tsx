@@ -80,6 +80,7 @@ function ScrollToTop({ containerRef }: { containerRef: React.RefObject<HTMLEleme
 export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [pwaStatus, setPwaStatus] = useState(getPwaStatus());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("4nerds_sidebar_collapsed") === "true");
   const mainRef = useRef<HTMLElement | null>(null);
   const location = useLocation();
 
@@ -116,8 +117,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-transparent text-ink transition-colors duration-240 dark:text-slate-100">
       <ScrollToTop containerRef={mainRef} />
-      <DesktopSidebar />
-      <main ref={mainRef} id="main-content" className="mx-auto min-h-[100dvh] max-w-md px-4 pb-36 pt-4 sm:max-w-2xl sm:px-5 md:max-w-4xl lg:ml-64 lg:max-w-none lg:px-8 lg:pb-10 lg:pt-6 xl:px-10">
+      <DesktopSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => {
+        const next = !value;
+        localStorage.setItem("4nerds_sidebar_collapsed", String(next));
+        return next;
+      })} />
+      <main ref={mainRef} id="main-content" className={`mx-auto min-h-[100dvh] max-w-md px-4 pb-36 pt-4 transition-[margin] duration-240 ease-premium sm:max-w-2xl sm:px-5 md:max-w-4xl lg:max-w-none lg:px-8 lg:pb-10 lg:pt-6 xl:px-10 ${sidebarCollapsed ? "lg:ml-20" : "lg:ml-64"}`}>
         <div key={location.pathname} className="page-enter">
           <Routes location={location}>
             <Route path="/" element={<HomePage />} />

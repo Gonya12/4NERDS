@@ -1,4 +1,8 @@
-import { BarChart3, Camera, ChartArea, ChartBarStacked, ChartPie, FileSpreadsheet, LineChart, Maximize2, PackagePlus, Plus, Receipt, TrendingUp, X } from "lucide-react";
+import {
+  Activity, BadgeDollarSign, BarChart3, Boxes, CalendarDays, Camera, ChartArea, ChartBarStacked, ChartPie,
+  Download, FileSpreadsheet, Handshake, LineChart, Maximize2, PackagePlus, Plus, Receipt, TrendingDown,
+  TrendingUp, Users, WalletCards, X
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, TradeTransaction, Worker } from "../../types/models";
 import { filterFinancialRecords, financialDateRangeLabels, isWithinFinancialRange, type FinancialDateRange } from "../../utils/financialDateRange";
@@ -6,6 +10,7 @@ import { formatMoney } from "../../utils/paymentMath";
 import { effectiveSaleOwnership, expenseCategoryLabels, financialOverview, inventoryQuantitySummary, inventoryStatusLabels, ownerProfitRows, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { ImageLightbox } from "./ImageLightbox";
 import { tradeSummary } from "../../utils/tradeMath";
+import { AppButton, DashboardEmptyState, DashboardPanel, MetricCard } from "./SalesDashboardPrimitives";
 
 type FeedFilter = "all" | "in_stock" | "sold" | "sales" | "purchases" | "expenses" | "missing";
 type ChartMetric = "revenue" | "gross_profit" | "net_profit" | "expenses" | "inventory" | "unsold_inventory" | "items_sold" | "average_sale" | "owner_profit" | "trade_value" | "trade_value_in" | "trade_value_out" | "trade_gain" | "trade_cash_received" | "trade_cash_paid" | "trade_count" | "average_trade";
@@ -32,6 +37,10 @@ type Props = {
   onEditSale: (sale: SalesRecord) => void;
   onEditPurchase: (purchase: InventoryPurchase) => void;
   onEditExpense: (expense: BusinessExpense) => void;
+  onOpenDaily: () => void;
+  onOpenTrades: () => void;
+  onExport: () => void;
+  onBatchInventory: () => void;
 };
 
 function dateGroup(value: string, grouping: ChartGrouping) {
@@ -209,10 +218,13 @@ export function SalesAnalyticsPanel(props: Props) {
   }, [props.sales, props.purchases, props.expenses, feedFilter]);
 
   const summaryCards = [
-    ["Revenue", overview.revenue, "text-emerald-600"], ["Gross profit", overview.grossProfit, "text-sky-600"],
-    ["Operating expenses", overview.operatingExpenses + overview.eventTableCosts, "text-rose-600"], ["Inventory purchased", overview.inventoryInvestment, "text-amber-600"],
-    ["Unsold inventory cost", overview.unsoldInventoryCost, "text-cyan-600"], ["Net profit", overview.netProfit, overview.netProfit >= 0 ? "text-emerald-600" : "text-rose-600"]
-  ] as const;
+    { label: "Revenue", value: overview.revenue, accent: "green" as const, icon: <WalletCards size={18} /> },
+    { label: "Gross profit", value: overview.grossProfit, accent: "blue" as const, icon: <BadgeDollarSign size={18} /> },
+    { label: "Operating expenses", value: overview.operatingExpenses + overview.eventTableCosts, accent: "red" as const, icon: <TrendingDown size={18} /> },
+    { label: "Inventory purchased", value: overview.inventoryInvestment, accent: "orange" as const, icon: <Boxes size={18} /> },
+    { label: "Unsold inventory cost", value: overview.unsoldInventoryCost, accent: "cyan" as const, icon: <PackagePlus size={18} /> },
+    { label: "Net profit", value: overview.netProfit, accent: overview.netProfit >= 0 ? "purple" as const : "red" as const, icon: <TrendingUp size={18} /> }
+  ];
 
   function renderChart(expanded = false) {
     const heightClass = expanded ? "h-[55vh] min-h-80" : "h-64 sm:h-72";
@@ -220,7 +232,7 @@ export function SalesAnalyticsPanel(props: Props) {
       const action = chartMetric === "expenses" ? { label: "Add Expense", run: props.onAddExpense }
         : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? { label: "Add Purchase", run: props.onAddPurchase }
           : { label: "Add Sale", run: props.onAddSale };
-      return <div className={`flex ${heightClass} flex-col items-center justify-center rounded-xl bg-slate-50 p-5 text-center dark:bg-slate-950/70`}><BarChart3 size={32} className="text-slate-400" /><p className="mt-2 font-black text-ink dark:text-white">No records in this date range</p><p className="mt-1 max-w-sm text-xs text-slate-500">Add a matching record or choose a broader date range to populate this chart.</p><button onClick={action.run} className="mt-3 min-h-11 rounded-xl bg-coral px-4 text-sm font-black text-white">{action.label}</button></div>;
+      return <div className={heightClass}><DashboardEmptyState icon={<BarChart3 size={24} />} title="No chart data yet" description="Add records in this date range to see a performance trend." action={<AppButton onClick={action.run}>{action.label}</AppButton>} /></div>;
     }
     if (chartRows.length === 1) {
       const row = chartRows[0];
@@ -232,17 +244,14 @@ export function SalesAnalyticsPanel(props: Props) {
   }
 
   return (
-    <div className="space-y-4">
-      <section className="surface-card space-y-3 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-3"><div><p className="eyebrow">Financial overview</p><h2 className="font-black text-ink dark:text-white">Performance</h2></div><TrendingUp className="text-coral" size={22} /></div>
+    <div className="contents">
+      <DashboardPanel eyebrow="Financial overview" title="Performance snapshot" className="dashboard-reveal lg:col-span-5 lg:col-start-1 lg:row-start-1" action={<TrendingUp className="text-coral" size={22} />}>
         <select value={props.dateRange} onChange={(event) => props.onDateRange(event.target.value as FinancialDateRange)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white">{Object.entries(financialDateRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
         {props.dateRange === "custom" ? <div className="grid grid-cols-2 gap-2"><input type="date" value={props.customStart} onChange={(event) => props.onCustomStart(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" /><input type="date" value={props.customEnd} onChange={(event) => props.onCustomEnd(event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" /></div> : null}
-        <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">{summaryCards.map(([label, value, color]) => <div key={label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950/70"><p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">{label}</p><p className={`mt-1 truncate text-lg font-black ${color}`}>{formatMoney(value)}</p></div>)}</div>
-        {ownerRows.size || ownerInventory.size ? <div className="grid grid-cols-2 gap-2">{props.workers.filter((worker) => ownerRows.has(worker.id) || ownerInventory.has(worker.id)).map((worker) => <div key={worker.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800"><p className="text-xs font-black text-slate-500">{worker.name}</p><p className="text-lg font-black text-emerald-600">{formatMoney(ownerRows.get(worker.id)?.profit || 0)} profit</p><p className="text-[11px] text-slate-500">{formatMoney(ownerRows.get(worker.id)?.revenue || 0)} revenue · {(ownerRows.get(worker.id)?.itemsSold || 0).toFixed(1)} items</p><p className="text-[11px] text-slate-500">{formatMoney(ownerInventory.get(worker.id)?.cost || 0)} inventory · {formatMoney(ownerInventory.get(worker.id)?.unsold || 0)} unsold</p>{ownerInventory.get(worker.id)?.balance ? <p className="text-[11px] font-bold text-amber-600">{formatMoney(ownerInventory.get(worker.id)?.balance || 0)} advanced by another owner</p> : null}</div>)}</div> : null}
-      </section>
+        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-3">{summaryCards.map((card) => <MetricCard key={card.label} label={card.label} value={formatMoney(card.value)} context={financialDateRangeLabels[props.dateRange]} icon={card.icon} accent={card.accent} negative={card.value < 0} />)}</div>
+      </DashboardPanel>
 
-      <section className="surface-card space-y-3 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><button onClick={() => setChartExpanded(true)} className="inline-flex min-h-9 items-center gap-1 rounded-lg bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Maximize2 size={15} /> Expand</button></div>
+      <DashboardPanel eyebrow="Performance charts" title="Explore your numbers" className="dashboard-reveal lg:col-span-8 lg:col-start-1 lg:row-start-2" action={<AppButton variant="ghost" onClick={() => setChartExpanded(true)} className="min-h-9 px-3 text-xs"><Maximize2 size={15} /> Expand</AppButton>}>
         <div className="grid gap-2 sm:grid-cols-3">
           <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"],["trade_value","Total Trade Value"],["trade_value_in","Value Traded In"],["trade_value_out","Value Traded Out"],["trade_gain","Estimated Trade Gain/Loss"],["trade_cash_received","Trade Cash Received"],["trade_cash_paid","Trade Cash Paid"],["trade_count","Number of Trades"],["average_trade","Average Trade Value"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{groupingOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -265,18 +274,25 @@ export function SalesAnalyticsPanel(props: Props) {
           </div>
         </div>
         <div className="flex items-end justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-800"><div><p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Total {metricLabels[chartMetric]}</p><p className="text-2xl font-black text-ink dark:text-white">{compactValue(chartTotal)}</p></div><p className="text-right text-xs text-slate-500">{chartRecordCount} recorded {chartRecordCount === 1 ? "record" : "records"}</p></div>
-        {renderChart()}
-      </section>
+        <div key={`${chartMetric}-${visibleChartStyle}-${chartGrouping}`} className="sales-chart-stage">{renderChart()}</div>
+      </DashboardPanel>
 
-      <section className="surface-card space-y-2 p-3">
-        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Quick Actions</p>
-        <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
-          <button onClick={props.onAddSale} className="btn-primary min-h-11 px-2"><Camera size={17} /> Add Sale</button>
-          <button onClick={props.onAddPurchase} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-2 text-sm font-black text-white"><PackagePlus size={17} /> Add Purchase</button>
-          <button onClick={props.onAddExpense} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-500 px-2 text-sm font-black text-white"><Receipt size={17} /> Add Expense</button>
-          <button onClick={props.onOpenSpreadsheet} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-800 px-2 text-sm font-black text-white dark:bg-slate-100 dark:text-ink"><FileSpreadsheet size={17} /> Spreadsheet</button>
+      <DashboardPanel eyebrow="Operations" title="Daily, trade & owner summary" className="dashboard-reveal lg:col-span-4 lg:col-start-9 lg:row-start-2" action={<Activity size={20} className="text-emerald-400" />}>
+        <div className="grid grid-cols-2 gap-2">
+          <AppButton variant="success" onClick={props.onOpenDaily} className="px-2"><CalendarDays size={17} /> Daily</AppButton>
+          <AppButton variant="secondary" onClick={props.onOpenTrades} className="px-2 text-violet-600 dark:text-violet-300"><Handshake size={17} /> Trades</AppButton>
+          <AppButton variant="secondary" onClick={props.onBatchInventory} className="px-2"><PackagePlus size={17} /> Batch</AppButton>
+          <AppButton variant="secondary" onClick={props.onExport} className="px-2"><Download size={17} /> Export</AppButton>
         </div>
-      </section>
+        <div className="mt-4 space-y-2">
+          {props.workers.filter((worker) => ownerRows.has(worker.id) || ownerInventory.has(worker.id)).slice(0, 3).map((worker) => <div key={worker.id} className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/55">
+            <div className="flex items-center justify-between gap-2"><p className="inline-flex min-w-0 items-center gap-2 truncate text-sm font-black"><Users size={15} className="text-violet-500" />{worker.name}</p><span className="text-sm font-black text-emerald-500">{formatMoney(ownerRows.get(worker.id)?.profit || 0)}</span></div>
+            <p className="mt-1 text-[11px] text-slate-500">{formatMoney(ownerRows.get(worker.id)?.revenue || 0)} revenue · {formatMoney(ownerInventory.get(worker.id)?.unsold || 0)} unsold</p>
+          </div>)}
+          {!ownerRows.size && !ownerInventory.size ? <DashboardEmptyState icon={<Users size={22} />} title="Owner summaries will appear here" description="Assign ownership to inventory and sales to track each owner." /> : null}
+        </div>
+        <AppButton variant="ghost" onClick={props.onOpenSpreadsheet} className="mt-3 w-full lg:hidden"><FileSpreadsheet size={17} /> Open full spreadsheet</AppButton>
+      </DashboardPanel>
 
       <section onClickCapture={(event) => {
         const image = (event.target as HTMLElement).closest("img");
@@ -285,14 +301,14 @@ export function SalesAnalyticsPanel(props: Props) {
         event.stopPropagation();
         const title = image.closest("button")?.querySelector("p")?.textContent || image.getAttribute("alt") || "Recent Activity image";
         setPreviewImage({ url: image.getAttribute("src") || "", title });
-      }} className="surface-card space-y-3 p-3 sm:p-4 [&_img]:cursor-zoom-in [&_img]:border-2 [&_img]:border-transparent [&_img]:transition [&_img]:hover:scale-105 [&_img]:hover:border-coral">
+      }} className="dashboard-panel dashboard-reveal space-y-3 lg:col-span-12 lg:row-start-3 [&_img]:cursor-zoom-in [&_img]:border-2 [&_img]:border-transparent [&_img]:transition [&_img]:hover:scale-105 [&_img]:hover:border-coral">
         <div className="flex items-center justify-between gap-3"><div><p className="eyebrow">Recent activity</p><h2 className="font-black text-ink dark:text-white">Records & Photos</h2></div><Plus size={18} className="text-coral" /></div>
         <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{(["all", "in_stock", "sold", "sales", "purchases", "expenses", "missing"] as FeedFilter[]).map((filter) => <button key={filter} onClick={() => setFeedFilter(filter)} className={`min-h-9 shrink-0 rounded-full px-3 text-xs font-black ${feedFilter === filter ? "bg-coral text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>{filter === "in_stock" ? "In Stock" : filter === "missing" ? "Missing Info" : filter.charAt(0).toUpperCase() + filter.slice(1)}</button>)}</div>
-        <div className="space-y-2">{recentRecords.length ? recentRecords.map((row) => {
+        <div className="space-y-2 [&>button]:rounded-2xl [&>button]:border [&>button]:border-transparent [&>button]:p-3 [&>button]:transition [&>button]:duration-180 hover:[&>button]:border-slate-200 hover:[&>button]:shadow-md dark:hover:[&>button]:border-slate-700">{recentRecords.length ? recentRecords.map((row) => {
           if (row.type === "sale") return <button key={row.id} onClick={() => props.onEditSale(row.sale)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700"><Camera size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.sale.itemName || "Sale details pending"}</p><p className="text-xs text-slate-500">Bought {formatMoney(row.sale.boughtPrice || 0)} · Sold {formatMoney(row.sale.soldPrice || 0)}</p><p className={`text-xs font-black ${saleProfit(row.sale) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(saleProfit(row.sale))} profit</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>;
           if (row.type === "purchase") { const summary = inventoryQuantitySummary(row.purchase, props.sales); return <button key={row.id} onClick={() => props.onEditPurchase(row.purchase)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700"><PackagePlus size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.purchase.itemName}</p><p className="text-xs text-slate-500">{formatMoney(row.purchase.totalCost)} · {summary.quantityRemaining}/{row.purchase.quantity} left</p><span className={`text-xs font-black ${row.purchase.status === "sold" ? "text-emerald-600" : row.purchase.status === "partially_sold" ? "text-amber-600" : row.purchase.status === "personal" ? "text-slate-500" : "text-sky-600"}`}>{inventoryStatusLabels[row.purchase.status]}</span></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>; }
           return <button key={row.id} onClick={() => props.onEditExpense(row.expense)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt={row.expense.description || "Expense receipt"} loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-700"><Receipt size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.expense.description}</p><p className="text-xs text-slate-500">{expenseCategoryLabels[row.expense.category]}</p><p className="text-xs font-black text-rose-600">-{formatMoney(row.expense.amount)}</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>;
-        }) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-950/70">No matching records yet.</p>}</div>
+        }) : <DashboardEmptyState icon={<Activity size={22} />} title="No transactions yet" description="Your sales, purchases, trades, and expenses will appear here." />}</div>
       </section>
       {chartExpanded ? <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm"><section role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" className="max-h-[95dvh] w-full max-w-5xl space-y-3 overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl dark:bg-slate-900"><div className="flex items-center justify-between gap-3"><div><p className="eyebrow">Expanded chart</p><h2 id="expanded-chart-title" className="text-xl font-black text-ink dark:text-white">{metricLabels[chartMetric]}</h2><p className="text-xs text-slate-500">{financialDateRangeLabels[props.dateRange]} · {chartRecordCount} records</p></div><button onClick={() => setChartExpanded(false)} aria-label="Close expanded chart" className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>{renderChart(true)}</section></div> : null}
       <ImageLightbox imageUrl={previewImage?.url} title={previewImage?.title || "Sales Control image"} onClose={() => setPreviewImage(undefined)} />

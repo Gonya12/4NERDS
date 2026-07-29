@@ -157,6 +157,164 @@ input, select, textarea {
   .status-pill {
     @apply inline-flex min-h-7 items-center rounded-full border border-transparent px-3 text-xs font-bold transition-colors duration-240;
   }
+
+  .sales-dashboard {
+    @apply mx-auto w-full min-w-0 max-w-[1600px] space-y-5;
+  }
+
+  .sales-dashboard-grid {
+    @apply grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5;
+  }
+
+  .dashboard-panel {
+    @apply min-w-0 rounded-[1.35rem] border border-slate-200/80 bg-white/95 p-4 shadow-card transition duration-240 ease-premium dark:border-slate-800/90 dark:bg-gradient-to-br dark:from-night-850 dark:to-night-900/95 sm:p-5;
+  }
+
+  .dashboard-panel:hover {
+    @apply dark:border-slate-700/90;
+  }
+
+  .dashboard-panel-header {
+    @apply mb-4 flex items-start justify-between gap-3;
+  }
+
+  .ui-button {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-black transition duration-180 ease-premium active:scale-[0.975] disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  .ui-button-primary {
+    @apply bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-glow hover:-translate-y-0.5 hover:brightness-110;
+  }
+
+  .ui-button-secondary {
+    @apply border border-slate-200 bg-white text-slate-700 shadow-sm hover:-translate-y-0.5 hover:border-orange-300 hover:text-orange-600 dark:border-slate-700 dark:bg-night-800 dark:text-slate-100 dark:hover:border-orange-500/60;
+  }
+
+  .ui-button-ghost {
+    @apply bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-slate-700;
+  }
+
+  .ui-button-success {
+    @apply bg-emerald-600 text-white shadow-lg shadow-emerald-950/20 hover:-translate-y-0.5 hover:bg-emerald-500;
+  }
+
+  .ui-button-warning {
+    @apply bg-amber-500 text-slate-950 shadow-lg shadow-amber-950/20 hover:-translate-y-0.5 hover:bg-amber-400;
+  }
+
+  .ui-button-destructive {
+    @apply border border-rose-500/30 bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 dark:text-rose-300;
+  }
+
+  .ui-button-icon {
+    @apply size-11 shrink-0 border border-slate-200 bg-white p-0 text-slate-600 hover:-translate-y-0.5 hover:border-orange-400 hover:text-orange-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200;
+  }
+
+  .ui-button-floating {
+    @apply min-h-14 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 px-5 text-white shadow-glow hover:-translate-y-1;
+  }
+
+  .metric-card {
+    @apply relative min-w-0 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-50/80 p-3.5 transition duration-180 ease-premium hover:-translate-y-0.5 hover:shadow-lg dark:border-slate-800 dark:bg-slate-950/55;
+  }
+
+  .metric-card::after {
+    content: "";
+    @apply pointer-events-none absolute inset-x-0 bottom-0 h-0.5 opacity-75;
+  }
+
+  .metric-card-orange::after { @apply bg-orange-500; }
+  .metric-card-blue::after { @apply bg-sky-500; }
+  .metric-card-purple::after { @apply bg-violet-500; }
+  .metric-card-green::after { @apply bg-emerald-500; }
+  .metric-card-red::after { @apply bg-rose-500; }
+  .metric-card-cyan::after { @apply bg-cyan-500; }
+
+  .metric-label {
+    @apply truncate text-[11px] font-black uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400;
+  }
+
+  .metric-value {
+    @apply mt-1 truncate text-xl font-black tracking-tight text-slate-950 dark:text-white sm:text-2xl;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .metric-number-change {
+    animation: number-change 180ms ease-out both;
+  }
+
+  .metric-context {
+    @apply mt-2 text-[11px] font-bold text-slate-500 dark:text-slate-500;
+  }
+
+  .metric-icon {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-orange-500 shadow-sm dark:bg-slate-800;
+  }
+
+  .transaction-action-card {
+    @apply relative flex min-h-[7.5rem] w-full items-start gap-4 overflow-hidden rounded-2xl border p-4 text-left transition duration-180 ease-premium hover:-translate-y-1 active:translate-y-0 active:scale-[0.975] disabled:pointer-events-none disabled:opacity-60;
+  }
+
+  .transaction-action-card::after {
+    content: "";
+    @apply pointer-events-none absolute -bottom-10 -right-8 size-28 rounded-full opacity-15 blur-2xl transition duration-180 group-hover:opacity-25;
+  }
+
+  .transaction-action-orange { @apply border-orange-500/30 bg-gradient-to-br from-orange-950/90 to-slate-950 hover:border-orange-400/70 hover:shadow-[0_18px_45px_-24px_rgba(249,115,22,.75)]; }
+  .transaction-action-orange::after { @apply bg-orange-500; }
+  .transaction-action-blue { @apply border-sky-500/30 bg-gradient-to-br from-sky-950/90 to-slate-950 hover:border-sky-400/70 hover:shadow-[0_18px_45px_-24px_rgba(14,165,233,.75)]; }
+  .transaction-action-blue::after { @apply bg-sky-500; }
+  .transaction-action-purple { @apply border-violet-500/30 bg-gradient-to-br from-violet-950/90 to-slate-950 hover:border-violet-400/70 hover:shadow-[0_18px_45px_-24px_rgba(139,92,246,.75)]; }
+  .transaction-action-purple::after { @apply bg-violet-500; }
+  .transaction-action-green { @apply border-emerald-500/30 bg-gradient-to-br from-emerald-950/90 to-slate-950 hover:border-emerald-400/70 hover:shadow-[0_18px_45px_-24px_rgba(16,185,129,.75)]; }
+  .transaction-action-green::after { @apply bg-emerald-500; }
+
+  .transaction-action-icon {
+    @apply flex size-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white transition duration-180 group-hover:translate-x-0.5 group-hover:-translate-y-0.5;
+  }
+
+  .responsive-modal-backdrop {
+    @apply fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/45 backdrop-blur-[3px] sm:items-center sm:p-5;
+    animation: fade-in 180ms ease-out both;
+  }
+
+  .responsive-modal-panel {
+    @apply max-h-[92dvh] w-full overflow-y-auto rounded-t-[1.75rem] border border-slate-700/80 bg-night-900 p-5 pb-[calc(5.75rem+env(safe-area-inset-bottom))] text-slate-100 shadow-2xl sm:max-w-2xl sm:rounded-[1.75rem] sm:p-7;
+    animation: sheet-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .modal-drag-indicator {
+    @apply mx-auto mb-4 h-1 w-12 rounded-full bg-slate-600 sm:hidden;
+  }
+
+  .dashboard-empty-state {
+    @apply flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700/80 bg-slate-950/45 p-6 text-center;
+  }
+
+  .dashboard-empty-icon {
+    @apply mb-3 flex size-12 items-center justify-center rounded-2xl bg-slate-800 text-slate-400;
+  }
+
+  .sales-chart-stage {
+    @apply animate-[chart-fade_180ms_ease-out_both];
+  }
+
+  .dashboard-reveal {
+    animation: card-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .sales-dashboard-grid > :nth-child(2) { animation-delay: 45ms; }
+  .sales-dashboard-grid > :nth-child(3) { animation-delay: 90ms; }
+  .sales-dashboard-grid > :nth-child(4) { animation-delay: 135ms; }
+
+  .activity-row {
+    @apply group flex w-full items-center gap-3 rounded-2xl border border-transparent bg-slate-50/80 p-3 text-left transition duration-180 hover:-translate-y-0.5 hover:border-slate-200 hover:bg-white hover:shadow-md dark:bg-slate-950/55 dark:hover:border-slate-700 dark:hover:bg-slate-900;
+  }
+
+  .toast-message {
+    @apply fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] left-4 right-4 z-[75] mx-auto max-w-lg rounded-2xl border border-amber-500/30 bg-slate-950/95 p-4 text-sm font-bold text-amber-100 shadow-2xl backdrop-blur sm:bottom-6;
+    animation: toast-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
 }
 
 @layer utilities {
@@ -205,7 +363,7 @@ input, select, textarea {
   overscroll-behavior: contain;
 }
 
-[class~="fixed"][class~="inset-0"] > section {
+[class~="fixed"][class~="inset-0"] > section:not(.responsive-modal-panel) {
   animation: modal-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -224,6 +382,32 @@ details[open] > *:not(summary) {
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes sheet-enter {
+  from { opacity: 0; transform: translateY(22px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes chart-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes number-change {
+  from { opacity: 0.45; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (min-width: 640px) {
+  .responsive-modal-panel {
+    animation-name: modal-enter;
+  }
 }
 
 .safe-bottom {

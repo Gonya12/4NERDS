@@ -1,8 +1,9 @@
 import {
-  Camera, ClipboardPaste, Download, FileSpreadsheet, Handshake, ImagePlus, PackagePlus, Plus, Receipt,
-  RotateCcw, Save, ScanLine, SwitchCamera, Trash2, Upload, X
+  ArrowLeft, ArrowLeftRight, BadgeDollarSign, Camera, ClipboardPaste, Download, FileSpreadsheet, Handshake,
+  ImagePlus, PackagePlus, Plus, Receipt, RotateCcw, Save, ScanLine, ShoppingBasket, SwitchCamera, Trash2,
+  Upload, WalletCards, X
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingScreen } from "../components/LoadingScreen";
@@ -11,6 +12,7 @@ import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
+import { ActionCard, AppButton, DashboardSkeleton, ResponsiveModal } from "../components/sales/SalesDashboardPrimitives";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses, saveBusinessExpense } from "../services/database/businessExpenseRepository";
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
@@ -135,6 +137,7 @@ export function SalesControlPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [addSheet, setAddSheet] = useState<"main" | "purchase_cost" | "item_mode" | null>(null);
   const [pendingTransactionPath, setPendingTransactionPath] = useState("");
+  const addTransactionButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -211,6 +214,11 @@ export function SalesControlPage() {
 
   useEffect(() => { void loadData(); }, [location.search]);
   useEffect(() => {
+    if (!message || editor || /could not|failed|error|required|missing|invalid/i.test(message)) return;
+    const timer = window.setTimeout(() => setMessage(""), 4200);
+    return () => window.clearTimeout(timer);
+  }, [message, editor]);
+  useEffect(() => {
     const entryParams = new URLSearchParams(location.search);
     if (entryParams.get("mode") === "sale") openSale(undefined, events, entryParams.get("initialMode") === "camera");
   }, [location.search]);
@@ -284,6 +292,8 @@ export function SalesControlPage() {
     setPendingTransactionPath(path);
     setAddSheet("item_mode");
   }
+
+  const closeAddSheet = useCallback(() => setAddSheet(null), []);
 
   function launchTransaction(itemMode: "single" | "multiple") {
     setAddSheet(null);
@@ -827,26 +837,34 @@ export function SalesControlPage() {
     }
   }
 
-  if (loading) return <LoadingScreen label="Loading Sales Control" />;
+  if (loading) return <LoadingScreen label="Loading Sales Control"><div className="sales-dashboard-grid"><div className="dashboard-panel lg:col-span-5"><DashboardSkeleton rows={4} /></div><div className="dashboard-panel lg:col-span-7"><DashboardSkeleton rows={5} /></div><div className="dashboard-panel lg:col-span-8"><DashboardSkeleton rows={3} /></div><div className="dashboard-panel lg:col-span-4"><DashboardSkeleton rows={3} /></div></div></LoadingScreen>;
 
   return (
-    <div className="page-shell w-full min-w-0 max-w-full overflow-x-hidden">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><p className="eyebrow">Financial control</p><h1 className="text-3xl font-black text-ink dark:text-white">Sales Control</h1><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Pokémon sales, inventory, and business costs in one place.</p></div>
-        <button onClick={() => setAddSheet("main")} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-coral px-5 font-black text-white shadow-lg"><Plus size={20} /> Add</button>
+    <div className="sales-dashboard min-w-0 overflow-x-hidden">
+      <header className="dashboard-reveal flex flex-col gap-4 rounded-[1.5rem] border border-slate-800/80 bg-gradient-to-br from-night-850 via-night-900 to-slate-950 p-5 shadow-elevated sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3"><p className="eyebrow">Financial control</p><SyncStatusBadge syncing={syncing} /></div>
+          <h1 className="mt-1 text-3xl font-black tracking-tight text-white sm:text-4xl">Sales Control</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Track sales, inventory, business costs, ownership, and trades from one fast workspace.</p>
+        </div>
+        <AppButton ref={addTransactionButtonRef} onClick={() => setAddSheet("main")} className="w-full shrink-0 sm:w-auto sm:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
       </header>
-      {addSheet ? <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/65 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddSheet(null); }}><section className="w-full max-w-md space-y-3 rounded-t-3xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl dark:bg-slate-900 sm:rounded-3xl"><div className="flex items-center justify-between"><div><p className="eyebrow">Sales Control</p><h2 className="text-xl font-black">{addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"}</h2></div><button onClick={() => setAddSheet(null)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
-        {addSheet === "main" ? <div className="grid grid-cols-2 gap-2"><button onClick={() => chooseTransaction("/sales/transactions/new?type=sale")} className="min-h-20 rounded-2xl bg-orange-600 p-3 font-black text-white">Sold</button><button onClick={() => setAddSheet("purchase_cost")} className="min-h-20 rounded-2xl bg-sky-600 p-3 font-black text-white">Purchased / Cost</button><button onClick={() => chooseTransaction("/sales/trades?new=trade")} className="min-h-20 rounded-2xl bg-violet-600 p-3 font-black text-white">Trade</button><button onClick={() => chooseTransaction("/sales/trades?new=cash_trade")} className="min-h-20 rounded-2xl bg-emerald-600 p-3 font-black text-white">Cash + Trade</button></div> : null}
-        {addSheet === "purchase_cost" ? <div className="space-y-3"><p className="text-xs font-black uppercase text-slate-500">Inventory Purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <button key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=purchase&source=${source}`)} className="min-h-12 rounded-xl bg-sky-100 px-2 text-sm font-black text-sky-800">{label}</button>)}</div><p className="text-xs font-black uppercase text-slate-500">Business Cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <button key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=expense&category=${category}`)} className="min-h-12 rounded-xl bg-amber-100 px-2 text-sm font-black text-amber-800">{label}</button>)}</div></div> : null}
-        {addSheet === "item_mode" ? <div className="grid grid-cols-2 gap-2"><button onClick={() => launchTransaction("single")} className="min-h-24 rounded-2xl bg-slate-100 p-3 font-black dark:bg-slate-800">Single Item</button><button onClick={() => launchTransaction("multiple")} className="min-h-24 rounded-2xl bg-violet-600 p-3 font-black text-white">Multiple Items / Lot</button></div> : null}
-      </section></div> : null}
-      <SyncStatusBadge syncing={syncing} />
+      <ResponsiveModal open={Boolean(addSheet)} title={addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"} description={addSheet === "main" ? "Choose a transaction type to open its existing workflow." : addSheet === "purchase_cost" ? "Choose an inventory source or business cost category." : "Use a single record or enter a multi-item lot."} onClose={closeAddSheet} restoreFocusRef={addTransactionButtonRef}>
+        {addSheet === "main" ? <div className="grid gap-3 sm:grid-cols-2">
+          <ActionCard title="Sold" description="Record one or multiple items sold." icon={<BadgeDollarSign size={25} />} accent="orange" onClick={() => chooseTransaction("/sales/transactions/new?type=sale")} />
+          <ActionCard title="Purchased / Cost" description="Add inventory purchases or business expenses." icon={<ShoppingBasket size={25} />} accent="blue" onClick={() => setAddSheet("purchase_cost")} />
+          <ActionCard title="Trade" description="Exchange inventory for incoming cards or products." icon={<ArrowLeftRight size={25} />} accent="purple" onClick={() => chooseTransaction("/sales/trades?new=trade")} />
+          <ActionCard title="Cash + Trade" description="Record a mixed trade with cash received or paid." icon={<WalletCards size={25} />} accent="green" onClick={() => chooseTransaction("/sales/trades?new=cash_trade")} />
+        </div> : null}
+        {addSheet === "purchase_cost" ? <div className="space-y-4"><AppButton variant="ghost" onClick={() => setAddSheet("main")} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton variant="secondary" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=purchase&source=${source}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton variant="ghost" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=expense&category=${category}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
+        {addSheet === "item_mode" ? <div className="space-y-3"><AppButton variant="ghost" onClick={() => setAddSheet(pendingTransactionPath.includes("type=purchase") || pendingTransactionPath.includes("type=expense") ? "purchase_cost" : "main")} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div className="grid gap-3 sm:grid-cols-2"><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" onClick={() => launchTransaction("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" onClick={() => launchTransaction("multiple")} /></div></div> : null}
+      </ResponsiveModal>
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
-      {message ? <p className="rounded-2xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{message}</p> : null}
+      {message ? <p role="status" className={`toast-message ${/could not|failed|error|required|missing|invalid/i.test(message) ? "border-rose-500/40 text-rose-100" : "border-emerald-500/40 text-emerald-100"}`}>{message}</p> : null}
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(20rem,0.38fr)_minmax(0,0.62fr)] lg:items-start">
-        <div className="min-w-0">
+      <div className="sales-dashboard-grid">
+        <div className="contents">
           <SalesAnalyticsPanel
             sales={sales}
             purchases={purchases}
@@ -867,19 +885,15 @@ export function SalesControlPage() {
             onEditSale={openSale}
             onEditPurchase={openPurchase}
             onEditExpense={openExpense}
+            onOpenDaily={() => navigate("/sales/daily")}
+            onOpenTrades={() => navigate("/sales/trades")}
+            onExport={() => setExportOpen(true)}
+            onBatchInventory={() => setBatchOpen(true)}
           />
-          <section className="mt-4 grid grid-cols-2 gap-2">
-            <button onClick={() => navigate("/sales/daily")} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-black text-white">Daily Summary</button>
-            <button onClick={() => setBatchOpen(true)} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><PackagePlus size={17} /> Batch Add Inventory</button>
-            <button onClick={() => setExportOpen(true)} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-black text-white"><Download size={17} /> Download Excel</button>
-            <button onClick={exportData} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><FileSpreadsheet size={17} /> Download CSV</button>
-            <button onClick={() => void syncPending()} className="col-span-2 min-h-11 rounded-xl bg-slate-100 px-4 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">Sync Pending Sales</button>
-            {hasMoreSales ? <button onClick={() => void loadMoreSales()} className="col-span-2 min-h-11 rounded-xl bg-slate-100 text-sm font-black text-ink dark:bg-slate-800 dark:text-white">Load more sale records</button> : null}
-          </section>
         </div>
 
-        <div className={`${mobileSpreadsheetOpen ? "fixed inset-0 z-40 block overflow-y-auto bg-canvas p-3 pb-[calc(6rem+env(safe-area-inset-bottom))] dark:bg-slate-950" : "hidden"} min-w-0 lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:bg-transparent lg:p-0`}>
-          <div className="mb-3 flex items-center justify-between lg:hidden"><h2 className="text-xl font-black text-ink dark:text-white">Financial Spreadsheet</h2><button onClick={() => setMobileSpreadsheetOpen(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
+        <div className={`${mobileSpreadsheetOpen ? "fixed inset-0 z-40 block overflow-y-auto bg-canvas p-3 pb-[calc(6rem+env(safe-area-inset-bottom))] dark:bg-slate-950" : "hidden"} min-w-0 lg:col-span-7 lg:col-start-6 lg:row-start-1 lg:block lg:max-h-[32rem] lg:overflow-y-auto lg:rounded-[1.35rem] lg:bg-transparent lg:p-0`}>
+          <div className="sticky top-0 z-50 mb-3 flex items-center justify-between rounded-xl bg-canvas/95 p-2 backdrop-blur lg:hidden dark:bg-slate-950/95"><h2 className="text-xl font-black text-ink dark:text-white">Financial Spreadsheet</h2><AppButton variant="icon" onClick={() => setMobileSpreadsheetOpen(false)} aria-label="Close spreadsheet"><X size={18} /></AppButton></div>
           <FinancialSpreadsheet
             sales={sales}
             purchases={purchases}
@@ -897,9 +911,15 @@ export function SalesControlPage() {
             onAddRow={(type) => type === "sale" ? openSale() : type === "purchase" ? openPurchase() : openExpense()}
           />
         </div>
+        <section className="dashboard-panel dashboard-reveal flex flex-col gap-3 lg:col-span-12 lg:row-start-4 sm:flex-row sm:items-center sm:justify-between">
+          <div><p className="eyebrow">Data tools</p><h2 className="section-title">Export and synchronization</h2><p className="meta-text mt-1">Keep pending records synced or take a portable copy of the current data.</p></div>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <AppButton variant="secondary" onClick={exportData}><FileSpreadsheet size={17} /> CSV</AppButton>
+            <AppButton variant="secondary" onClick={() => void syncPending()}><RotateCcw size={17} /> Sync pending</AppButton>
+            {hasMoreSales ? <AppButton variant="ghost" onClick={() => void loadMoreSales()} className="col-span-2">Load more sales</AppButton> : null}
+          </div>
+        </section>
       </div>
-
-      {!editor ? <button onClick={() => openSale(undefined, events, true)} aria-label="Add sale with camera" className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex min-h-14 items-center gap-2 rounded-2xl bg-violet-600 px-4 font-black text-white shadow-xl transition active:scale-95 lg:bottom-8"><Camera size={21} /> Add Sale</button> : null}
 
       {exportOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:items-center sm:p-4">
