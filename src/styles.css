@@ -312,6 +312,10 @@ input, select, textarea {
   .responsive-modal-md { @apply sm:max-w-2xl; }
   .responsive-modal-lg { @apply sm:max-w-4xl; }
 
+  .responsive-modal-header {
+    @apply sticky -top-5 z-10 -mx-2 flex items-start justify-between gap-4 bg-night-900/95 px-2 pb-3 pt-1 backdrop-blur sm:static sm:mx-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none;
+  }
+
   .modal-drag-indicator {
     @apply mx-auto mb-4 h-1 w-12 rounded-full bg-slate-600 sm:hidden;
   }

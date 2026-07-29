@@ -284,7 +284,7 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
       }}
     >
       <div className="modal-drag-indicator" aria-hidden="true" />
-      <div className="flex items-start justify-between gap-4">
+      <div className="responsive-modal-header">
         <div>
           <p className="eyebrow">Sales Control</p>
           <h2 id={titleId} className="mt-1 text-2xl font-black text-white">{title}</h2>

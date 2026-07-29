@@ -68,10 +68,13 @@ function moneyInput(value: string, onChange: (value: string) => void, placeholde
 }
 
 function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 18_000) {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(`${label} timed out. Cached data is still available.`)), timeoutMs))
-  ]);
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label} timed out. Cached data is still available.`)), timeoutMs);
+    promise.then(
+      (value) => { window.clearTimeout(timer); resolve(value); },
+      (error) => { window.clearTimeout(timer); reject(error); }
+    );
+  });
 }
 
 function loadErrorGuidance(error: string) {
