@@ -36,7 +36,10 @@ export function UnifiedTransactionPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
-  const fileToDataUrl = async (file: File) => (await saveTransactionImage(file, transaction.id, editing?.id, editing ? "item" : "transaction")).imageUrl;
+  const fileToDataUrl = async (file: File) => {
+    await saveTrade(transaction);
+    return (await saveTransactionImage(file, transaction.id, editing?.id, editing ? "item" : "transaction")).imageUrl;
+  };
 
   useEffect(() => {
     void Promise.all([listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()]).then(async ([rows, eventRows, workerRows]) => {
@@ -54,7 +57,7 @@ export function UnifiedTransactionPage() {
     setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] }));
   };
   const addIncoming = () => {
-    const item = { ...blankTradeItem(transaction.id, "incoming"), ownershipShares: [] };
+    const item = { ...blankTradeItem(transaction.id, transaction.transactionType === "expense" ? "expense" : "incoming"), ownershipShares: [] };
     setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] })); setEditing(item);
   };
   const allocate = () => {

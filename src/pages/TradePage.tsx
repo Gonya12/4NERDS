@@ -166,7 +166,7 @@ export function TradePage() {
           <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-black">{trade.tradePartner || "Unnamed trade partner"}</p><p className="text-xs text-slate-500">{new Date(trade.tradeDate).toLocaleString()} {trade.eventId ? `· ${events.find((row) => row.id === trade.eventId)?.name || "Event"}` : ""}</p></div><span className={`rounded-full px-2 py-1 text-[11px] font-black capitalize ${statusClass(trade.status)}`}>{trade.status === "draft" ? "Continue Draft" : trade.status}</span></div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><span><b>{summary.outgoing.length}</b> given · {formatMoney(summary.outgoingAgreed)}</span><span><b>{summary.incoming.length}</b> received · {formatMoney(summary.incomingAgreed)}</span><span>Cash {formatMoney(trade.cashReceived - trade.cashPaid)}</span><span className={summary.estimatedGainLoss >= 0 ? "text-emerald-600" : "text-rose-600"}>Est. {formatMoney(summary.estimatedGainLoss)}</span></div>
         </button>;
-      })}{!filtered.length ? <p className="py-8 text-center text-sm font-bold text-slate-500">No matching trades.</p> : null}</div>
+      })}{!filtered.length ? <p className="py-8 text-center text-sm font-bold text-slate-500">{trades.length ? "No matching trades." : "No trades yet."}</p> : null}</div>
     </section>
   </div>;
 }
@@ -182,7 +182,10 @@ function TradeEditor(props: EditorProps) {
   const [editingItem, setEditingItem] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
   const [preview, setPreview] = useState<{ url: string; title: string }>();
-  const fileToDataUrl = async (file: File) => (await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction")).imageUrl;
+  const fileToDataUrl = async (file: File) => {
+    await saveTrade(trade);
+    return (await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction")).imageUrl;
+  };
   const fileRef = useRef<HTMLInputElement>(null);
   const update = (patch: Partial<TradeTransaction>) => onChange({ ...trade, ...patch });
   const updateItem = (item: TradeItem) => update({ items: trade.items.map((row) => row.id === item.id ? item : row) });

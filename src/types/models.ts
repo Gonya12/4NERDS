@@ -246,7 +246,7 @@ export interface InventoryPurchase {
 }
 
 export type TradeStatus = "draft" | "completed" | "cancelled" | "reversed";
-export type TradeDirection = "outgoing" | "incoming";
+export type TradeDirection = "outgoing" | "incoming" | "expense";
 export type FinancialTransactionType = "sale" | "purchase" | "expense" | "trade" | "cash_trade";
 export type TransactionItemMode = "single" | "multiple";
 export type TransactionPricingMode = "individual" | "bundle_total";

@@ -5,7 +5,7 @@ import { listBusinessExpenses } from "../services/database/businessExpenseReposi
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listSalesRecordsPage } from "../services/database/salesRepository";
-import { listTrades } from "../services/database/tradeRepository";
+import { listFinancialTransactions } from "../services/database/tradeRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import type { BusinessExpense, InventoryPurchase, SalesRecord, TradeTransaction, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
@@ -20,7 +20,7 @@ export function DailySummaryPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    void Promise.all([listSalesRecordsPage(0, 1000), listInventoryPurchases(1000), listBusinessExpenses(1000), listTrades(), listWorkers()]).then(async ([salePage, inventoryRows, expenseRows, transactionRows, workerRows]) => {
+    void Promise.all([listSalesRecordsPage(0, 1000), listInventoryPurchases(1000), listBusinessExpenses(1000), listFinancialTransactions(), listWorkers()]).then(async ([salePage, inventoryRows, expenseRows, transactionRows, workerRows]) => {
       const ownership = await listOwnershipShares(inventoryRows.map((row) => row.id), salePage.records.map((row) => row.id));
       setSales(salePage.records.map((row) => ({ ...row, ownershipShares: ownership.sales.get(row.id) || inventoryRows.find((item) => item.id === row.inventoryPurchaseId)?.ownershipShares || [] })));
       setPurchases(inventoryRows); setExpenses(expenseRows); setTransactions(transactionRows); setWorkers(workerRows);

@@ -16,7 +16,7 @@ import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses,
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
 import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecordsPage, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { listWorkers } from "../services/database/workerRepository";
-import { getCachedTrades, listTrades } from "../services/database/tradeRepository";
+import { getCachedTrades, listFinancialTransactions } from "../services/database/tradeRepository";
 import { listOwnershipShares, saveInventoryOwnership, saveSaleOwnership } from "../services/database/ownershipRepository";
 import { compressSaleImage, imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
@@ -182,7 +182,7 @@ export function SalesControlPage() {
       withTimeout(listBusinessExpenses(75), "Expenses"),
       withTimeout(listPlannerEventOptions(40), "Events"),
       withTimeout(listWorkers(), "Workers"),
-      withTimeout(listTrades(), "Trades")
+      withTimeout(listFinancialTransactions(), "Transactions")
     ]);
     const errors: string[] = [];
     const refreshedSales = results[0].status === "fulfilled" ? results[0].value.records : sales;
@@ -201,7 +201,7 @@ export function SalesControlPage() {
     const eventRows = results[3].status === "fulfilled" ? results[3].value : [];
     if (results[3].status === "fulfilled") setEvents(eventRows); else errors.push(`Events: ${String(results[3].reason?.message || results[3].reason)}`);
     if (results[4].status === "fulfilled") setWorkers(results[4].value); else errors.push(`Workers: ${String(results[4].reason?.message || results[4].reason)}`);
-    if (results[5].status === "fulfilled") setTrades(results[5].value); else errors.push(`Trades: ${String(results[5].reason?.message || results[5].reason)}`);
+    if (results[5].status === "fulfilled") setTrades(results[5].value); else errors.push(`Transactions: ${String(results[5].reason?.message || results[5].reason)}`);
     if (errors.length) setLoadError(errors.join("\n"));
     setUsingCachedData(errors.length > 0);
     setLoading(false);
