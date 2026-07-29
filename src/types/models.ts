@@ -273,6 +273,9 @@ export interface TransactionImageAttachment {
   imageUrl: string;
   imagePath?: string;
   sortOrder: number;
+  metadataStatus?: "pending" | "complete";
+  metadataError?: string;
+  reusedFromImageId?: string;
 }
 
 export interface TradeItemOwnershipShare extends OwnershipShare {

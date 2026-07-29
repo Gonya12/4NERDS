@@ -215,11 +215,26 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     const itemImages = imageRows
       .filter((value) => value.transaction_item_id === row.id)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    const reusedGeneralImage = !itemImages.length && row.image_path
+      ? imageRows.find((value) =>
+        value.transaction_id === row.transaction_id
+        && !value.transaction_item_id
+        && value.image_path === row.image_path
+      )
+      : undefined;
     const image = itemImages.find((value) => value.image_type !== "back");
     const back = itemImages.find((value) => value.image_type === "back");
     const value = {
       ...fromItem(row, shareMap.get(row.id) || []),
-      images: itemImages.map(imageAttachment),
+      images: reusedGeneralImage
+        ? [{
+          ...imageAttachment(reusedGeneralImage),
+          id: `reused-${row.id}-${reusedGeneralImage.id}`,
+          transactionItemId: row.id,
+          imageType: "front" as const,
+          reusedFromImageId: reusedGeneralImage.id
+        }]
+        : itemImages.map(imageAttachment),
       imageUrl: image?.image_url || row.image_url || undefined,
       imagePath: image?.image_path || row.image_path || undefined,
       backImageUrl: back?.image_url || row.back_image_url || undefined,
@@ -318,7 +333,11 @@ export async function saveFinancialTransactionDraft(input: TradeTransaction) {
   }
 }
 
-export async function saveTrade(input: TradeTransaction, options?: { syncImages?: boolean }) {
+export async function saveTrade(input: TradeTransaction, options?: {
+  syncImages?: boolean;
+  syncPayments?: boolean;
+  syncOwnership?: boolean;
+}) {
   const normalizedInput = normalizeTransactionForApplication(input);
   const trade = { ...normalizedInput, updatedAt: nowIso(), items: normalizedInput.items.map((item) => ({ ...item, tradeTransactionId: normalizedInput.id, updatedAt: nowIso() })) };
   if (!isSupabaseConfigured || !supabase) {
@@ -355,22 +374,24 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
     }
     if (itemResult.error) throw new Error(itemResult.error.message);
   }
-  const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("transaction_id", transactionId);
-  if (existingPayments.error) throw new Error(existingPayments.error.message);
-  const paymentRows = [
-    { direction: "received" as const, amount: Number(persistedTrade.cashReceived || 0) },
-    { direction: "paid" as const, amount: Number(persistedTrade.cashPaid || 0) }
-  ].map((payment) => buildTransactionPaymentPayload({
-    id: existingPayments.data?.find((row) => row.direction === payment.direction && row.payment_method === (persistedTrade.paymentMethod || "cash"))?.id || id("payment"),
-    transactionId,
-    direction: payment.direction,
-    paymentMethod: persistedTrade.paymentMethod || "cash",
-    amount: payment.amount,
-    workerId: payment.direction === "paid" ? persistedTrade.paidByWorkerId : undefined,
-    updatedAt: persistedTrade.updatedAt
-  }));
-  const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows, { onConflict: "transaction_id,direction,payment_method" });
-  if (paymentResult.error) throw new Error(paymentResult.error.message);
+  if (options?.syncPayments !== false) {
+    const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("transaction_id", transactionId);
+    if (existingPayments.error) throw new Error(existingPayments.error.message);
+    const paymentRows = [
+      { direction: "received" as const, amount: Number(persistedTrade.cashReceived || 0) },
+      { direction: "paid" as const, amount: Number(persistedTrade.cashPaid || 0) }
+    ].map((payment) => buildTransactionPaymentPayload({
+      id: existingPayments.data?.find((row) => row.direction === payment.direction && row.payment_method === (persistedTrade.paymentMethod || "cash"))?.id || id("payment"),
+      transactionId,
+      direction: payment.direction,
+      paymentMethod: persistedTrade.paymentMethod || "cash",
+      amount: payment.amount,
+      workerId: payment.direction === "paid" ? persistedTrade.paidByWorkerId : undefined,
+      updatedAt: persistedTrade.updatedAt
+    }));
+    const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows, { onConflict: "transaction_id,direction,payment_method" });
+    if (paymentResult.error) throw new Error(paymentResult.error.message);
+  }
   if (options?.syncImages !== false) {
   const transactionImages = persistedTrade.images?.length
     ? persistedTrade.images
@@ -396,7 +417,8 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
         imageUrl: item.backImageUrl, imagePath: item.backImagePath || transactionImagePath(item.backImageUrl)!, sortOrder: 1
       } : undefined
     ].filter(Boolean) as TransactionImageAttachment[]);
-  const desiredImages = [...transactionImages, ...itemImages].filter((image) => image.imagePath);
+  const desiredImages = [...transactionImages, ...itemImages]
+    .filter((image) => image.imagePath && !image.reusedFromImageId);
   const currentImagesWithSort = await supabase.from("transaction_images").select("id,transaction_item_id,image_type,image_path,sort_order").eq("transaction_id", transactionId);
   let currentImageData = (currentImagesWithSort.data || []) as ImageRow[];
   let currentImageError = currentImagesWithSort.error;
@@ -409,14 +431,10 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
   const desiredRows = desiredImages.map((image) => buildTransactionImagePayload(
     image,
     currentImageData.find((value) => value.image_path === image.imagePath)?.id || id("transaction-image"),
-    transactionId,
-    persistedTrade.updatedAt
+    transactionId
   ));
   if (desiredRows.length) {
-    let imageResult = await supabase.from("transaction_images").upsert(desiredRows);
-    if (isMissingColumnError(imageResult.error)) {
-      imageResult = await supabase.from("transaction_images").upsert(desiredRows.map(({ sort_order: _sortOrder, ...row }) => row) as any);
-    }
+    const imageResult = await supabase.from("transaction_images").upsert(desiredRows, { onConflict: "id" });
     if (imageResult.error) throw new Error(imageResult.error.message);
   }
   const desiredIds = new Set(desiredRows.map((row) => row.id));
@@ -426,7 +444,7 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
     if (removed.error) throw new Error(removed.error.message);
   }
   }
-  for (const item of persistedTrade.items) {
+  if (options?.syncOwnership !== false) for (const item of persistedTrade.items) {
     if (item.ownershipShares.length) {
       const result = await supabase.from("transaction_item_ownership_shares").upsert(
         item.ownershipShares.map((share) => buildTransactionOwnershipPayload(item.id, share, persistedTrade.updatedAt)),

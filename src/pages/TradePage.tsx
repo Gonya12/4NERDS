@@ -325,12 +325,19 @@ function TradeEditor(props: EditorProps) {
     setDraftSaveDebug("");
   }, [props.message]);
 
-  async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string, stableImageId?: string) {
+  async function uploadImage(
+    file: File | undefined,
+    imageType: TransactionImageType,
+    onProgress: (stage: ImageUploadStage) => void,
+    itemId?: string,
+    stableImageId?: string,
+    resumeAttachment?: TransactionImageAttachment
+  ) {
     setImageUploadError("");
     let persisted: TradeTransaction;
     try {
-      persisted = itemId
-        ? await saveTrade(trade, { syncImages: false })
+      persisted = trade.items.length
+        ? await saveTrade(trade, { syncImages: false, syncPayments: false, syncOwnership: false })
         : await saveFinancialTransactionDraft(trade);
       if (persisted.id !== trade.id) onChange(persisted);
       setDraftSaveError("");
@@ -341,16 +348,7 @@ function TradeEditor(props: EditorProps) {
       throw new Error("Image upload is waiting for the transaction draft to save. Retry after the transaction error is resolved.");
     }
     try {
-      const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress, stableImageId);
-      return {
-        id: result.id,
-        transactionId: persisted.id,
-        transactionItemId: itemId,
-        imageType,
-        imageUrl: result.imageUrl,
-        imagePath: result.imagePath,
-        sortOrder: 0
-      } satisfies TransactionImageAttachment;
+      return await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress, stableImageId, resumeAttachment);
     } catch (error) {
       setImageUploadError(error instanceof Error ? error.message : "The image could not be uploaded.");
       throw error;
@@ -371,7 +369,11 @@ function TradeEditor(props: EditorProps) {
     };
     onChange(updated);
     try {
-      await saveFinancialTransactionDraft(updated);
+      if (next.some((image) => image.metadataStatus === "pending")) {
+        await saveFinancialTransactionDraft(updated);
+      } else {
+        await saveTrade(updated, { syncImages: false });
+      }
       setDraftSaveError("");
       setDraftSaveDebug("");
     } catch (error) {
@@ -396,7 +398,12 @@ function TradeEditor(props: EditorProps) {
     const updated = { ...trade, items: trade.items.map((row) => row.id === item.id ? changed : row) };
     onChange(updated);
     try {
-      await saveTrade(updated);
+      const metadataPending = next.some((image) => image.metadataStatus === "pending");
+      await saveTrade(updated, {
+        syncImages: false,
+        syncPayments: !metadataPending,
+        syncOwnership: !metadataPending
+      });
       setDraftSaveError("");
       setDraftSaveDebug("");
     } catch (error) {
@@ -474,7 +481,7 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         multiple
         maxImages={5}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["general"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}
@@ -487,7 +494,7 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         multiple
         maxImages={3}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["proof", "receipt"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}
@@ -526,7 +533,7 @@ function TradeEditor(props: EditorProps) {
         multiple
         maxImages={3}
         reusableAttachment={sharedImage}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId, resumeAttachment)}
         onChange={(images) => changeItemImages(editingItem, ["front", "item", "crop"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}
@@ -539,7 +546,7 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         transactionItemId={editingItem.id}
         maxImages={1}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId, resumeAttachment)}
         onChange={(images) => changeItemImages(editingItem, ["back"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}

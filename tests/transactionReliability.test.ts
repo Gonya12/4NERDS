@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { TradeItem, TradeTransaction } from "../src/types/models.ts";
-import { buildTransactionItemPayload } from "../src/services/database/databasePayloads.ts";
+import {
+  buildTransactionImagePayload,
+  buildTransactionItemPayload
+} from "../src/services/database/databasePayloads.ts";
 import { prepareTransactionForCompletion } from "../src/services/database/transactionReliability.ts";
 import { ownershipValidationError } from "../src/utils/tradeMath.ts";
 
@@ -126,21 +129,58 @@ test("reconciliation migration is additive and uses only canonical transaction t
   assert.match(sql, /notify\s+pgrst,\s*'reload schema'/i);
 });
 
-test("image retry preserves the transaction and attachment IDs and can be disabled after draft failure", () => {
+test("transaction image payload is allowlisted and leaves timestamps to the database", () => {
+  const payload = buildTransactionImagePayload({
+    id: "30000000-0000-4000-8000-000000000000",
+    transactionId: "10000000-0000-4000-8000-000000000000",
+    imageType: "general",
+    imageUrl: "https://example.com/transaction.jpg",
+    imagePath: "transaction/shared/general.jpg",
+    sortOrder: 2,
+    metadataStatus: "pending",
+    metadataError: "not a database field",
+    reusedFromImageId: "40000000-0000-4000-8000-000000000000"
+  }, "fallback", "10000000-0000-4000-8000-000000000000");
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "id",
+    "image_path",
+    "image_type",
+    "image_url",
+    "sort_order",
+    "transaction_id",
+    "transaction_item_id"
+  ]);
+  assert.equal(payload.transaction_item_id, null);
+  assert.throws(() => buildTransactionImagePayload({
+    id: "30000000-0000-4000-8000-000000000000",
+    transactionId: "10000000-0000-4000-8000-000000000000",
+    imageType: "front",
+    imageUrl: "https://example.com/front.jpg",
+    imagePath: "transaction/item/front.jpg",
+    sortOrder: 0
+  }, "fallback", "10000000-0000-4000-8000-000000000000"), /transaction_item_id/);
+});
+
+test("image retry preserves Storage and metadata identity and can be disabled after draft failure", () => {
   const upload = readFileSync(new URL("../src/services/images/saleImageService.ts", import.meta.url), "utf8");
   const field = readFileSync(new URL("../src/components/sales/ImageAttachmentField.tsx", import.meta.url), "utf8");
   const unified = readFileSync(new URL("../src/pages/UnifiedTransactionPage.tsx", import.meta.url), "utf8");
   const trade = readFileSync(new URL("../src/pages/TradePage.tsx", import.meta.url), "utf8");
   const repository = readFileSync(new URL("../src/services/database/tradeRepository.ts", import.meta.url), "utf8");
-  assert.match(upload, /transaction_id:\s*transactionId/);
-  assert.match(upload, /id:\s*stableImageId/);
-  assert.match(upload, /upsert:\s*true/);
+  assert.match(upload, /stableImageId:\s*string\s*=\s*crypto\.randomUUID\(\)/);
+  assert.match(upload, /resumeAttachment\?\.imagePath/);
+  assert.match(upload, /storageObjectExists\(attachment\.imagePath\)/);
+  assert.match(upload, /\.upsert\(payload,\s*\{\s*onConflict:\s*"id"\s*\}\)/);
+  assert.match(upload, /Image uploaded; record still needs to be saved/);
+  assert.doesNotMatch(upload, /\bupdated_at\b/);
   assert.match(field, /retryAttachmentId\s*\|\|\s*targetId\s*\|\|\s*crypto\.randomUUID\(\)/);
+  assert.match(field, /uploadFile\(undefined,\s*image\.id,\s*image\.id,\s*image\)/);
+  assert.match(field, /resumeAttachment:\s*metadataAttachment\s*\|\|\s*resumeAttachment/);
   assert.match(field, /disabled=\{retryDisabled\}/);
-  assert.match(unified, /saveFinancialTransactionDraft\(transaction\)/);
-  assert.match(unified, /saveTransactionImage\(file,\s*persisted\.id/);
-  assert.match(trade, /saveTransactionImage\(file,\s*persisted\.id,\s*itemId,\s*imageType,\s*onProgress,\s*stableImageId\)/);
-  assert.match(repository, /\.upsert\(payload,\s*\{\s*onConflict:\s*"id"\s*\}\)/);
+  assert.match(unified, /saveTransactionImage\(file,\s*persisted\.id,\s*itemId,\s*imageType,\s*onProgress,\s*stableImageId,\s*resumeAttachment\)/);
+  assert.match(trade, /saveTransactionImage\(file,\s*persisted\.id,\s*itemId,\s*imageType,\s*onProgress,\s*stableImageId,\s*resumeAttachment\)/);
+  assert.match(repository, /transaction_images"\)\.upsert\(desiredRows,\s*\{\s*onConflict:\s*"id"\s*\}\)/);
+  assert.match(repository, /!image\.reusedFromImageId/);
   assert.equal((repository.match(/\.from\("financial_transactions"\)\s*\n\s*\.upsert/g) || []).length, 1);
 });
 

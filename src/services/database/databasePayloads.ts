@@ -116,18 +116,21 @@ export function buildTransactionPaymentPayload(input: {
 export function buildTransactionImagePayload(
   image: TransactionImageAttachment,
   fallbackId: string,
-  transactionId: string,
-  updatedAt: string
+  transactionId: string
 ) {
+  if (!transactionId) throw new Error("A transaction image requires a transaction_id.");
+  if (!image.imagePath) throw new Error("A transaction image requires an image_path.");
+  if (["item", "front", "back", "crop"].includes(image.imageType) && !image.transactionItemId) {
+    throw new Error("An item-specific transaction image requires a transaction_item_id.");
+  }
   return {
     id: image.id || fallbackId,
     transaction_id: transactionId,
     transaction_item_id: image.transactionItemId || null,
     image_type: image.imageType,
     image_url: image.imageUrl,
-    image_path: image.imagePath!,
-    sort_order: Number(image.sortOrder || 0),
-    updated_at: updatedAt
+    image_path: image.imagePath,
+    sort_order: Number(image.sortOrder || 0)
   };
 }
 

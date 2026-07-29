@@ -114,12 +114,19 @@ export function UnifiedTransactionPage() {
     if (import.meta.env.DEV) console.info("[transaction-flow] editor mounted", { type: requestedType, mode: requestedMode });
   }, [requestedMode, requestedType]);
 
-  async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string, stableImageId?: string) {
+  async function uploadImage(
+    file: File | undefined,
+    imageType: TransactionImageType,
+    onProgress: (stage: ImageUploadStage) => void,
+    itemId?: string,
+    stableImageId?: string,
+    resumeAttachment?: TransactionImageAttachment
+  ) {
     setImageUploadError("");
     let persisted: TradeTransaction;
     try {
-      persisted = itemId
-        ? await saveTrade(transaction, { syncImages: false })
+      persisted = transaction.items.length
+        ? await saveTrade(transaction, { syncImages: false, syncPayments: false, syncOwnership: false })
         : await saveFinancialTransactionDraft(transaction);
       if (persisted.id !== transaction.id) setTransaction(persisted);
       setDraftSaveError("");
@@ -131,16 +138,7 @@ export function UnifiedTransactionPage() {
       throw new Error("Image upload is waiting for the transaction draft to save. Retry after the transaction error is resolved.");
     }
     try {
-      const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress, stableImageId);
-      return {
-        id: result.id,
-        transactionId: persisted.id,
-        transactionItemId: itemId,
-        imageType,
-        imageUrl: result.imageUrl,
-        imagePath: result.imagePath,
-        sortOrder: 0
-      } satisfies TransactionImageAttachment;
+      return await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress, stableImageId, resumeAttachment);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "The image could not be uploaded.";
       setImageUploadError(detail);
@@ -162,7 +160,11 @@ export function UnifiedTransactionPage() {
     };
     setTransaction(updated);
     try {
-      await saveFinancialTransactionDraft(updated);
+      if (next.some((image) => image.metadataStatus === "pending")) {
+        await saveFinancialTransactionDraft(updated);
+      } else {
+        await saveTrade(updated, { syncImages: false });
+      }
       setDraftSaveError("");
       setDraftSaveDebug("");
     } catch (error) {
@@ -187,7 +189,12 @@ export function UnifiedTransactionPage() {
     const nextTransaction = { ...transaction, items: transaction.items.map((row) => row.id === item.id ? updated : row) };
     setTransaction(nextTransaction);
     try {
-      await saveTrade(nextTransaction);
+      const metadataPending = next.some((image) => image.metadataStatus === "pending");
+      await saveTrade(nextTransaction, {
+        syncImages: false,
+        syncPayments: !metadataPending,
+        syncOwnership: !metadataPending
+      });
       setDraftSaveError("");
       setDraftSaveDebug("");
     } catch (error) {
@@ -420,7 +427,7 @@ export function UnifiedTransactionPage() {
         transactionId={transaction.id}
         multiple
         maxImages={5}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["general"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}
@@ -433,7 +440,7 @@ export function UnifiedTransactionPage() {
         transactionId={transaction.id}
         multiple
         maxImages={3}
-        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
+        onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["proof", "receipt"], images)}
         onBusyChange={onImageBusyChange}
         retryDisabled={Boolean(draftSaveError)}
@@ -596,7 +603,7 @@ export function UnifiedTransactionPage() {
           multiple
           maxImages={3}
           reusableAttachment={sharedImage}
-          onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editing.id, stableImageId)}
+          onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, editing.id, stableImageId, resumeAttachment)}
           onChange={(images) => changeItemImages(editing, ["front", "item", "crop"], images)}
           onBusyChange={onImageBusyChange}
           retryDisabled={Boolean(draftSaveError)}
@@ -609,7 +616,7 @@ export function UnifiedTransactionPage() {
           transactionId={transaction.id}
           transactionItemId={editing.id}
           maxImages={1}
-          onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editing.id, stableImageId)}
+          onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, editing.id, stableImageId, resumeAttachment)}
           onChange={(images) => changeItemImages(editing, ["back"], images)}
           onBusyChange={onImageBusyChange}
           retryDisabled={Boolean(draftSaveError)}

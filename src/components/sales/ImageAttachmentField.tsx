@@ -3,7 +3,11 @@ import {
   Replace, RotateCcw, SwitchCamera, Trash2, Upload, X
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
-import { isSupportedSaleImage, type ImageUploadStage } from "../../services/images/saleImageService";
+import {
+  isSupportedSaleImage,
+  isTransactionImageMetadataError,
+  type ImageUploadStage
+} from "../../services/images/saleImageService";
 import type { TransactionImageAttachment, TransactionImageType } from "../../types/models";
 import { ImageLightbox } from "./ImageLightbox";
 import { AppButton, ResponsiveModal } from "./SalesDashboardPrimitives";
@@ -11,12 +15,14 @@ import { AppButton, ResponsiveModal } from "./SalesDashboardPrimitives";
 type UploadJob = {
   id: string;
   attachmentId: string;
-  file: File;
+  file?: File;
   previewUrl: string;
+  ownsPreviewUrl: boolean;
   stage: ImageUploadStage | "failed";
   error?: string;
   slow?: boolean;
   replaceId?: string;
+  resumeAttachment?: TransactionImageAttachment;
 };
 
 type Props = {
@@ -30,7 +36,13 @@ type Props = {
   maxImages?: number;
   reusableAttachment?: TransactionImageAttachment;
   reusableLabel?: string;
-  onUpload: (file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, stableImageId: string) => Promise<TransactionImageAttachment>;
+  onUpload: (
+    file: File | undefined,
+    imageType: TransactionImageType,
+    onProgress: (stage: ImageUploadStage) => void,
+    stableImageId: string,
+    resumeAttachment?: TransactionImageAttachment
+  ) => Promise<TransactionImageAttachment>;
   onChange: (attachments: TransactionImageAttachment[]) => void | Promise<void>;
   onBusyChange?: (fieldId: string, busy: boolean) => void;
   retryDisabled?: boolean;
@@ -41,7 +53,8 @@ const stageLabels: Record<ImageUploadStage | "failed", string> = {
   preparing: "Preparing",
   compressing: "Compressing",
   uploading: "Uploading",
-  saving: "Saving",
+  storage_uploaded: "Storage uploaded",
+  saving_metadata: "Saving image record",
   complete: "Complete",
   failed: "Failed"
 };
@@ -84,7 +97,9 @@ export function ImageAttachmentField({
 
   useEffect(() => { latestAttachments.current = attachments; }, [attachments]);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
-  useEffect(() => () => jobsRef.current.forEach((job) => URL.revokeObjectURL(job.previewUrl)), []);
+  useEffect(() => () => jobsRef.current.forEach((job) => {
+    if (job.ownsPreviewUrl) URL.revokeObjectURL(job.previewUrl);
+  }), []);
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     if (captured?.url) URL.revokeObjectURL(captured.url);
@@ -110,20 +125,35 @@ export function ImageAttachmentField({
     cancelledJobs.current.add(jobId);
     setJobs((current) => {
       const target = current.find((job) => job.id === jobId);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target?.ownsPreviewUrl) URL.revokeObjectURL(target.previewUrl);
       return current.filter((job) => job.id !== jobId);
     });
   }
 
-  async function uploadFile(file: File, targetId?: string, retryAttachmentId?: string) {
-    if (!isSupportedSaleImage(file)) {
+  async function uploadFile(
+    file: File | undefined,
+    targetId?: string,
+    retryAttachmentId?: string,
+    resumeAttachment?: TransactionImageAttachment
+  ) {
+    if (file && !isSupportedSaleImage(file)) {
       setMessage(`${file.name || "That file"} is not an image.`);
       return;
     }
+    if (!file && !resumeAttachment) return;
     const jobId = crypto.randomUUID();
     const attachmentId = retryAttachmentId || targetId || crypto.randomUUID();
-    const previewUrl = URL.createObjectURL(file);
-    const job: UploadJob = { id: jobId, attachmentId, file, previewUrl, stage: "preparing", replaceId: targetId };
+    const previewUrl = file ? URL.createObjectURL(file) : resumeAttachment!.imageUrl;
+    const job: UploadJob = {
+      id: jobId,
+      attachmentId,
+      file,
+      previewUrl,
+      ownsPreviewUrl: Boolean(file),
+      stage: "preparing",
+      replaceId: targetId,
+      resumeAttachment
+    };
     setJobs((current) => [...current, job]);
     setMessage("");
     const slowTimer = window.setTimeout(() => updateJob(jobId, { slow: true }), 3_000);
@@ -133,7 +163,7 @@ export function ImageAttachmentField({
         timeoutTimer = window.setTimeout(() => reject(new Error("The image upload timed out. Retry this image when your connection is ready.")), 45_000);
       });
       const uploaded = await Promise.race([
-        onUpload(file, imageType, (stage) => updateJob(jobId, { stage: stage === "complete" ? "saving" : stage }), attachmentId),
+        onUpload(file, imageType, (stage) => updateJob(jobId, { stage }), attachmentId, resumeAttachment),
         timeout
       ]);
       if (cancelledJobs.current.has(jobId)) return;
@@ -145,7 +175,22 @@ export function ImageAttachmentField({
       updateJob(jobId, { stage: "complete", slow: false });
       window.setTimeout(() => removeJob(jobId), 650);
     } catch (error) {
-      updateJob(jobId, { stage: "failed", slow: false, error: error instanceof Error ? error.message : "Image upload failed." });
+      const metadataAttachment = isTransactionImageMetadataError(error) ? error.attachment : undefined;
+      if (metadataAttachment) {
+        const current = latestAttachments.current;
+        const next = current.some((image) => image.id === metadataAttachment.id)
+          ? current.map((image) => image.id === metadataAttachment.id ? metadataAttachment : image)
+          : targetId
+            ? current.map((image) => image.id === targetId ? metadataAttachment : image)
+            : multiple ? [...current, metadataAttachment] : [metadataAttachment];
+        await commit(next);
+      }
+      updateJob(jobId, {
+        stage: "failed",
+        slow: false,
+        resumeAttachment: metadataAttachment || resumeAttachment,
+        error: error instanceof Error ? error.message : "Image upload failed."
+      });
     } finally {
       window.clearTimeout(slowTimer);
       window.clearTimeout(timeoutTimer);
@@ -178,7 +223,10 @@ export function ImageAttachmentField({
       transactionId,
       transactionItemId,
       imageType,
-      sortOrder: latestAttachments.current.length
+      sortOrder: latestAttachments.current.length,
+      reusedFromImageId: reusableAttachment.id,
+      metadataStatus: "complete",
+      metadataError: undefined
     };
     await commit(multiple ? [...latestAttachments.current, clone] : [clone]);
     setMessage("The existing transaction photo is linked to this item without uploading another file.");
@@ -369,17 +417,17 @@ export function ImageAttachmentField({
 
     {jobs.length ? <div className="mt-3 space-y-2" aria-live="polite">
       {jobs.map((job) => <article key={job.id} className={`flex items-center gap-3 rounded-xl border p-2 ${job.stage === "failed" ? "border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/25" : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"}`}>
-        <img src={job.previewUrl} alt={`Preview of ${job.file.name || label}`} className="size-14 shrink-0 rounded-lg object-cover" />
+        <img src={job.previewUrl} alt={`Preview of ${job.file?.name || label}`} className="size-14 shrink-0 rounded-lg object-cover" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-black">{job.file.name || "Camera photo"}</p>
+          <p className="truncate text-xs font-black">{job.file?.name || "Saved transaction image"}</p>
           <p className={`mt-0.5 text-xs font-bold ${job.stage === "failed" ? "text-rose-600" : "text-violet-600"}`}>
             {job.slow ? "Still uploading your image…" : stageLabels[job.stage]}
           </p>
           {job.error ? <p className="mt-1 text-xs leading-4 text-rose-600">{job.error}</p> : null}
           {job.stage !== "failed" && job.stage !== "complete" ? <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><span className="block h-full w-2/3 animate-pulse rounded-full bg-violet-500" /></div> : null}
         </div>
-        {job.stage === "failed" ? <button type="button" disabled={retryDisabled} title={retryDisabled ? retryDisabledReason : "Retry image"} onClick={() => { removeJob(job.id); void uploadFile(job.file, job.replaceId, job.attachmentId); }} className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-black text-violet-700 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={15} /> Retry</button> : <LoaderCircle size={18} className={job.stage === "complete" ? "text-emerald-500" : "animate-spin text-violet-500"} />}
-        <button type="button" onClick={() => removeJob(job.id)} aria-label={`Remove ${job.file.name || "upload"}`} className="grid size-11 shrink-0 place-items-center rounded-lg text-slate-500"><X size={17} /></button>
+        {job.stage === "failed" ? <button type="button" disabled={retryDisabled} title={retryDisabled ? retryDisabledReason : "Retry image"} onClick={() => { removeJob(job.id); void uploadFile(job.file, job.replaceId, job.attachmentId, job.resumeAttachment); }} className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-black text-violet-700 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={15} /> Retry</button> : <LoaderCircle size={18} className={job.stage === "complete" ? "text-emerald-500" : "animate-spin text-violet-500"} />}
+        <button type="button" onClick={() => removeJob(job.id)} aria-label={`Remove ${job.file?.name || "upload"}`} className="grid size-11 shrink-0 place-items-center rounded-lg text-slate-500"><X size={17} /></button>
       </article>)}
     </div> : null}
 
@@ -389,7 +437,9 @@ export function ImageAttachmentField({
           <img src={image.imageUrl} alt={`${label} ${index + 1}`} className="h-32 w-full object-contain" />
         </button>
         <div className="flex flex-wrap items-center gap-1 p-2">
+          {image.metadataStatus === "pending" ? <p className="w-full rounded-lg bg-amber-50 p-2 text-xs font-bold text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">Image uploaded; record still needs to be saved</p> : null}
           <button type="button" onClick={() => setPreviewIndex(index)} className="min-h-11 rounded-lg px-2 text-xs font-black text-violet-700">View Larger</button>
+          {image.metadataStatus === "pending" ? <button type="button" disabled={retryDisabled || active} title={retryDisabled ? retryDisabledReason : "Retry saving the image record"} onClick={() => void uploadFile(undefined, image.id, image.id, image)} className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-black text-violet-700 disabled:opacity-40"><RotateCcw size={15} /> Retry record</button> : null}
           <button type="button" onClick={() => chooseReplacement(image.id)} className="grid size-11 place-items-center rounded-lg text-slate-600" aria-label={`Replace ${label} ${index + 1}`}><Replace size={16} /></button>
           {multiple ? <>
             <button type="button" disabled={index === 0} onClick={() => { const next = [...attachments]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void commit(next); }} className="grid size-11 place-items-center rounded-lg disabled:opacity-30" aria-label={`Move ${label} ${index + 1} earlier`}><ArrowUp size={16} /></button>
