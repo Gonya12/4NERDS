@@ -7,6 +7,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
+import { LoadingOverlay } from "../components/sales/SalesDashboardPrimitives";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import {
   blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade, saveTrade
@@ -45,6 +46,7 @@ export function TradePage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showLoading, setShowLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | TradeTransaction["status"]>("all");
@@ -75,6 +77,11 @@ export function TradePage() {
     finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, [requestedId]);
+  useEffect(() => {
+    if (!loading || trades.length) { setShowLoading(false); return; }
+    const timer = window.setTimeout(() => setShowLoading(true), 180);
+    return () => window.clearTimeout(timer);
+  }, [loading, trades.length]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -138,7 +145,9 @@ export function TradePage() {
     finally { setSaving(false); }
   }
 
-  if (loading && !trades.length) return <div className="surface-card p-5 font-bold">Loading Trade Control…</div>;
+  if (loading && !trades.length) return <div className="page-shell min-w-0 py-10" aria-busy="true">
+    {showLoading ? <LoadingOverlay inline label="Preparing trade workspace…" detail="Loading available inventory, transaction history, and ownership options." onRetry={() => void load()} onCancel={() => navigate("/sales", { replace: true })} /> : null}
+  </div>;
   if (editor) return <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />;
   if (detail) return <TradeDetail trade={detail} trades={trades} inventory={inventory} events={events} workers={workers} saving={saving} message={message} onBack={() => { setDetail(undefined); navigate("/sales/trades"); }} onDuplicate={() => openNew(detail)} onReverse={() => void reverseCurrent()} />;
 

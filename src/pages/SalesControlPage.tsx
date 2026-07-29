@@ -137,6 +137,8 @@ export function SalesControlPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [addSheet, setAddSheet] = useState<"main" | "purchase_cost" | "item_mode" | null>(null);
   const [pendingTransactionPath, setPendingTransactionPath] = useState("");
+  const [chooserSelection, setChooserSelection] = useState<{ key: string; label: string }>();
+  const chooserTimerRef = useRef<number | undefined>(undefined);
   const addTransactionButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -223,6 +225,9 @@ export function SalesControlPage() {
     if (entryParams.get("mode") === "sale") openSale(undefined, events, entryParams.get("initialMode") === "camera");
   }, [location.search]);
   useEffect(() => () => stopCamera(), []);
+  useEffect(() => () => {
+    if (chooserTimerRef.current) window.clearTimeout(chooserTimerRef.current);
+  }, []);
   useEffect(() => {
     if (!cameraMode) return;
     const frame = window.requestAnimationFrame(() => void startCamera(facingMode));
@@ -293,11 +298,28 @@ export function SalesControlPage() {
     setAddSheet("item_mode");
   }
 
-  const closeAddSheet = useCallback(() => setAddSheet(null), []);
+  function transitionChooser(key: string, label: string, action: () => void) {
+    if (chooserSelection) return;
+    setChooserSelection({ key, label });
+    chooserTimerRef.current = window.setTimeout(() => {
+      action();
+      setChooserSelection(undefined);
+      chooserTimerRef.current = undefined;
+    }, 220);
+  }
+
+  const closeAddSheet = useCallback(() => {
+    if (chooserTimerRef.current) window.clearTimeout(chooserTimerRef.current);
+    chooserTimerRef.current = undefined;
+    setChooserSelection(undefined);
+    setAddSheet(null);
+  }, []);
 
   function launchTransaction(itemMode: "single" | "multiple") {
-    setAddSheet(null);
-    navigate(`${pendingTransactionPath}${pendingTransactionPath.includes("?") ? "&" : "?"}items=${itemMode}`);
+    transitionChooser(itemMode, itemMode === "single" ? "Single item" : "Multiple items", () => {
+      setAddSheet(null);
+      navigate(`${pendingTransactionPath}${pendingTransactionPath.includes("?") ? "&" : "?"}items=${itemMode}`);
+    });
   }
 
   function openPurchase(purchase?: InventoryPurchase) {
@@ -849,15 +871,62 @@ export function SalesControlPage() {
         </div>
         <AppButton ref={addTransactionButtonRef} onClick={() => setAddSheet("main")} className="w-full shrink-0 sm:w-auto sm:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
       </header>
-      <ResponsiveModal open={Boolean(addSheet)} title={addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"} description={addSheet === "main" ? "Choose a transaction type to open its existing workflow." : addSheet === "purchase_cost" ? "Choose an inventory source or business cost category." : "Use a single record or enter a multi-item lot."} onClose={closeAddSheet} restoreFocusRef={addTransactionButtonRef}>
-        {addSheet === "main" ? <div className="grid gap-3 sm:grid-cols-2">
-          <ActionCard title="Sold" description="Record one or multiple items sold." icon={<BadgeDollarSign size={25} />} accent="orange" onClick={() => chooseTransaction("/sales/transactions/new?type=sale")} />
-          <ActionCard title="Purchased / Cost" description="Add inventory purchases or business expenses." icon={<ShoppingBasket size={25} />} accent="blue" onClick={() => setAddSheet("purchase_cost")} />
-          <ActionCard title="Trade" description="Exchange inventory for incoming cards or products." icon={<ArrowLeftRight size={25} />} accent="purple" onClick={() => chooseTransaction("/sales/trades?new=trade")} />
-          <ActionCard title="Cash + Trade" description="Record a mixed trade with cash received or paid." icon={<WalletCards size={25} />} accent="green" onClick={() => chooseTransaction("/sales/trades?new=cash_trade")} />
+      <ResponsiveModal
+        open={Boolean(addSheet)}
+        title={addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"}
+        description={addSheet === "main" ? "Choose a transaction type. You can add one item, multiple items, or a complete lot." : addSheet === "purchase_cost" ? "Choose an inventory source or business cost category." : "Use a single record or enter a multi-item lot."}
+        onClose={closeAddSheet}
+        restoreFocusRef={addTransactionButtonRef}
+        size="lg"
+        dismissible={!chooserSelection}
+      >
+        {addSheet === "main" ? <div className={`grid gap-3 sm:grid-cols-2 sm:gap-4 ${chooserSelection ? "transaction-chooser-busy" : ""}`}>
+          <ActionCard
+            title="Sold"
+            description="Sell one item, several inventory items, or a complete bundle."
+            icon={<BadgeDollarSign size={25} />}
+            accent="orange"
+            selected={chooserSelection?.key === "sold"}
+            loading={chooserSelection?.key === "sold"}
+            disabled={Boolean(chooserSelection)}
+            onClick={() => transitionChooser("sold", "Sold", () => chooseTransaction("/sales/transactions/new?type=sale"))}
+          />
+          <ActionCard
+            title="Purchased / Cost"
+            description="Add inventory purchases, event costs, table fees, or business expenses."
+            icon={<ShoppingBasket size={25} />}
+            accent="blue"
+            selected={chooserSelection?.key === "purchased"}
+            loading={chooserSelection?.key === "purchased"}
+            disabled={Boolean(chooserSelection)}
+            onClick={() => transitionChooser("purchased", "Purchased / Cost", () => setAddSheet("purchase_cost"))}
+          />
+          <ActionCard
+            title="Trade"
+            description="Exchange one or several inventory items for cards, slabs, or sealed products."
+            icon={<ArrowLeftRight size={25} />}
+            accent="purple"
+            selected={chooserSelection?.key === "trade"}
+            loading={chooserSelection?.key === "trade"}
+            disabled={Boolean(chooserSelection)}
+            onClick={() => transitionChooser("trade", "Trade", () => chooseTransaction("/sales/trades?new=trade"))}
+          />
+          <ActionCard
+            title="Cash + Trade"
+            description="Record a mixed transaction containing incoming items, outgoing items, and cash."
+            icon={<WalletCards size={25} />}
+            accent="green"
+            selected={chooserSelection?.key === "cash_trade"}
+            loading={chooserSelection?.key === "cash_trade"}
+            disabled={Boolean(chooserSelection)}
+            onClick={() => transitionChooser("cash_trade", "Cash + Trade", () => chooseTransaction("/sales/trades?new=cash_trade"))}
+          />
         </div> : null}
+        {chooserSelection ? <p className="mt-4 flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/5 text-sm font-black text-white" role="status" aria-live="polite">
+          Opening {chooserSelection.label}…
+        </p> : null}
         {addSheet === "purchase_cost" ? <div className="space-y-4"><AppButton variant="ghost" onClick={() => setAddSheet("main")} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton variant="secondary" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=purchase&source=${source}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton variant="ghost" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=expense&category=${category}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
-        {addSheet === "item_mode" ? <div className="space-y-3"><AppButton variant="ghost" onClick={() => setAddSheet(pendingTransactionPath.includes("type=purchase") || pendingTransactionPath.includes("type=expense") ? "purchase_cost" : "main")} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div className="grid gap-3 sm:grid-cols-2"><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" onClick={() => launchTransaction("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" onClick={() => launchTransaction("multiple")} /></div></div> : null}
+        {addSheet === "item_mode" ? <div className="space-y-3"><AppButton variant="ghost" onClick={() => setAddSheet(pendingTransactionPath.includes("type=purchase") || pendingTransactionPath.includes("type=expense") ? "purchase_cost" : "main")} disabled={Boolean(chooserSelection)} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div className={`grid gap-3 sm:grid-cols-2 ${chooserSelection ? "transaction-chooser-busy" : ""}`}><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" selected={chooserSelection?.key === "single"} loading={chooserSelection?.key === "single"} disabled={Boolean(chooserSelection)} onClick={() => launchTransaction("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" selected={chooserSelection?.key === "multiple"} loading={chooserSelection?.key === "multiple"} disabled={Boolean(chooserSelection)} onClick={() => launchTransaction("multiple")} /></div></div> : null}
       </ResponsiveModal>
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}

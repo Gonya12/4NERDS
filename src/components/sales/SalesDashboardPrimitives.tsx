@@ -126,10 +126,12 @@ export function SkeletonChart() {
   </div>;
 }
 
-export function LoadingOverlay({ label = "Preparing your workflow…", detail, onRetry, timeoutMs = 15_000, inline = false }: {
+export function LoadingOverlay({ label = "Preparing your workflow…", detail, onRetry, onCancel, cancelLabel = "Return to Sales Control", timeoutMs = 15_000, inline = false }: {
   label?: string;
   detail?: string;
   onRetry?: () => void;
+  onCancel?: () => void;
+  cancelLabel?: string;
   timeoutMs?: number;
   inline?: boolean;
 }) {
@@ -148,10 +150,13 @@ export function LoadingOverlay({ label = "Preparing your workflow…", detail, o
   const content = <div className="loading-state-card" role="status" aria-live="polite" aria-busy={!timedOut}>
     <span className="loading-state-orbit" aria-hidden="true"><LoaderCircle size={30} /></span>
     <div>
-      <p className="font-black text-slate-950 dark:text-white">{timedOut ? "This is taking longer than expected" : slow ? "Still getting things ready…" : label}</p>
-      <p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{timedOut ? "Your data is safe. Retry the transition when you’re ready." : detail || "Please keep this window open."}</p>
+      <p className="font-black text-slate-950 dark:text-white">{timedOut ? "This transaction could not be opened" : slow ? "Still preparing your transaction…" : label}</p>
+      <p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{timedOut ? "Your data is safe. Retry the transition or return to Sales Control." : detail || "Please keep this window open."}</p>
     </div>
-    {timedOut && onRetry ? <AppButton type="button" variant="secondary" onClick={onRetry} className="mt-1"><RotateCcw size={16} /> Retry</AppButton> : null}
+    {timedOut ? <div className="mt-2 flex flex-wrap justify-center gap-2">
+      {onRetry ? <AppButton type="button" variant="secondary" onClick={onRetry}><RotateCcw size={16} /> Retry</AppButton> : null}
+      {onCancel ? <AppButton type="button" variant="ghost" onClick={onCancel}>{cancelLabel}</AppButton> : null}
+    </div> : null}
   </div>;
 
   return inline ? content : <div className="loading-overlay">{content}</div>;

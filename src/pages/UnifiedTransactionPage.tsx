@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, Camera, Check, Copy, PackagePlus, Save, Search, 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
+import { LoadingOverlay } from "../components/sales/SalesDashboardPrimitives";
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade } from "../services/database/tradeRepository";
@@ -32,6 +33,9 @@ export function UnifiedTransactionPage() {
   const [editing, setEditing] = useState<TradeItem>();
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [preparing, setPreparing] = useState(true);
+  const [showPreparing, setShowPreparing] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [allocation, setAllocation] = useState<AllocationMethod>("market");
   const fileRef = useRef<HTMLInputElement>(null);
   const review = transactionReview(transaction);
@@ -42,12 +46,39 @@ export function UnifiedTransactionPage() {
   };
 
   useEffect(() => {
-    void Promise.all([listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()]).then(async ([rows, eventRows, workerRows]) => {
-      const ownership = await listOwnershipShares(rows.map((row) => row.id), []);
-      setInventory(rows.map((row) => ({ ...row, ownershipShares: ownership.inventory.get(row.id) || [] })));
-      setEvents(eventRows); setWorkers(workerRows);
-    }).catch((error) => setMessage(error instanceof Error ? error.message : "Could not load transaction data."));
-  }, []);
+    let cancelled = false;
+    setPreparing(true);
+    setShowPreparing(false);
+    const indicatorTimer = window.setTimeout(() => {
+      if (!cancelled) setShowPreparing(true);
+    }, 180);
+    void Promise.allSettled([listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()]).then(async ([inventoryResult, eventResult, workerResult]) => {
+      const errors: string[] = [];
+      if (inventoryResult.status === "fulfilled") {
+        try {
+          const ownership = await listOwnershipShares(inventoryResult.value.map((row) => row.id), []);
+          if (!cancelled) setInventory(inventoryResult.value.map((row) => ({ ...row, ownershipShares: ownership.inventory.get(row.id) || [] })));
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : "Ownership options could not be loaded.");
+          if (!cancelled) setInventory(inventoryResult.value);
+        }
+      } else errors.push("Available inventory could not be loaded.");
+      if (eventResult.status === "fulfilled" && !cancelled) setEvents(eventResult.value);
+      else if (eventResult.status === "rejected") errors.push("Event options could not be loaded.");
+      if (workerResult.status === "fulfilled" && !cancelled) setWorkers(workerResult.value);
+      else if (workerResult.status === "rejected") errors.push("Ownership options could not be loaded.");
+      if (!cancelled && errors.length) setMessage(errors.join(" "));
+    }).finally(() => {
+      if (!cancelled) {
+        setPreparing(false);
+        setShowPreparing(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(indicatorTimer);
+    };
+  }, [loadAttempt]);
 
   const available = inventory.filter((row) => row.status === "in_stock").filter((row) => !search || `${row.itemName} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.id}`.toLowerCase().includes(search.toLowerCase()));
   const updateItem = (item: TradeItem) => setTransaction((row) => ({ ...row, items: row.items.map((value) => value.id === item.id ? item : value) }));
@@ -81,6 +112,16 @@ export function UnifiedTransactionPage() {
     setBusy(true); try { await saveTrade(transaction); setMessage("Draft saved."); } catch (error) { setMessage(error instanceof Error ? error.message : "Draft could not be saved."); } finally { setBusy(false); }
   }
   async function transactionPhoto(file?: File) { if (file) { const generalImageUrl = await fileToDataUrl(file); setTransaction((row) => ({ ...row, generalImageUrl })); } }
+
+  if (preparing) return <div className="page-shell min-w-0 py-10" aria-busy="true">
+    {showPreparing ? <LoadingOverlay
+      inline
+      label={`Preparing ${typeLabel.toLowerCase()} form…`}
+      detail={transaction.transactionType === "sale" ? "Loading available inventory and ownership options." : "Loading transaction and ownership options."}
+      onRetry={() => setLoadAttempt((attempt) => attempt + 1)}
+      onCancel={() => navigate("/sales", { replace: true })}
+    /> : null}
+  </div>;
 
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
     <header className="flex items-start justify-between gap-3"><div><Link to="/sales" className="inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow mt-2">Unified transaction · {transaction.itemMode === "multiple" ? "Multiple Items / Lot" : "Single Item"}</p><h1 className="text-2xl font-black">{typeLabel}</h1></div><button onClick={() => navigate("/sales")} className="rounded-full bg-slate-100 p-2"><X size={18} /></button></header>
