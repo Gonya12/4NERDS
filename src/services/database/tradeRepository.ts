@@ -7,6 +7,7 @@ import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
 import { transactionReview } from "../../utils/transactionMath";
 import { roundMoney } from "../../utils/paymentMath";
+import { buildFinancialTransactionPayload } from "./financialTransactionPayload";
 
 const localKey = "4nerds_financial_transactions_local_v1";
 const cacheKey = "4nerds_financial_transactions_cache_v1";
@@ -16,13 +17,18 @@ const read = <T>(key: string): T[] => { try { return JSON.parse(localStorage.get
 const write = (key: string, values: unknown[]) => { try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* optional cache */ } };
 
 type TransactionRow = {
-  id: string; transaction_date: string; event_id?: string | null; event_day_id?: string | null; customer_or_seller?: string | null;
+  id: string; transaction_date: string; transaction_subtype?: string | null;
+  event_id?: string | null; event_day_id?: string | null; customer_or_seller?: string | null;
   cash_received?: number | null; cash_paid?: number | null;
-  notes?: string | null; status: TradeTransaction["status"]; entered_by_worker_id?: string | null;
-  completed_at?: string | null; reversed_at?: string | null; reversal_of_transaction_id?: string | null; created_at: string; updated_at: string;
-  transaction_type?: TradeTransaction["transactionType"] | null; item_mode?: TradeTransaction["itemMode"] | null;
-  pricing_mode?: TradeTransaction["pricingMode"] | null; bundle_total?: number | null; payment_method?: TradeTransaction["paymentMethod"] | null;
-  purchase_source?: TradeTransaction["purchaseSource"] | null; expense_category?: TradeTransaction["expenseCategory"] | null;
+  bundle_total?: number | null; allocation_method?: TradeTransaction["pricingMode"] | null;
+  notes?: string | null; status: TradeTransaction["status"]; item_mode?: TradeTransaction["itemMode"] | null; entered_by_worker_id?: string | null;
+  general_image_url?: string | null; general_image_path?: string | null; expense_category?: TradeTransaction["expenseCategory"] | null;
+  payment_method?: TradeTransaction["paymentMethod"] | null; transaction_type?: TradeTransaction["transactionType"] | null;
+  created_at?: string | null; updated_at?: string | null;
+  // Read-only compatibility for rows created before the canonical payload names were adopted.
+  completed_at?: string | null; reversed_at?: string | null; reversal_of_transaction_id?: string | null;
+  pricing_mode?: TradeTransaction["pricingMode"] | null;
+  purchase_source?: TradeTransaction["purchaseSource"] | null;
   paid_by_worker_id?: string | null; keep_as_bundle?: boolean | null;
 };
 type ItemRow = {
@@ -56,16 +62,6 @@ function transactionImagePath(url?: string) {
   return url.includes(marker) ? decodeURIComponent(url.split(marker)[1]) : undefined;
 }
 
-const transactionRow = (trade: TradeTransaction): TransactionRow => ({
-  id: trade.id, transaction_date: trade.tradeDate, event_id: trade.eventId || null, event_day_id: trade.eventDayId || null,
-  customer_or_seller: trade.tradePartner || null, cash_received: Number(trade.cashReceived || 0), cash_paid: Number(trade.cashPaid || 0),
-  notes: trade.notes || null, status: trade.status,
-  entered_by_worker_id: trade.enteredByWorkerId || null, completed_at: trade.completedAt || null, reversed_at: trade.reversedAt || null,
-  reversal_of_transaction_id: trade.reversalOfTradeId || null, created_at: trade.createdAt, updated_at: trade.updatedAt
-  , transaction_type: trade.transactionType, item_mode: trade.itemMode, pricing_mode: trade.pricingMode,
-  bundle_total: trade.bundleTotal ?? null, payment_method: trade.paymentMethod || null, purchase_source: trade.purchaseSource || null,
-  expense_category: trade.expenseCategory || null, paid_by_worker_id: trade.paidByWorkerId || null, keep_as_bundle: Boolean(trade.keepAsBundle)
-});
 const itemRow = (item: TradeItem): ItemRow => ({
   id: item.id, transaction_id: item.tradeTransactionId, inventory_purchase_id: item.inventoryPurchaseId || null,
   created_inventory_purchase_id: item.createdInventoryPurchaseId || null, prior_inventory_purchase_id: item.priorInventoryPurchaseId || null,
@@ -165,15 +161,16 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
       .map(imageAttachment),
     id: row.id, tradeDate: row.transaction_date, eventId: row.event_id || undefined, eventDayId: row.event_day_id || undefined,
     tradePartner: row.customer_or_seller || undefined, cashReceived: Number(row.cash_received ?? paymentMap.get(row.id)?.received ?? 0), cashPaid: Number(row.cash_paid ?? paymentMap.get(row.id)?.paid ?? 0),
-    notes: row.notes || undefined, generalImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_url,
-    generalImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_path,
+    notes: row.notes || undefined, generalImageUrl: row.general_image_url || imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_url,
+    generalImagePath: row.general_image_path || imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_path,
     proofImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "proof" || value.image_type === "receipt"))?.image_url,
     proofImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "proof" || value.image_type === "receipt"))?.image_path, status: row.status,
     enteredByWorkerId: row.entered_by_worker_id || undefined, completedAt: row.completed_at || undefined, reversedAt: row.reversed_at || undefined,
-    reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at, updatedAt: row.updated_at, items: itemMap.get(row.id) || []
-    , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.pricing_mode || "individual",
+    reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at || row.transaction_date, updatedAt: row.updated_at || row.transaction_date, items: itemMap.get(row.id) || []
+    , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.allocation_method || row.pricing_mode || "individual",
     bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
-    purchaseSource: row.purchase_source || undefined, expenseCategory: row.expense_category || undefined,
+    purchaseSource: row.transaction_type === "purchase" ? (row.transaction_subtype as TradeTransaction["purchaseSource"]) || row.purchase_source || undefined : undefined,
+    expenseCategory: row.transaction_type === "expense" ? row.expense_category || undefined : undefined,
     paidByWorkerId: row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
   }));
   write(cacheKey, values);
@@ -185,15 +182,66 @@ export function listTrades() {
   return listFinancialTransactions(["trade", "cash_trade"]);
 }
 
+export class FinancialTransactionDraftError extends Error {
+  cause?: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "FinancialTransactionDraftError";
+    this.cause = cause;
+  }
+}
+
+export function isFinancialTransactionDraftError(error: unknown): error is FinancialTransactionDraftError {
+  return error instanceof FinancialTransactionDraftError;
+}
+
+async function upsertFinancialTransactionParent(transaction: TradeTransaction) {
+  if (!isSupabaseConfigured || !supabase) return transaction.id;
+  const payload = buildFinancialTransactionPayload(transaction);
+  const saved = await supabase
+    .from("financial_transactions")
+    .upsert(payload, { onConflict: "id" })
+    .select("id")
+    .single();
+  if (saved.error) throw new Error(saved.error.message);
+  return saved.data.id as string;
+}
+
+export async function saveFinancialTransactionDraft(input: TradeTransaction) {
+  const draft = {
+    ...input,
+    status: "draft" as const,
+    updatedAt: nowIso(),
+    items: input.items.map((item) => ({ ...item, tradeTransactionId: input.id }))
+  };
+  try {
+    const transactionId = await upsertFinancialTransactionParent(draft);
+    const persisted = {
+      ...draft,
+      id: transactionId,
+      items: draft.items.map((item) => ({ ...item, tradeTransactionId: transactionId }))
+    };
+    if (!isSupabaseConfigured || !supabase) {
+      const values = [persisted, ...read<TradeTransaction>(localKey).filter((row) => row.id !== persisted.id)];
+      write(localKey, values);
+      write(cacheKey, values);
+    }
+    return persisted;
+  } catch (error) {
+    throw new FinancialTransactionDraftError(
+      error instanceof Error ? error.message : "The transaction draft could not be saved.",
+      error
+    );
+  }
+}
+
 export async function saveTrade(input: TradeTransaction, options?: { syncImages?: boolean }) {
   const trade = { ...input, updatedAt: nowIso(), items: input.items.map((item) => ({ ...item, tradeTransactionId: input.id, updatedAt: nowIso() })) };
   if (!isSupabaseConfigured || !supabase) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
     write(localKey, values); write(cacheKey, values); return trade;
   }
-  const saved = await supabase.from("financial_transactions").upsert(transactionRow(trade)).select("id").single();
-  if (saved.error) throw new Error(saved.error.message);
-  const transactionId = saved.data.id as string;
+  const transactionId = await upsertFinancialTransactionParent(trade);
   const persistedTrade = {
     ...trade,
     id: transactionId,
@@ -294,10 +342,16 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
     purchaseDate: trade.tradeDate, totalCost: item.allocatedCostBasis, marketValue: item.marketValue, purchaseSource: "trade",
     seller: trade.tradePartner, eventId: trade.eventId, purchasedByWorkerId: trade.enteredByWorkerId, status: "in_stock",
     isRawCard: item.itemType === "raw_card", cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
-    pokemonTcgCardId: item.pokemonTcgCardId, cardCondition: item.cardCondition, stickerPrice: item.stickerPrice,
+    cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardLanguage: item.cardLanguage,
+    pokemonTcgCardId: item.pokemonTcgCardId, officialCardImageUrl: item.officialCardImageUrl, tcgplayerUrl: item.tcgplayerUrl,
+    marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
+    marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
+    buyPercentage: item.targetBuyPercentage, targetBuyPrice: item.targetBuyPrice,
+    cardCondition: item.cardCondition, stickerPrice: item.stickerPrice,
     gradingCompany: item.gradingCompany, grade: item.grade, certificateNumber: item.certificateNumber, imageUrl: item.imageUrl,
     imagePath: item.imagePath, frontImageUrl: item.imageUrl, frontImagePath: item.imagePath, backImageUrl: item.backImageUrl,
     backImagePath: item.backImagePath, notes: item.notes, acquisitionMethod: "trade", acquiredFinancialTransactionId: trade.id,
+    scanResult: item.tcgplayerPricing ? { tcgplayerPricing: item.tcgplayerPricing } : undefined,
     agreedTradeValue: item.agreedTradeValue, priorInventoryPurchaseId: item.priorInventoryPurchaseId,
     financialTransactionId: trade.id, financialTransactionItemId: item.id
   };
@@ -359,6 +413,13 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
         imagePath: item.imagePath || transaction.generalImagePath, itemName: item.itemName, category: item.itemType, quantity: item.quantity,
         soldPrice: item.soldPrice || 0, boughtPrice: item.historicalCostBasis, marketValue: item.marketValue,
+        marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
+        marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
+        tcgplayerUrl: item.tcgplayerUrl, cardName: item.itemName, collectorNumber: item.collectorNumber,
+        cardSet: item.cardSet, cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity,
+        cardLanguage: item.cardLanguage, cardCondition: item.cardCondition, pokemonTcgCardId: item.pokemonTcgCardId,
+        officialCardImageUrl: item.officialCardImageUrl, buyPercentage: item.targetBuyPercentage,
+        targetBuyPrice: item.targetBuyPrice,
         paymentMethod: transaction.paymentMethod || "cash", soldByWorkerId: transaction.enteredByWorkerId,
         inventoryPurchaseId: source?.id, notes: item.notes || transaction.notes, soldAt: transaction.tradeDate,
         financialTransactionId: transaction.id, financialTransactionItemId: item.id
@@ -411,6 +472,12 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
         purchasedByWorkerId: transaction.paidByWorkerId, notes: item.notes || transaction.notes, status: "in_stock",
         cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet, pokemonTcgCardId: item.pokemonTcgCardId,
+        cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardLanguage: item.cardLanguage,
+        officialCardImageUrl: item.officialCardImageUrl, tcgplayerUrl: item.tcgplayerUrl,
+        marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
+        marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
+        buyPercentage: item.targetBuyPercentage, targetBuyPrice: item.targetBuyPrice,
+        scanResult: item.tcgplayerPricing ? { tcgplayerPricing: item.tcgplayerPricing } : undefined,
         cardCondition: item.cardCondition, stickerPrice: item.stickerPrice, gradingCompany: item.gradingCompany, grade: item.grade,
         certificateNumber: item.certificateNumber, imageUrl: item.imageUrl || transaction.generalImageUrl, imagePath: item.imagePath,
         acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: item.id

@@ -11,6 +11,8 @@
     "test:transactions": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/transactionMath.test.ts",
     "test:flow": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/transactionFlowRoutes.test.ts",
     "test:exports": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/financialExport.test.ts",
+    "test:payload": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/financialTransactionPayload.test.ts",
+    "test:pricing": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/cardPricing.test.ts",
     "preview": "vite preview --host 0.0.0.0",
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync android",

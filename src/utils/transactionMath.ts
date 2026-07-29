@@ -4,6 +4,16 @@ const roundMoney = (value: number) => Math.round((Number(value || 0) + Number.EP
 
 export type AllocationMethod = "market" | "equal" | "cost" | "custom";
 
+export function hasKnownHistoricalCostBasis(item: TradeItem) {
+  const basis = Number(item.historicalCostBasis);
+  return Number.isFinite(basis) && (basis > 0 || (basis === 0 && item.zeroCostBasisConfirmed === true));
+}
+
+export function missingHistoricalCostBasisItems(transaction: Pick<TradeTransaction, "transactionType" | "items">) {
+  if (transaction.transactionType !== "sale") return [];
+  return transaction.items.filter((item) => item.direction === "outgoing" && !hasKnownHistoricalCostBasis(item));
+}
+
 export function allocateTransactionTotal(items: TradeItem[], total: number, method: AllocationMethod, field: "soldPrice" | "boughtPrice") {
   if (method === "custom") return items;
   const weights = items.map((item) => method === "market" ? item.marketValue : method === "cost" ? item.historicalCostBasis : 1);
@@ -23,10 +33,12 @@ export function transactionReview(transaction: TradeTransaction) {
   const incoming = transaction.items.filter((item) => item.direction === "incoming");
   const sold = roundMoney(outgoing.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0));
   const bought = roundMoney(incoming.reduce((sum, item) => sum + Number(item.boughtPrice || 0), 0));
-  const basis = roundMoney(outgoing.reduce((sum, item) => sum + Number(item.historicalCostBasis || 0), 0));
-  const grossProfit = roundMoney(sold - basis);
+  const missingCostBasisItems = missingHistoricalCostBasisItems(transaction);
+  const basisComplete = missingCostBasisItems.length === 0;
+  const basis = roundMoney(outgoing.reduce((sum, item) => sum + (hasKnownHistoricalCostBasis(item) ? Number(item.historicalCostBasis) : 0), 0));
+  const grossProfit = basisComplete ? roundMoney(sold - basis) : undefined;
   const ownerProfit = new Map<string, number>();
-  outgoing.forEach((item) => item.ownershipShares.forEach((share) => {
+  if (basisComplete) outgoing.forEach((item) => item.ownershipShares.forEach((share) => {
     const profit = Number(item.soldPrice || 0) - Number(item.historicalCostBasis || 0);
     ownerProfit.set(share.workerId, roundMoney((ownerProfit.get(share.workerId) || 0) + profit * share.ownershipPercentage / 100));
   }));
@@ -42,7 +54,7 @@ export function transactionReview(transaction: TradeTransaction) {
       internalBalances.set(key, current);
     }));
   }
-  return { outgoing, incoming, sold, bought, basis, grossProfit, ownerProfit, bundleDifference, internalBalances: Array.from(internalBalances.values()) };
+  return { outgoing, incoming, sold, bought, basis, basisComplete, missingCostBasisItems, grossProfit, ownerProfit, bundleDifference, internalBalances: Array.from(internalBalances.values()) };
 }
 
 export function dailyFinancialSummary(date: string, sales: SalesRecord[], purchases: InventoryPurchase[], expenses: BusinessExpense[], transactions: TradeTransaction[]) {

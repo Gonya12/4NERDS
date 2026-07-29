@@ -4,16 +4,22 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
 import { CardScanPanel } from "../components/sales/CardScanPanel";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
+import { IncomingBatchPricing } from "../components/sales/IncomingBatchPricing";
+import { TransactionItemPricing } from "../components/sales/TransactionItemPricing";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, Toast, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
-import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade, type TransactionSaveStage } from "../services/database/tradeRepository";
+import {
+  completeFinancialTransaction, blankTrade, blankTradeItem, saveFinancialTransactionDraft, saveTrade,
+  type TransactionSaveStage
+} from "../services/database/tradeRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
 import type { BusinessExpenseCategory, CardCondition, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
+import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
 import { allocateTransactionTotal, transactionReview, type AllocationMethod } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
@@ -54,6 +60,8 @@ export function UnifiedTransactionPage() {
   const [manualSearch, setManualSearch] = useState(false);
   const [scanFile, setScanFile] = useState<File>();
   const [message, setMessage] = useState("");
+  const [draftSaveError, setDraftSaveError] = useState("");
+  const [imageUploadError, setImageUploadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(true);
   const [showPreparing, setShowPreparing] = useState(false);
@@ -91,17 +99,35 @@ export function UnifiedTransactionPage() {
   }, [requestedMode, requestedType]);
 
   async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string) {
-    const persisted = await saveTrade(transaction, { syncImages: false });
-    const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress);
-    return {
-      id: crypto.randomUUID(),
-      transactionId: persisted.id,
-      transactionItemId: itemId,
-      imageType,
-      imageUrl: result.imageUrl,
-      imagePath: result.imagePath,
-      sortOrder: 0
-    } satisfies TransactionImageAttachment;
+    setDraftSaveError("");
+    setImageUploadError("");
+    let persisted: TradeTransaction;
+    try {
+      persisted = itemId
+        ? await saveTrade(transaction, { syncImages: false })
+        : await saveFinancialTransactionDraft(transaction);
+      if (persisted.id !== transaction.id) setTransaction(persisted);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The transaction draft could not be saved.";
+      setDraftSaveError(detail);
+      throw new Error("Image upload is waiting for the transaction draft to save. Retry after the transaction error is resolved.");
+    }
+    try {
+      const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress);
+      return {
+        id: result.id,
+        transactionId: persisted.id,
+        transactionItemId: itemId,
+        imageType,
+        imageUrl: result.imageUrl,
+        imagePath: result.imagePath,
+        sortOrder: 0
+      } satisfies TransactionImageAttachment;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The image could not be uploaded.";
+      setImageUploadError(detail);
+      throw error;
+    }
   }
 
   async function changeTransactionImages(types: TransactionImageType[], next: TransactionImageAttachment[]) {
@@ -117,7 +143,12 @@ export function UnifiedTransactionPage() {
       proofImagePath: proof?.imagePath
     };
     setTransaction(updated);
-    await saveTrade(updated);
+    try {
+      await saveFinancialTransactionDraft(updated);
+      setDraftSaveError("");
+    } catch (error) {
+      setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be updated.");
+    }
   }
 
   async function changeItemImages(item: TradeItem, types: TransactionImageType[], next: TransactionImageAttachment[]) {
@@ -135,7 +166,12 @@ export function UnifiedTransactionPage() {
     setEditing(updated);
     const nextTransaction = { ...transaction, items: transaction.items.map((row) => row.id === item.id ? updated : row) };
     setTransaction(nextTransaction);
-    await saveTrade(nextTransaction);
+    try {
+      await saveTrade(nextTransaction);
+      setDraftSaveError("");
+    } catch (error) {
+      setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be updated.");
+    }
   }
 
   useEffect(() => {
@@ -194,7 +230,22 @@ export function UnifiedTransactionPage() {
   const updateItem = (item: TradeItem) => setTransaction((row) => ({ ...row, items: row.items.map((value) => value.id === item.id ? item : value) }));
   const addSaleItem = (purchase: InventoryPurchase) => {
     if (transaction.items.some((item) => item.inventoryPurchaseId === purchase.id)) { setMessage("That inventory item is already selected."); return; }
-    const item: TradeItem = { ...blankTradeItem(transaction.id, "outgoing"), inventoryPurchaseId: purchase.id, itemName: purchase.itemName, itemType: purchase.category, quantity: Math.max(1, purchase.quantity - purchase.quantitySold), marketValue: Number(purchase.marketValue || 0), historicalCostBasis: purchase.totalCost, soldPrice: Number(purchase.marketValue || 0), imageUrl: purchase.imageUrl, collectorNumber: purchase.collectorNumber, cardSet: purchase.cardSet, ownershipShares: purchase.ownershipShares || [] };
+    const item: TradeItem = {
+      ...blankTradeItem(transaction.id, "outgoing"), inventoryPurchaseId: purchase.id, itemName: purchase.itemName,
+      itemType: purchase.category, quantity: Math.max(1, purchase.quantity - purchase.quantitySold),
+      marketValue: Number(purchase.marketValue || 0), historicalCostBasis: purchase.totalCost,
+      soldPrice: Number(purchase.marketValue || 0), imageUrl: purchase.frontImageUrl || purchase.imageUrl,
+      imagePath: purchase.frontImagePath || purchase.imagePath, collectorNumber: purchase.collectorNumber,
+      cardSet: purchase.cardSet, cardSetId: purchase.cardSetId, cardSetCode: purchase.cardSetCode,
+      cardRarity: purchase.cardRarity, cardLanguage: purchase.cardLanguage, pokemonTcgCardId: purchase.pokemonTcgCardId,
+      officialCardImageUrl: purchase.officialCardImageUrl, tcgplayerUrl: purchase.tcgplayerUrl,
+      marketPriceSource: purchase.marketPriceSource, marketPriceVariant: purchase.marketPriceVariant,
+      marketPriceUpdatedAt: purchase.marketPriceUpdatedAt, marketPriceCheckedAt: purchase.marketPriceCheckedAt,
+      tcgplayerPricing: pricingFromInventory(purchase), targetBuyPercentage: purchase.buyPercentage,
+      targetBuyPrice: purchase.targetBuyPrice, cardSelectionSource: "inventory",
+      cardCondition: purchase.cardCondition, gradingCompany: purchase.gradingCompany, grade: purchase.grade,
+      certificateNumber: purchase.certificateNumber, ownershipShares: purchase.ownershipShares || []
+    };
     setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] }));
   };
   const addIncoming = () => {
@@ -238,12 +289,12 @@ export function UnifiedTransactionPage() {
     finally { setBusy(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function saveDraft() {
-    setBusy(true); setSaveStage("transaction");
+    setBusy(true); setSaveStage("transaction"); setDraftSaveError("");
     try {
       await saveTrade(transaction);
       localStorage.setItem(draftKey, JSON.stringify({ transaction, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
       setToast({ message: "Draft saved. You can safely return to it later.", tone: "success" });
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Draft could not be saved."); }
+    } catch (error) { setDraftSaveError(error instanceof Error ? error.message : "Draft could not be saved."); }
     finally { setBusy(false); setSaveStage(undefined); }
   }
   function requestExit() {
@@ -284,6 +335,8 @@ export function UnifiedTransactionPage() {
     </section> : null}
     <div className="grid grid-cols-3 gap-1">{["Shared Info", "Items", "Review"].map((label, index) => <button key={label} disabled={imageUploading} onClick={() => setStep(index)} className={`min-h-11 rounded-xl text-xs font-black disabled:opacity-50 ${step === index ? "bg-violet-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{index + 1}. {label}</button>)}</div>
     {message ? <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{message}</p> : null}
+    {draftSaveError ? <p role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800"><span className="block text-xs uppercase tracking-wide">Transaction draft error</span>{draftSaveError}</p> : null}
+    {imageUploadError ? <p role="alert" className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-sm font-bold text-orange-800"><span className="block text-xs uppercase tracking-wide">Image upload error</span>{imageUploadError}</p> : null}
 
     {step === 0 ? <section className="surface-card grid gap-3 p-4 sm:grid-cols-2">
       <label><span className="text-xs font-black">Date and time</span><input type="datetime-local" value={new Date(new Date(transaction.tradeDate).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)} onChange={(event) => setTransaction({ ...transaction, tradeDate: new Date(event.target.value).toISOString() })} className={input} /></label>
@@ -329,6 +382,7 @@ export function UnifiedTransactionPage() {
         {transaction.transactionType === "sale" ? <button type="button" onClick={() => { const item = { ...blankTradeItem(transaction.id, "outgoing"), ownershipShares: [] }; setTransaction((row) => ({ ...row, items: [...row.items, item] })); setEditing(item); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 font-black text-slate-800"><PackagePlus size={17} /> Enter Manually</button> : null}
       </div></div>
       {transaction.transactionType !== "expense" && transaction.itemMode === "multiple" ? <div className="surface-card grid gap-2 p-4 sm:grid-cols-[1fr_1fr_auto]"><select value={transaction.pricingMode} onChange={(event) => setTransaction({ ...transaction, pricingMode: event.target.value as TradeTransaction["pricingMode"] })} className={input}><option value="individual">Individual Prices</option><option value="bundle_total">Bundle Total</option></select>{transaction.pricingMode === "bundle_total" ? <>{moneyInput(transaction.bundleTotal, (bundleTotal) => setTransaction({ ...transaction, bundleTotal }))}<select value={allocation} onChange={(event) => setAllocation(event.target.value as AllocationMethod)} className={input}><option value="market">Market Value</option><option value="equal">Equal Split</option><option value="cost">Cost Basis</option><option value="custom">Custom</option></select><button type="button" onClick={allocate} className="min-h-11 rounded-xl bg-violet-600 px-3 font-black text-white sm:col-span-3">Allocate {formatMoney(transaction.bundleTotal || 0)}</button></> : null}{transaction.transactionType === "purchase" ? <label className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-3 text-sm font-black sm:col-span-3"><input type="checkbox" checked={Boolean(transaction.keepAsBundle)} onChange={(event) => setTransaction({ ...transaction, keepAsBundle: event.target.checked })} className="size-4" /> Keep this lot as one bundled inventory record</label> : null}</div> : null}
+      {transaction.transactionType === "purchase" && transaction.itemMode === "multiple" ? <IncomingBatchPricing items={transaction.items} mode="purchase" onApply={(items) => setTransaction({ ...transaction, items })} /> : null}
       <div className="space-y-2">{transaction.items.map((item) => <article key={item.id} className="surface-card grid gap-3 p-3 sm:grid-cols-[4rem_1fr_auto] sm:items-center">
         {item.imageUrl || transaction.generalImageUrl ? <img src={item.imageUrl || transaction.generalImageUrl} alt="" className="size-16 rounded-xl object-contain" /> : <div className="grid size-16 place-items-center rounded-xl bg-slate-100 text-slate-400"><PackagePlus size={20} /></div>}
         <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><b className="truncate">{item.itemName || "Details pending"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${item.direction === "outgoing" ? "bg-orange-100 text-orange-700" : item.direction === "incoming" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>{item.direction}</span></div><div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 sm:grid-cols-4"><span>Qty <b className="text-slate-700">{item.quantity}</b></span><span>Market <b className="text-slate-700">{formatMoney(item.marketValue)}</b></span><span>Basis <b className="text-slate-700">{formatMoney(item.historicalCostBasis || item.allocatedCostBasis)}</b></span><span>{transaction.transactionType === "sale" ? "Sold" : "Cost"} <b className="text-slate-700">{formatMoney(transaction.transactionType === "sale" ? item.soldPrice || 0 : item.boughtPrice || 0)}</b></span></div><p className="mt-1 truncate text-xs text-slate-500">{item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
@@ -361,16 +415,7 @@ export function UnifiedTransactionPage() {
             <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-slate-800"><ScanLine size={16} /> Scan Card<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { setScanFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
           </div>
           {scanFile ? <div className="rounded-2xl border border-violet-200 p-3"><CardScanPanel imageFile={scanFile} category={editing.itemType} inventory={inventory} onRetakePhoto={() => setScanFile(undefined)} onApply={(suggestion) => {
-            const item = {
-              ...editing,
-              itemName: suggestion.cardName || editing.itemName,
-              collectorNumber: suggestion.collectorNumber || undefined,
-              cardSet: suggestion.cardSet || undefined,
-              cardCondition: suggestion.condition || undefined,
-              gradingCompany: suggestion.gradingCompany || undefined,
-              grade: suggestion.grade || undefined,
-              certificateNumber: suggestion.certificateNumber || undefined
-            };
+            const item = applyCardSuggestionToItem(editing, suggestion, "scanner");
             setEditing(item);
             updateItem(item);
             setScanFile(undefined);
@@ -391,11 +436,11 @@ export function UnifiedTransactionPage() {
               setEditing(item);
               updateItem(item);
             })}</label>
-            {transaction.transactionType === "sale" ? <label><span className="text-xs font-black">Original cost basis</span>{moneyInput(editing.historicalCostBasis, (historicalCostBasis) => {
+            {transaction.transactionType === "sale" ? <label><span className="text-xs font-black">Original Cost Basis</span>{editing.inventoryPurchaseId ? <input type="number" value={editing.historicalCostBasis} readOnly className={`${input} bg-slate-100`} /> : moneyInput(editing.historicalCostBasis, (historicalCostBasis) => {
               const item = { ...editing, historicalCostBasis };
               setEditing(item);
               updateItem(item);
-            })}</label> : null}
+            })}{editing.inventoryPurchaseId ? <small className="block text-slate-500">Historical cost basis loaded from inventory</small> : null}</label> : null}
             <label><span className="text-xs font-black">Collector number</span><input value={editing.collectorNumber || ""} onChange={(event) => {
               const item = { ...editing, collectorNumber: event.target.value };
               setEditing(item);
@@ -417,6 +462,7 @@ export function UnifiedTransactionPage() {
               updateItem(item);
             }} className={input} /></label>
           </div>
+          <TransactionItemPricing item={editing} context={transaction.transactionType === "sale" ? "sale" : "purchase"} onChange={(item) => { setEditing(item); updateItem(item); }} />
           <OwnershipEditor workers={workers} shares={editing.ownershipShares} totalCost={transaction.transactionType === "sale" ? editing.historicalCostBasis : Number(editing.boughtPrice || 0)} onChange={(ownershipShares: OwnershipShare[]) => {
             const item = { ...editing, ownershipShares };
             setEditing(item);
@@ -467,16 +513,7 @@ export function UnifiedTransactionPage() {
       initialSet={editing.cardSet}
       onClose={() => setManualSearch(false)}
       onApply={(suggestion) => {
-        const item = {
-          ...editing,
-          itemName: suggestion.cardName || editing.itemName,
-          collectorNumber: suggestion.collectorNumber || undefined,
-          cardSet: suggestion.cardSet || undefined,
-          cardCondition: suggestion.condition || undefined,
-          gradingCompany: suggestion.gradingCompany || undefined,
-          grade: suggestion.grade || undefined,
-          certificateNumber: suggestion.certificateNumber || undefined
-        };
+        const item = applyCardSuggestionToItem(editing, suggestion, "manual");
         setEditing(item);
         updateItem(item);
         setManualSearch(false);

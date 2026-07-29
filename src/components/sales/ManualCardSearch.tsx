@@ -102,6 +102,7 @@ export function ManualCardSearch({
   const [selectionMessage, setSelectionMessage] = useState("");
   const [searched, setSearched] = useState(false);
   const [selected, setSelected] = useState<CardScanSuggestion>();
+  const [retryMatch, setRetryMatch] = useState<CardMatch>();
   const [largeMatch, setLargeMatch] = useState<CardMatch>();
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -128,6 +129,7 @@ export function ManualCardSearch({
     setSelectionMessage("");
     setSearched(false);
     setSelected(undefined);
+    setRetryMatch(undefined);
     setLoading(false);
     setSelecting(false);
   }, [open, initialName, initialCollectorNumber, initialSet, initialLanguage]);
@@ -189,7 +191,11 @@ export function ManualCardSearch({
     controllerRef.current = controller;
     setSelecting(true);
     setError("");
-    setSelectionMessage("Applying card…");
+    setRetryMatch(undefined);
+    setSelectionMessage("Loading TCGplayer pricing…");
+    const slowTimer = window.setTimeout(() => {
+      if (!controller.signal.aborted) setSelectionMessage("Still checking card pricing…");
+    }, 3000);
     try {
       const { confirmPokemonCardMatch } = await import("../../services/sales/cardScanService");
       const confirmed = await confirmPokemonCardMatch(
@@ -217,8 +223,10 @@ export function ManualCardSearch({
     } catch (reason) {
       if (!controller.signal.aborted) {
         setError(reason instanceof Error ? reason.message : "Could not load the selected card.");
+        setRetryMatch(match);
       }
     } finally {
+      window.clearTimeout(slowTimer);
       if (!controller.signal.aborted) {
         setSelecting(false);
         setSelectionMessage("");
@@ -291,7 +299,7 @@ export function ManualCardSearch({
           >{searchLabel(recent)}</button>)}
         </div> : null}
 
-        {error ? <p role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-black text-rose-800 dark:bg-rose-950/50 dark:text-rose-200">{error}</p> : null}
+        {error ? <div role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-black text-rose-800 dark:bg-rose-950/50 dark:text-rose-200"><p>{error}</p>{retryMatch ? <button type="button" disabled={selecting} onClick={() => void chooseCard(retryMatch)} className="mt-2 min-h-10 rounded-xl bg-rose-700 px-4 text-white disabled:opacity-40">Retry Pricing</button> : null}</div> : null}
         {selectionMessage ? <p role="status" className="rounded-xl bg-violet-50 p-3 text-sm font-black text-violet-800 dark:bg-violet-950/40 dark:text-violet-100">{selectionMessage}</p> : null}
         {warnings.map((warning) => <p key={warning} role="status" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">{warning} Showing results using the remaining search fields.</p>)}
         {loading && !results.length ? <p role="status" className="rounded-xl bg-violet-50 p-4 text-sm font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200"><LoaderCircle className="mr-2 inline animate-spin" size={18} />Searching the official card catalog…</p> : null}

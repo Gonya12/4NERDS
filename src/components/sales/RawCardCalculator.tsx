@@ -1,5 +1,7 @@
 import { Calculator } from "lucide-react";
 import { formatMoney, roundMoney } from "../../utils/paymentMath";
+import { calculateTargetPrice } from "../../utils/cardPricing";
+import { TargetPriceCalculator } from "./TargetPriceCalculator";
 
 type Props = {
   marketValue: string;
@@ -14,7 +16,7 @@ export function RawCardCalculator({ marketValue, buyPercentage, actualCost, onMa
   const market = Number(marketValue || 0);
   const percentage = Number(buyPercentage || 0);
   const actual = Number(actualCost || 0);
-  const target = roundMoney(market * percentage / 100);
+  const target = calculateTargetPrice(market, percentage);
   const difference = roundMoney(actual - target);
   const potentialProfit = roundMoney(market - actual);
   const margin = market > 0 ? roundMoney((potentialProfit / market) * 100) : 0;
@@ -36,10 +38,7 @@ export function RawCardCalculator({ marketValue, buyPercentage, actualCost, onMa
           <input type="number" min="1" max="100" step="1" value={buyPercentage} onChange={(event) => onPercentage(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
         </label>
       </div>
-      <div className="grid grid-cols-3 gap-2">
-        {[75, 80].map((value) => <button type="button" key={value} onClick={() => onPercentage(String(value))} className="min-h-10 rounded-xl bg-white text-sm font-black text-ink shadow-sm dark:bg-slate-900 dark:text-white">{value}%</button>)}
-        <button type="button" onClick={() => onActualCost(String(target))} disabled={!target} className="min-h-10 rounded-xl bg-amber-500 text-sm font-black text-white disabled:opacity-50">Use target</button>
-      </div>
+      <TargetPriceCalculator marketValue={market} percentage={percentage} onPercentage={(value) => onPercentage(String(value))} actionLabel="Use target" onApply={(value) => onActualCost(String(value))} />
       <label className="block text-xs font-bold text-slate-500 dark:text-slate-400">Actual bought price
         <input type="number" min="0" step="0.01" value={actualCost} onChange={(event) => onActualCost(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" />
       </label>

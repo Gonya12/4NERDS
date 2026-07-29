@@ -29,6 +29,32 @@ test("owner profit is calculated per item ownership", () => {
   assert.equal(review.ownerProfit.get("thiago"), 20);
 });
 
+test("bundle profit stays incomplete until every cost basis is known", () => {
+  const first = { ...item("Item A", 20, 8, "thiago"), soldPrice: 20 };
+  const second = { ...item("Item B", 10, 0, "thiago"), soldPrice: 10 };
+  const pending = transactionReview({ ...transaction([first, second]), bundleTotal: 30 });
+  assert.equal(pending.sold, 30);
+  assert.equal(pending.basisComplete, false);
+  assert.equal(pending.grossProfit, undefined);
+  assert.equal(pending.ownerProfit.size, 0);
+  assert.deepEqual(pending.missingCostBasisItems.map((row) => row.itemName), ["Item B"]);
+
+  const fixed = transactionReview({ ...transaction([first, { ...second, historicalCostBasis: 4 }]), bundleTotal: 30 });
+  assert.equal(fixed.basisComplete, true);
+  assert.equal(fixed.basis, 12);
+  assert.equal(fixed.grossProfit, 18);
+  assert.equal(fixed.ownerProfit.get("thiago"), 18);
+});
+
+test("zero cost basis is accepted only after explicit confirmation", () => {
+  const unconfirmed = { ...item("Promo", 10, 0, "thiago"), soldPrice: 10 };
+  assert.equal(transactionReview(transaction([unconfirmed])).basisComplete, false);
+  const confirmed = { ...unconfirmed, zeroCostBasisConfirmed: true };
+  const review = transactionReview(transaction([confirmed]));
+  assert.equal(review.basisComplete, true);
+  assert.equal(review.grossProfit, 10);
+});
+
 test("purchase payer and item owner produce an unsettled balance suggestion", () => {
   const incoming = { ...item("Lot card", 100, 0, "gonzalo"), direction: "incoming" as const, boughtPrice: 100 };
   const purchase: TradeTransaction = { ...transaction([incoming]), transactionType: "purchase", paidByWorkerId: "thiago" };

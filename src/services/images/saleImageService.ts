@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from "../../utils/supabase";
+import { id, nowIso } from "../../utils/normalize";
 
 const bucketName = "sale-images";
 const supportedTypes = ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"];
@@ -109,7 +110,7 @@ export async function saveTransactionImage(file: File, transactionId: string, it
   if (!isSupabaseConfigured || !supabase) {
     const imageUrl = await fileToDataUrl(file);
     onProgress?.("complete");
-    return { imageUrl, imagePath: undefined };
+    return { id: id("transaction-image"), imageUrl, imagePath: undefined };
   }
   onProgress?.("compressing");
   const compressed = await compressSaleImage(file);
@@ -119,8 +120,21 @@ export async function saveTransactionImage(file: File, transactionId: string, it
     cacheControl: "31536000", upsert: true, contentType: compressed.type
   });
   if (error) throw new Error(error.message);
-  onProgress?.("saving");
   const { data } = supabase.storage.from("transaction-images").getPublicUrl(imagePath);
+  onProgress?.("saving");
+  const imageId = id("transaction-image");
+  const imageRow: Record<string, string | number> = {
+    id: imageId,
+    transaction_id: transactionId,
+    image_type: imageType,
+    image_url: data.publicUrl,
+    image_path: imagePath,
+    sort_order: 0,
+    updated_at: nowIso()
+  };
+  if (itemId) imageRow.transaction_item_id = itemId;
+  const metadata = await supabase.from("transaction_images").upsert(imageRow, { onConflict: "id" });
+  if (metadata.error) throw new Error(`The image uploaded, but its transaction record could not be saved: ${metadata.error.message}`);
   onProgress?.("complete");
-  return { imageUrl: data.publicUrl, imagePath };
+  return { id: imageId, imageUrl: data.publicUrl, imagePath };
 }
