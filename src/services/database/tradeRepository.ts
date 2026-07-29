@@ -244,7 +244,9 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
   };
 }
 
-export async function completeTrade(input: TradeTransaction, inventory: InventoryPurchase[]) {
+export type TransactionSaveStage = "transaction" | "items" | "inventory" | "ownership" | "finalizing";
+
+export async function completeTrade(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
   if (input.status !== "draft") throw new Error("Only a draft trade can be completed.");
   const outgoing = input.items.filter((item) => item.direction === "outgoing");
   const incoming = input.items.filter((item) => item.direction === "incoming");
@@ -253,12 +255,15 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   if (unavailable) throw new Error(`${unavailable.itemName} is no longer available.`);
   const timestamp = nowIso();
   let trade: TradeTransaction = { ...input, status: "draft", items: input.items.map((item) => item.direction === "incoming" ? { ...item, createdInventoryPurchaseId: item.createdInventoryPurchaseId || id("purchase") } : item) };
+  onProgress?.("transaction");
   await saveTrade(trade);
+  onProgress?.("inventory");
   for (const item of trade.items.filter((row) => row.direction === "outgoing")) {
     const source = inventory.find((row) => row.id === item.inventoryPurchaseId)!;
     await saveInventoryPurchase({ ...source, status: "traded_out", tradedAt: timestamp, disposedFinancialTransactionId: trade.id, financialTransactionId: trade.id, financialTransactionItemId: item.id });
   }
   const created: InventoryPurchase[] = [];
+  onProgress?.("ownership");
   for (const item of trade.items.filter((row) => row.direction === "incoming")) {
     const saved = await saveInventoryPurchase(inventoryFromIncoming(item, trade));
     if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
@@ -270,20 +275,24 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
     const result = await supabase.from("inventory_lineage").upsert(lineage.map((row) => ({ id: row.id, source_inventory_purchase_id: row.sourceInventoryPurchaseId, resulting_inventory_purchase_id: row.resultingInventoryPurchaseId, transaction_id: row.tradeTransactionId, relationship_type: row.relationshipType, created_at: row.createdAt })), { onConflict: "source_inventory_purchase_id,resulting_inventory_purchase_id,transaction_id" });
     if (result.error) throw new Error(result.error.message);
   } else write(lineageKey, [...lineage, ...read<InventoryTradeLineage>(lineageKey)]);
+  onProgress?.("finalizing");
   trade = { ...trade, status: "completed", completedAt: timestamp, updatedAt: timestamp };
   await saveTrade(trade);
   return { trade, created };
 }
 
-export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[]) {
-  if (input.transactionType === "trade" || input.transactionType === "cash_trade") return completeTrade(input, inventory);
+export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
+  if (input.transactionType === "trade" || input.transactionType === "cash_trade") return completeTrade(input, inventory, onProgress);
   if (input.status !== "draft") throw new Error("Only a draft transaction can be completed.");
   const timestamp = nowIso();
   let transaction: TradeTransaction = { ...input, status: "draft" };
+  onProgress?.("transaction");
   await saveTrade(transaction);
+  onProgress?.("items");
   if (transaction.transactionType === "sale") {
     const items = transaction.items.filter((item) => item.direction === "outgoing");
     if (!items.length) throw new Error("Add at least one inventory item to the sale.");
+    onProgress?.("inventory");
     for (const item of items) {
       const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
       if (!source || source.status !== "in_stock") throw new Error(`${item.itemName} is no longer available.`);
@@ -306,6 +315,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   } else if (transaction.transactionType === "purchase") {
     const items = transaction.items.filter((item) => item.direction === "incoming");
     if (!items.length) throw new Error("Add at least one purchased item.");
+    onProgress?.("inventory");
     for (const item of items) {
       const saved = await saveInventoryPurchase({
         itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
@@ -318,7 +328,10 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
       item.createdInventoryPurchaseId = saved.id;
-      if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
+      if (item.ownershipShares.length) {
+        onProgress?.("ownership");
+        await saveInventoryOwnership(saved.id, item.ownershipShares);
+      }
     }
     transaction.cashPaid = transaction.items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0);
   } else {
@@ -333,6 +346,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     if (transaction.items[0]) transaction.items[0].createdBusinessExpenseId = expense.id;
     transaction.cashPaid = amount;
   }
+  onProgress?.("finalizing");
   transaction = { ...transaction, status: "completed", completedAt: timestamp, updatedAt: timestamp };
   await saveTrade(transaction);
   const balances = transactionReview(transaction).internalBalances;

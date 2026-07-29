@@ -60,28 +60,44 @@ export async function uploadSaleImage(file: File, saleId: string) {
   return uploadFinancialImage(file, "sales", saleId);
 }
 
-export async function uploadFinancialImage(file: File, folder: "sales" | "purchases" | "expenses", recordId: string) {
+export type ImageUploadStage = "preparing" | "compressing" | "uploading" | "saving" | "complete";
+
+export async function uploadFinancialImage(file: File, folder: "sales" | "purchases" | "expenses", recordId: string, onProgress?: (stage: ImageUploadStage) => void) {
   if (!isSupabaseConfigured || !supabase) throw new Error("Supabase Storage is not configured.");
+  onProgress?.("preparing");
+  onProgress?.("compressing");
   const compressed = await compressSaleImage(file);
   const imagePath = `${folder}/${recordId}/${Date.now()}.jpg`;
+  onProgress?.("uploading");
   const { error } = await supabase.storage.from(bucketName).upload(imagePath, compressed, {
     cacheControl: "31536000",
     upsert: true,
     contentType: compressed.type
   });
   if (error) throw new Error(error.message);
+  onProgress?.("saving");
   const { data } = supabase.storage.from(bucketName).getPublicUrl(imagePath);
+  onProgress?.("complete");
   return { imageUrl: data.publicUrl, imagePath };
 }
 
-export async function saveTransactionImage(file: File, transactionId: string, itemId?: string, imageType = "transaction") {
-  if (!isSupabaseConfigured || !supabase) return { imageUrl: await fileToDataUrl(file), imagePath: undefined };
+export async function saveTransactionImage(file: File, transactionId: string, itemId?: string, imageType = "transaction", onProgress?: (stage: ImageUploadStage) => void) {
+  onProgress?.("preparing");
+  if (!isSupabaseConfigured || !supabase) {
+    const imageUrl = await fileToDataUrl(file);
+    onProgress?.("complete");
+    return { imageUrl, imagePath: undefined };
+  }
+  onProgress?.("compressing");
   const compressed = await compressSaleImage(file);
   const imagePath = `${transactionId}/${itemId || "shared"}/${imageType}-${Date.now()}.jpg`;
+  onProgress?.("uploading");
   const { error } = await supabase.storage.from("transaction-images").upload(imagePath, compressed, {
     cacheControl: "31536000", upsert: true, contentType: compressed.type
   });
   if (error) throw new Error(error.message);
+  onProgress?.("saving");
   const { data } = supabase.storage.from("transaction-images").getPublicUrl(imagePath);
+  onProgress?.("complete");
   return { imageUrl: data.publicUrl, imagePath };
 }

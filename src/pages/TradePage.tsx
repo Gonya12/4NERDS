@@ -4,18 +4,19 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ErrorState } from "../components/ErrorState";
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
-import { LoadingOverlay } from "../components/sales/SalesDashboardPrimitives";
+import { ConfirmDialog, LoadingOverlay, ProgressSteps, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import {
-  blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade, saveTrade
+  blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade, saveTrade, type TransactionSaveStage
 } from "../services/database/tradeRepository";
 import { getCachedInventoryPurchases, listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
-import { saveTransactionImage } from "../services/images/saleImageService";
+import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
 import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { pokemonCategoryLabels } from "../utils/salesControl";
@@ -23,6 +24,28 @@ import { allocateBasis, ownershipIsValid, tradeSummary } from "../utils/tradeMat
 
 const inputClass = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-ink outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white";
 const steps = ["Trade information", "We Gave", "We Received", "Cash adjustment", "Ownership & cost", "Review & Complete"];
+const tradeSaveSteps: ProgressStep[] = [
+  { id: "transaction", label: "Saving transaction & items" },
+  { id: "inventory", label: "Updating outgoing inventory" },
+  { id: "ownership", label: "Creating incoming inventory" },
+  { id: "finalizing", label: "Saving lineage & final status" }
+];
+const tradeImageSteps: ProgressStep[] = [
+  { id: "preparing", label: "Preparing" },
+  { id: "compressing", label: "Compressing" },
+  { id: "uploading", label: "Uploading" },
+  { id: "saving", label: "Saving reference" }
+];
+const localTradeDraftKey = "4nerds:transaction-draft:trade";
+type LocalTradeDraft = { trade: TradeTransaction; step: number; savedAt: string };
+function readLocalTradeDraft() {
+  try {
+    const value = JSON.parse(localStorage.getItem(localTradeDraftKey) || "null") as LocalTradeDraft | null;
+    return value?.trade?.id ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function localInput(value: string) {
   const date = new Date(value);
@@ -55,26 +78,42 @@ export function TradePage() {
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveStage, setSaveStage] = useState<TransactionSaveStage | undefined>(undefined);
+  const [saveComplete, setSaveComplete] = useState(false);
+  const [recoverableDraft, setRecoverableDraft] = useState<LocalTradeDraft | undefined>(() => readLocalTradeDraft());
+  const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
 
   async function load() {
     setLoading(true); setError("");
+    const results = await Promise.allSettled([
+      listTrades(), listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()
+    ]);
+    const errors: string[] = [];
+    const tradeRows = results[0].status === "fulfilled" ? results[0].value : trades;
+    const inventoryRows = results[1].status === "fulfilled" ? results[1].value : inventory;
+    const eventRows = results[2].status === "fulfilled" ? results[2].value : events;
+    const workerRows = results[3].status === "fulfilled" ? results[3].value : workers;
+    results.forEach((result, index) => {
+      if (result.status === "rejected") errors.push(`${["Trades", "Inventory", "Events", "Workers"][index]}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    });
+    let hydrated = inventoryRows;
     try {
-      const [tradeRows, inventoryRows, eventRows, workerRows] = await Promise.all([
-        listTrades(), listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()
-      ]);
       const ownership = await listOwnershipShares(inventoryRows.map((row) => row.id), []);
-      const hydrated = inventoryRows.map((row) => ({ ...row, ownershipShares: ownership.inventory.get(row.id) || [] }));
-      const tradeOnlyRows = tradeRows.filter((row) => row.transactionType === "trade" || row.transactionType === "cash_trade");
-      setTrades(tradeOnlyRows); setInventory(hydrated); setEvents(eventRows); setWorkers(workerRows);
-      if (requestedId) setDetail(tradeOnlyRows.find((row) => row.id === requestedId));
-      if (searchParams.get("new")) {
-        const next = blankTrade();
-        next.transactionType = searchParams.get("new") === "cash_trade" ? "cash_trade" : "trade";
-        next.itemMode = searchParams.get("items") === "single" ? "single" : "multiple";
-        setEditor(next); setStep(0);
-      }
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Trade data could not be loaded."); }
-    finally { setLoading(false); }
+      hydrated = inventoryRows.map((row) => ({ ...row, ownershipShares: ownership.inventory.get(row.id) || [] }));
+    } catch (caught) {
+      errors.push(`Ownership: ${caught instanceof Error ? caught.message : String(caught)}`);
+    }
+    const tradeOnlyRows = tradeRows.filter((row) => row.transactionType === "trade" || row.transactionType === "cash_trade");
+    setTrades(tradeOnlyRows); setInventory(hydrated); setEvents(eventRows); setWorkers(workerRows);
+    if (requestedId) setDetail(tradeOnlyRows.find((row) => row.id === requestedId));
+    if (searchParams.get("new")) {
+      const next = blankTrade();
+      next.transactionType = searchParams.get("new") === "cash_trade" ? "cash_trade" : "trade";
+      next.itemMode = searchParams.get("items") === "single" ? "single" : "multiple";
+      setEditor(next); setStep(0);
+    }
+    if (errors.length) setError(errors.join("\n"));
+    setLoading(false);
   }
   useEffect(() => { void load(); }, [requestedId]);
   useEffect(() => {
@@ -82,6 +121,23 @@ export function TradePage() {
     const timer = window.setTimeout(() => setShowLoading(true), 180);
     return () => window.clearTimeout(timer);
   }, [loading, trades.length]);
+  useEffect(() => {
+    if (!editor || editor.status !== "draft" || (!editor.items.length && !editor.tradePartner && !editor.notes && !editor.generalImageUrl)) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(localTradeDraftKey, JSON.stringify({ trade: editor, step, savedAt: new Date().toISOString() } satisfies LocalTradeDraft));
+      } catch {
+        setMessage("This trade is too large for local recovery. Use Save Draft to keep it in Supabase.");
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [editor, step]);
+  useEffect(() => {
+    if (!editor || saving) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editor, saving]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -112,27 +168,32 @@ export function TradePage() {
   }
   async function persistDraft() {
     if (!editor) return;
-    setSaving(true); setMessage("");
+    setSaving(true); setMessage(""); setSaveStage("transaction");
     try {
       const saved = await saveTrade(editor);
       setEditor(saved); setTrades((rows) => [saved, ...rows.filter((row) => row.id !== saved.id)]);
+      localStorage.setItem(localTradeDraftKey, JSON.stringify({ trade: saved, step, savedAt: new Date().toISOString() } satisfies LocalTradeDraft));
       setMessage("Draft saved.");
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Draft could not be saved."); }
-    finally { setSaving(false); }
+    finally { setSaving(false); setSaveStage(undefined); }
   }
   async function finish() {
     if (!editor) return;
     const incoming = editor.items.filter((item) => item.direction === "incoming");
     if (incoming.some((item) => !ownershipIsValid(item))) { setMessage("Assign ownership totaling 100% to every incoming item."); setStep(4); return; }
     if (incoming.some((item) => !item.itemName.trim())) { setMessage("Every incoming item needs a name."); setStep(2); return; }
-    setSaving(true); setMessage("");
+    setSaving(true); setMessage(""); setSaveComplete(false); setSaveStage("transaction");
     try {
-      const result = await completeTrade(editor, inventory);
+      const result = await completeTrade(editor, inventory, setSaveStage);
+      localStorage.removeItem(localTradeDraftKey);
+      setRecoverableDraft(undefined);
+      setSaveComplete(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 320));
       setEditor(undefined); setDetail(result.trade); setTrades((rows) => [result.trade, ...rows.filter((row) => row.id !== result.trade.id)]);
       await load();
       setMessage("Trade completed. Outgoing inventory is Traded Out and incoming inventory is In Stock.");
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Trade could not be completed."); }
-    finally { setSaving(false); }
+    finally { setSaving(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function reverseCurrent() {
     if (!detail || !confirm("Reverse this completed trade? The original history will remain and inventory availability will be adjusted safely.")) return;
@@ -148,7 +209,19 @@ export function TradePage() {
   if (loading && !trades.length) return <div className="page-shell min-w-0 py-10" aria-busy="true">
     {showLoading ? <LoadingOverlay inline label="Preparing trade workspace…" detail="Loading available inventory, transaction history, and ownership options." onRetry={() => void load()} onCancel={() => navigate("/sales", { replace: true })} /> : null}
   </div>;
-  if (editor) return <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />;
+  if (editor) {
+    const saveStageIndex = saveStage === "transaction" || saveStage === "items" ? 0 : saveStage === "inventory" ? 1 : saveStage === "ownership" ? 2 : 3;
+    return <>
+      {recoverableDraft ? <section className="fixed inset-x-3 top-3 z-[75] mx-auto max-w-2xl rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-xl dark:border-amber-800 dark:bg-amber-950">
+        <p className="font-black text-amber-900 dark:text-amber-100">An unfinished trade draft is available</p>
+        <p className="text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(recoverableDraft.savedAt).toLocaleString()}.</p>
+        <div className="mt-2 flex gap-2"><button type="button" onClick={() => { setEditor(recoverableDraft.trade); setStep(recoverableDraft.step); setRecoverableDraft(undefined); }} className="btn-primary">Resume Draft</button><button type="button" onClick={() => setDiscardDraftOpen(true)} className="btn-secondary">Discard</button></div>
+      </section> : null}
+      <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />
+      {saveStage ? <div className="fixed inset-x-3 bottom-24 z-[70] mx-auto max-w-2xl"><ProgressSteps steps={tradeSaveSteps} activeStep={saveStageIndex} complete={saveComplete} /></div> : null}
+      <ConfirmDialog open={discardDraftOpen} title="Discard recovered trade?" description="The locally recovered trade will be removed. Supabase drafts are not affected." confirmLabel="Discard Draft" onConfirm={() => { localStorage.removeItem(localTradeDraftKey); setRecoverableDraft(undefined); setDiscardDraftOpen(false); }} onCancel={() => setDiscardDraftOpen(false)} />
+    </>;
+  }
   if (detail) return <TradeDetail trade={detail} trades={trades} inventory={inventory} events={events} workers={workers} saving={saving} message={message} onBack={() => { setDetail(undefined); navigate("/sales/trades"); }} onDuplicate={() => openNew(detail)} onReverse={() => void reverseCurrent()} />;
 
   return <div className="page-shell min-w-0 overflow-x-hidden">
@@ -156,7 +229,7 @@ export function TradePage() {
       <div><Link to="/sales" className="mb-2 inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow">Inventory exchange</p><h1 className="text-3xl font-black text-ink dark:text-white">Trade Control</h1><p className="mt-1 text-sm text-slate-500">Draft, complete, search, reverse, and trace multi-item trades.</p></div>
       <button onClick={() => openNew()} className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-violet-600 px-4 font-black text-white"><PackagePlus size={18} /> New Trade</button>
     </header>
-    {error ? <p className="rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Trade tables are not ready: {error}. Run <code>trade-system-migration.sql</code>.</p> : null}
+    {error ? <ErrorState message="Some Trade Control data could not be refreshed. Cached sections remain available." details={error} onRetry={() => void load()} /> : null}
     {message ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{message}</p> : null}
 
     <section className="surface-card p-4">
@@ -191,10 +264,14 @@ function TradeEditor(props: EditorProps) {
   const [editingItem, setEditingItem] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
   const [preview, setPreview] = useState<{ url: string; title: string }>();
+  const [uploadStage, setUploadStage] = useState<ImageUploadStage | undefined>(undefined);
   const fileToDataUrl = async (file: File) => {
     await saveTrade(trade);
-    return (await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction")).imageUrl;
+    const result = await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction", setUploadStage);
+    window.setTimeout(() => setUploadStage(undefined), 650);
+    return result.imageUrl;
   };
+  const uploadStageIndex = uploadStage === "preparing" ? 0 : uploadStage === "compressing" ? 1 : uploadStage === "uploading" ? 2 : 3;
   const fileRef = useRef<HTMLInputElement>(null);
   const update = (patch: Partial<TradeTransaction>) => onChange({ ...trade, ...patch });
   const updateItem = (item: TradeItem) => update({ items: trade.items.map((row) => row.id === item.id ? item : row) });
@@ -230,23 +307,33 @@ function TradeEditor(props: EditorProps) {
     update({ items: trade.items.map((item) => allocated.find((row) => row.id === item.id) || item) });
   };
   async function pasteImage() {
-    const clipboardItems = await navigator.clipboard?.read?.();
-    const clipboardItem = clipboardItems?.find((item) => item.types.some((type) => type.startsWith("image/")));
-    const imageType = clipboardItem?.types.find((type) => type.startsWith("image/"));
-    if (!clipboardItem || !imageType || !editingItem) return;
-    const blob = await clipboardItem.getType(imageType);
-    const file = new File([blob], "pasted-trade-image.png", { type: imageType });
-    const url = await fileToDataUrl(file); const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
+    try {
+      const clipboardItems = await navigator.clipboard?.read?.();
+      const clipboardItem = clipboardItems?.find((item) => item.types.some((type) => type.startsWith("image/")));
+      const imageType = clipboardItem?.types.find((type) => type.startsWith("image/"));
+      if (!clipboardItem || !imageType || !editingItem) return;
+      const blob = await clipboardItem.getType(imageType);
+      const file = new File([blob], "pasted-trade-image.png", { type: imageType });
+      const url = await fileToDataUrl(file); const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
+    } catch {
+      setUploadStage(undefined);
+    }
   }
   async function chooseImage(file?: File) {
-    if (!file || !editingItem) return; const url = await fileToDataUrl(file);
-    const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
+    if (!file || !editingItem) return;
+    try {
+      const url = await fileToDataUrl(file);
+      const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
+    } catch {
+      setUploadStage(undefined);
+    }
   }
 
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
     <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">Trade editor · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button onClick={props.onClose} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={19} /></button></header>
     <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
     {props.message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{props.message}</p> : null}
+    {uploadStage ? <ProgressSteps steps={tradeImageSteps} activeStep={uploadStageIndex} complete={uploadStage === "complete"} title="Uploading image" /> : null}
 
     {props.step === 0 ? <section className="surface-card grid gap-3 p-4 sm:grid-cols-2">
       <label><span className="mb-1 block text-xs font-black">Trade date and time</span><input type="datetime-local" value={localInput(trade.tradeDate)} onChange={(event) => update({ tradeDate: new Date(event.target.value).toISOString() })} className={inputClass} /></label>

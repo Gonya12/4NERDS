@@ -12,7 +12,7 @@ import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { RawCardCalculator } from "../components/sales/RawCardCalculator";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { SalesAnalyticsPanel } from "../components/sales/SalesAnalyticsPanel";
-import { ActionCard, AppButton, DashboardSkeleton, FloatingActionButton, ResponsiveModal, Tooltip } from "../components/sales/SalesDashboardPrimitives";
+import { ActionCard, AppButton, DashboardSkeleton, FloatingActionButton, ResponsiveModal, Toast, Tooltip } from "../components/sales/SalesDashboardPrimitives";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses, saveBusinessExpense } from "../services/database/businessExpenseRepository";
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
@@ -933,7 +933,7 @@ export function SalesControlPage() {
       </ResponsiveModal>
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
-      {message ? <p role="status" className={`toast-message ${/could not|failed|error|required|missing|invalid/i.test(message) ? "border-rose-500/40 text-rose-100" : "border-emerald-500/40 text-emerald-100"}`}>{message}</p> : null}
+      <Toast open={Boolean(message)} message={message} tone={/could not|failed|error|required|missing|invalid/i.test(message) ? "error" : "success"} onDismiss={() => setMessage("")} />
 
       <div className="sales-dashboard-grid">
         <div className="contents">

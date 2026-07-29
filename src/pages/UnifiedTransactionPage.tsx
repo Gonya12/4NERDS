@@ -2,13 +2,13 @@ import { ArrowLeft, ArrowRight, Camera, Check, Copy, PackagePlus, Save, Search, 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
-import { LoadingOverlay } from "../components/sales/SalesDashboardPrimitives";
+import { ConfirmDialog, LoadingOverlay, ProgressSteps, Toast, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
-import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade } from "../services/database/tradeRepository";
+import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade, type TransactionSaveStage } from "../services/database/tradeRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
-import { saveTransactionImage } from "../services/images/saleImageService";
+import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
 import type { BusinessExpenseCategory, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
@@ -17,12 +17,35 @@ import { ownershipIsValid } from "../utils/tradeMath";
 
 const input = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-950";
 const moneyInput = (value: number | undefined, onChange: (value: number) => void) => <input type="number" min="0" step=".01" value={value || ""} onChange={(event) => onChange(Number(event.target.value || 0))} className={input} />;
+const saveSteps: ProgressStep[] = [
+  { id: "transaction", label: "Saving transaction" },
+  { id: "items", label: "Saving items & photos" },
+  { id: "inventory", label: "Updating inventory & ownership" },
+  { id: "finalizing", label: "Finalizing records" }
+];
+const imageSteps: ProgressStep[] = [
+  { id: "preparing", label: "Preparing" },
+  { id: "compressing", label: "Compressing" },
+  { id: "uploading", label: "Uploading" },
+  { id: "saving", label: "Saving reference" }
+];
+type LocalTransactionDraft = { transaction: TradeTransaction; step: number; savedAt: string };
+function readLocalTransactionDraft(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null") as LocalTransactionDraft | null;
+    return parsed?.transaction?.id ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function UnifiedTransactionPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const requestedType = (params.get("type") || "sale") as FinancialTransactionType;
   const requestedMode = params.get("items") === "multiple" ? "multiple" : "single";
+  const draftKey = `4nerds:transaction-draft:${requestedType}`;
+  const savedLocalDraft = useMemo(() => readLocalTransactionDraft(draftKey), [draftKey]);
   const initial = useMemo(() => ({ ...blankTrade(), transactionType: requestedType, itemMode: requestedMode as TradeTransaction["itemMode"], pricingMode: "individual" as const, paymentMethod: "cash" as SalePaymentMethod, purchaseSource: (params.get("source") || undefined) as PurchaseSource | undefined, expenseCategory: (params.get("category") || undefined) as BusinessExpenseCategory | undefined }), [requestedType, requestedMode]);
   const [transaction, setTransaction] = useState<TradeTransaction>(initial);
   const [inventory, setInventory] = useState<InventoryPurchase[]>([]);
@@ -36,13 +59,24 @@ export function UnifiedTransactionPage() {
   const [preparing, setPreparing] = useState(true);
   const [showPreparing, setShowPreparing] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [draftAvailable, setDraftAvailable] = useState(Boolean(savedLocalDraft));
+  const [confirmMode, setConfirmMode] = useState<"discard" | "exit" | undefined>(undefined);
+  const [saveStage, setSaveStage] = useState<TransactionSaveStage | undefined>(undefined);
+  const [saveComplete, setSaveComplete] = useState(false);
+  const [uploadStage, setUploadStage] = useState<ImageUploadStage | undefined>(undefined);
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "warning" | "info" } | undefined>(undefined);
   const [allocation, setAllocation] = useState<AllocationMethod>("market");
   const fileRef = useRef<HTMLInputElement>(null);
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
+  const hasUnsavedDraft = Boolean(transaction.items.length || transaction.tradePartner || transaction.notes || transaction.generalImageUrl || transaction.eventId);
+  const saveStageIndex = saveStage === "transaction" ? 0 : saveStage === "items" ? 1 : saveStage === "inventory" || saveStage === "ownership" ? 2 : 3;
+  const uploadStageIndex = uploadStage === "preparing" ? 0 : uploadStage === "compressing" ? 1 : uploadStage === "uploading" ? 2 : 3;
   const fileToDataUrl = async (file: File) => {
     await saveTrade(transaction);
-    return (await saveTransactionImage(file, transaction.id, editing?.id, editing ? "item" : "transaction")).imageUrl;
+    const result = await saveTransactionImage(file, transaction.id, editing?.id, editing ? "item" : "transaction", setUploadStage);
+    window.setTimeout(() => setUploadStage(undefined), 650);
+    return result.imageUrl;
   };
 
   useEffect(() => {
@@ -79,6 +113,23 @@ export function UnifiedTransactionPage() {
       window.clearTimeout(indicatorTimer);
     };
   }, [loadAttempt]);
+  useEffect(() => {
+    if (draftAvailable || !hasUnsavedDraft || transaction.status !== "draft") return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(draftKey, JSON.stringify({ transaction, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+      } catch {
+        setToast({ message: "This draft is too large for local recovery, but you can still save it to Supabase.", tone: "warning" });
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draftAvailable, draftKey, hasUnsavedDraft, step, transaction]);
+  useEffect(() => {
+    if (!hasUnsavedDraft || busy) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy, hasUnsavedDraft]);
 
   const available = inventory.filter((row) => row.status === "in_stock").filter((row) => !search || `${row.itemName} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.id}`.toLowerCase().includes(search.toLowerCase()));
   const updateItem = (item: TradeItem) => setTransaction((row) => ({ ...row, items: row.items.map((value) => value.id === item.id ? item : value) }));
@@ -102,16 +153,51 @@ export function UnifiedTransactionPage() {
     if (transaction.transactionType !== "expense" && relevant.some((item) => !ownershipIsValid(item))) { setMessage("Every item must have ownership totaling 100%."); return; }
     if (transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009) { setMessage("Allocate the complete bundle total before saving."); return; }
     setBusy(true);
+    setSaveComplete(false);
+    setSaveStage("transaction");
     try {
-      await completeFinancialTransaction(transaction, inventory);
+      await completeFinancialTransaction(transaction, inventory, setSaveStage);
+      localStorage.removeItem(draftKey);
+      setSaveComplete(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 320));
       navigate("/sales", { replace: true });
     } catch (error) { setMessage(error instanceof Error ? error.message : "Transaction could not be completed."); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function saveDraft() {
-    setBusy(true); try { await saveTrade(transaction); setMessage("Draft saved."); } catch (error) { setMessage(error instanceof Error ? error.message : "Draft could not be saved."); } finally { setBusy(false); }
+    setBusy(true); setSaveStage("transaction");
+    try {
+      await saveTrade(transaction);
+      localStorage.setItem(draftKey, JSON.stringify({ transaction, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+      setToast({ message: "Draft saved. You can safely return to it later.", tone: "success" });
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Draft could not be saved."); }
+    finally { setBusy(false); setSaveStage(undefined); }
   }
-  async function transactionPhoto(file?: File) { if (file) { const generalImageUrl = await fileToDataUrl(file); setTransaction((row) => ({ ...row, generalImageUrl })); } }
+  async function transactionPhoto(file?: File) {
+    if (!file) return;
+    try {
+      const generalImageUrl = await fileToDataUrl(file);
+      setTransaction((row) => ({ ...row, generalImageUrl }));
+      setToast({ message: "Transaction image uploaded.", tone: "success" });
+    } catch (error) {
+      setUploadStage(undefined);
+      setToast({ message: error instanceof Error ? error.message : "Image could not be uploaded.", tone: "error" });
+    }
+  }
+  function requestExit() {
+    if (hasUnsavedDraft) setConfirmMode("exit");
+    else navigate("/sales");
+  }
+  function resolveConfirmation() {
+    if (confirmMode === "discard") {
+      localStorage.removeItem(draftKey);
+      setDraftAvailable(false);
+      setToast({ message: "Recovered draft discarded.", tone: "info" });
+    } else if (confirmMode === "exit") {
+      navigate("/sales");
+    }
+    setConfirmMode(undefined);
+  }
 
   if (preparing) return <div className="page-shell min-w-0 py-10" aria-busy="true">
     {showPreparing ? <LoadingOverlay
@@ -124,9 +210,15 @@ export function UnifiedTransactionPage() {
   </div>;
 
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
-    <header className="flex items-start justify-between gap-3"><div><Link to="/sales" className="inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow mt-2">Unified transaction · {transaction.itemMode === "multiple" ? "Multiple Items / Lot" : "Single Item"}</p><h1 className="text-2xl font-black">{typeLabel}</h1></div><button onClick={() => navigate("/sales")} className="rounded-full bg-slate-100 p-2"><X size={18} /></button></header>
+    <header className="flex items-start justify-between gap-3"><div><Link to="/sales" onClick={(event) => { if (hasUnsavedDraft) { event.preventDefault(); setConfirmMode("exit"); } }} className="inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow mt-2">Unified transaction · {transaction.itemMode === "multiple" ? "Multiple Items / Lot" : "Single Item"}</p><h1 className="text-2xl font-black">{typeLabel}</h1></div><button onClick={requestExit} aria-label="Close transaction" className="rounded-full bg-slate-100 p-2"><X size={18} /></button></header>
+    {draftAvailable && savedLocalDraft ? <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
+      <p className="font-black text-amber-900 dark:text-amber-100">An unfinished {typeLabel.toLowerCase()} draft is available</p>
+      <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(savedLocalDraft.savedAt).toLocaleString()}.</p>
+      <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => { setTransaction(savedLocalDraft.transaction); setStep(savedLocalDraft.step); setDraftAvailable(false); setToast({ message: "Draft restored.", tone: "success" }); }} className="btn-primary">Resume Draft</button><button type="button" onClick={() => setConfirmMode("discard")} className="btn-secondary">Discard Draft</button></div>
+    </section> : null}
     <div className="grid grid-cols-3 gap-1">{["Shared Info", "Items", "Review"].map((label, index) => <button key={label} onClick={() => setStep(index)} className={`min-h-11 rounded-xl text-xs font-black ${step === index ? "bg-violet-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{index + 1}. {label}</button>)}</div>
-    {message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{message}</p> : null}
+    {message ? <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{message}</p> : null}
+    {uploadStage ? <ProgressSteps steps={imageSteps} activeStep={uploadStageIndex} complete={uploadStage === "complete"} title="Uploading image" /> : null}
 
     {step === 0 ? <section className="surface-card grid gap-3 p-4 sm:grid-cols-2">
       <label><span className="text-xs font-black">Date and time</span><input type="datetime-local" value={new Date(new Date(transaction.tradeDate).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)} onChange={(event) => setTransaction({ ...transaction, tradeDate: new Date(event.target.value).toISOString() })} className={input} /></label>
@@ -150,6 +242,9 @@ export function UnifiedTransactionPage() {
 
     {editing ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 sm:items-center sm:p-4"><section className="max-h-[94dvh] w-full max-w-xl space-y-3 overflow-y-auto rounded-t-3xl bg-white p-4 pb-8 dark:bg-slate-900 sm:rounded-3xl"><div className="flex justify-between"><h2 className="text-xl font-black">Transaction Item</h2><button onClick={() => setEditing(undefined)}><X /></button></div><label><span className="text-xs font-black">Item / description</span><input value={editing.itemName} onChange={(event) => { const item = { ...editing, itemName: event.target.value }; setEditing(item); updateItem(item); }} className={input} /></label>{transaction.transactionType !== "expense" ? <><div className="grid grid-cols-2 gap-2"><label><span className="text-xs font-black">Item type</span><select value={editing.itemType} onChange={(event) => { const item = { ...editing, itemType: event.target.value as PokemonProductCategory }; setEditing(item); updateItem(item); }} className={input}>{Object.entries(pokemonCategoryLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Market value</span>{moneyInput(editing.marketValue, (marketValue) => { const item = { ...editing, marketValue }; setEditing(item); updateItem(item); })}</label><label><span className="text-xs font-black">{transaction.transactionType === "sale" ? "Sold price" : "Bought price"}</span>{moneyInput(transaction.transactionType === "sale" ? editing.soldPrice : editing.boughtPrice, (value) => { const item = transaction.transactionType === "sale" ? { ...editing, soldPrice: value } : { ...editing, boughtPrice: value, allocatedCostBasis: value }; setEditing(item); updateItem(item); })}</label><label><span className="text-xs font-black">Collector number</span><input value={editing.collectorNumber || ""} onChange={(event) => { const item = { ...editing, collectorNumber: event.target.value }; setEditing(item); updateItem(item); }} className={input} /></label></div><OwnershipEditor workers={workers} shares={editing.ownershipShares} totalCost={transaction.transactionType === "sale" ? editing.historicalCostBasis : Number(editing.boughtPrice || 0)} onChange={(ownershipShares: OwnershipShare[]) => { const item = { ...editing, ownershipShares }; setEditing(item); updateItem(item); }} /></> : <label><span className="text-xs font-black">Amount</span>{moneyInput(transaction.bundleTotal, (bundleTotal) => setTransaction({ ...transaction, bundleTotal }))}</label>}<input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; const item = { ...editing, imageUrl: await fileToDataUrl(file) }; setEditing(item); updateItem(item); }} /><button onClick={() => fileRef.current?.click()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 font-black"><Camera size={17} /> Take / Upload Item Photo</button><button onClick={() => setEditing(undefined)} className="btn-primary w-full"><Check size={17} /> Done</button></section></div> : null}
 
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:bg-slate-950/95 lg:left-64"><div className="mx-auto flex max-w-4xl gap-2"><button onClick={() => setStep(Math.max(0, step - 1))} disabled={!step} className="min-h-12 rounded-xl bg-slate-100 px-3 font-black disabled:opacity-40"><ArrowLeft size={17} /></button><button onClick={() => void saveDraft()} disabled={busy} className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-amber-100 px-3 font-black text-amber-800"><Save size={17} /> Draft</button>{step < 2 ? <button onClick={() => setStep(step + 1)} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-600 font-black text-white">Next <ArrowRight size={17} /></button> : <button onClick={() => void complete()} disabled={busy} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 font-black text-white"><Check size={17} /> Complete</button>}</div></div>
+    {saveStage ? <div className="fixed inset-x-3 bottom-24 z-[70] mx-auto max-w-2xl"><ProgressSteps steps={saveSteps} activeStep={saveStageIndex} complete={saveComplete} /></div> : null}
+    <Toast open={Boolean(toast)} message={toast?.message || ""} tone={toast?.tone} onDismiss={() => setToast(undefined)} />
+    <ConfirmDialog open={Boolean(confirmMode)} title={confirmMode === "discard" ? "Discard recovered draft?" : "Leave this transaction?"} description={confirmMode === "discard" ? "The locally recovered transaction will be removed." : "Your local draft will remain available when you return."} confirmLabel={confirmMode === "discard" ? "Discard Draft" : "Leave Transaction"} tone={confirmMode === "discard" ? "danger" : "warning"} onConfirm={resolveConfirmation} onCancel={() => setConfirmMode(undefined)} />
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:bg-slate-950/95 lg:left-64"><div className="mx-auto flex max-w-4xl gap-2"><button onClick={() => setStep(Math.max(0, step - 1))} disabled={!step || busy} className="min-h-12 rounded-xl bg-slate-100 px-3 font-black disabled:opacity-40"><ArrowLeft size={17} /></button><button onClick={() => void saveDraft()} disabled={busy} className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-amber-100 px-3 font-black text-amber-800"><Save size={17} /> Draft</button>{step < 2 ? <button onClick={() => setStep(step + 1)} disabled={busy} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-600 font-black text-white disabled:opacity-50">Next <ArrowRight size={17} /></button> : <button onClick={() => void complete()} disabled={busy} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 font-black text-white disabled:opacity-50"><Check size={17} /> Complete</button>}</div></div>
   </div>;
 }
