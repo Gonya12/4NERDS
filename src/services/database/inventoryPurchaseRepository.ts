@@ -59,6 +59,12 @@ type PurchaseRow = {
   scan_status?: InventoryPurchase["scanStatus"] | null;
   image_hash?: string | null;
   scan_result?: Record<string, unknown> | null;
+  acquisition_method?: InventoryPurchase["acquisitionMethod"] | null;
+  acquired_trade_transaction_id?: string | null;
+  disposed_trade_transaction_id?: string | null;
+  traded_at?: string | null;
+  agreed_trade_value?: number | null;
+  prior_inventory_purchase_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -117,6 +123,12 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     scanStatus: row.scan_status || "not_scanned",
     imageHash: row.image_hash || undefined,
     scanResult: row.scan_result || undefined,
+    acquisitionMethod: row.acquisition_method || "purchased",
+    acquiredTradeTransactionId: row.acquired_trade_transaction_id || undefined,
+    disposedTradeTransactionId: row.disposed_trade_transaction_id || undefined,
+    tradedAt: row.traded_at || undefined,
+    agreedTradeValue: row.agreed_trade_value == null ? undefined : Number(row.agreed_trade_value),
+    priorInventoryPurchaseId: row.prior_inventory_purchase_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -176,6 +188,12 @@ function toRow(value: InventoryPurchase): PurchaseRow {
     scan_status: value.scanStatus || "not_scanned",
     image_hash: value.imageHash || null,
     scan_result: value.scanResult || null,
+    acquisition_method: value.acquisitionMethod || "purchased",
+    acquired_trade_transaction_id: value.acquiredTradeTransactionId || null,
+    disposed_trade_transaction_id: value.disposedTradeTransactionId || null,
+    traded_at: value.tradedAt || null,
+    agreed_trade_value: value.agreedTradeValue ?? null,
+    prior_inventory_purchase_id: value.priorInventoryPurchaseId || null,
     created_at: value.createdAt,
     updated_at: value.updatedAt
   };
@@ -189,6 +207,19 @@ function withoutManualSearchColumns(row: PurchaseRow) {
     pokemon_tcg_card_id: _pokemonTcgCardId,
     official_card_image_url: _officialCardImageUrl,
     tcgplayer_url: _tcgplayerUrl,
+    ...legacy
+  } = row;
+  return legacy;
+}
+
+function withoutTradeColumns(row: PurchaseRow) {
+  const {
+    acquisition_method: _acquisitionMethod,
+    acquired_trade_transaction_id: _acquiredTradeTransactionId,
+    disposed_trade_transaction_id: _disposedTradeTransactionId,
+    traded_at: _tradedAt,
+    agreed_trade_value: _agreedTradeValue,
+    prior_inventory_purchase_id: _priorInventoryPurchaseId,
     ...legacy
   } = row;
   return legacy;
@@ -212,7 +243,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_trade_transaction_id,disposed_trade_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const enhanced = await supabase.from("inventory_purchases")
     .select(columns)
@@ -222,7 +253,8 @@ export async function listInventoryPurchases(limit = 100) {
   if (isMissingColumnError(error)) {
     const legacyColumns = columns
       .replace(",card_set_id,card_set_code,card_rarity", "")
-      .replace(",pokemon_tcg_card_id,official_card_image_url,tcgplayer_url", "");
+      .replace(",pokemon_tcg_card_id,official_card_image_url,tcgplayer_url", "")
+      .replace(",acquisition_method,acquired_trade_transaction_id,disposed_trade_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id", "");
     const legacy = await supabase.from("inventory_purchases")
       .select(legacyColumns)
       .order("purchase_date", { ascending: false }).limit(limit);
@@ -330,7 +362,7 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
   const row = toRow(value);
   let result = await supabase.from("inventory_purchases").upsert(row).select("*").single();
   if (isMissingColumnError(result.error)) {
-    result = await supabase.from("inventory_purchases").upsert(withoutManualSearchColumns(row)).select("*").single();
+    result = await supabase.from("inventory_purchases").upsert(withoutTradeColumns(withoutManualSearchColumns(row) as PurchaseRow)).select("*").single();
   }
   const { data, error } = result;
   recordSupabaseRequest("inventory_purchases", "saveInventoryPurchase", data ? 1 : 0);

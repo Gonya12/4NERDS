@@ -1,9 +1,9 @@
 import {
-  Camera, ClipboardPaste, Download, FileSpreadsheet, ImagePlus, PackagePlus, Receipt,
+  Camera, ClipboardPaste, Download, FileSpreadsheet, Handshake, ImagePlus, PackagePlus, Receipt,
   RotateCcw, Save, ScanLine, SwitchCamera, Trash2, Upload, X
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { FinancialSpreadsheet } from "../components/sales/FinancialSpreadsheet";
@@ -16,6 +16,7 @@ import { deleteBusinessExpense, getCachedBusinessExpenses, listBusinessExpenses,
 import { deleteInventoryPurchase, getCachedInventoryPurchases, listInventoryPurchases, saveInventoryPurchase } from "../services/database/inventoryPurchaseRepository";
 import { createSaleRecord, deleteSaleRecord, getCachedSalesRecords, listSalesRecordsPage, saveSaleRecord, syncPendingSales } from "../services/database/salesRepository";
 import { listWorkers } from "../services/database/workerRepository";
+import { getCachedTrades, listTrades } from "../services/database/tradeRepository";
 import { listOwnershipShares, saveInventoryOwnership, saveSaleOwnership } from "../services/database/ownershipRepository";
 import { compressSaleImage, imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
@@ -23,7 +24,7 @@ import { downloadFinancialWorkbook, type ExcelExportScope } from "../services/sa
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 import type {
   BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
-  PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord, Worker
+  PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord, TradeTransaction, Worker
 } from "../types/models";
 import { safeDateFromLocalInput } from "../utils/browserCompat";
 import { eventDays, shortScheduleSummary } from "../utils/eventSchedule";
@@ -83,15 +84,18 @@ function loadErrorGuidance(error: string) {
 
 export function SalesControlPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
   const requestedEventId = params.get("eventId") || "";
   const cachedSales = getCachedSalesRecords();
   const cachedPurchases = getCachedInventoryPurchases();
   const cachedExpenses = getCachedBusinessExpenses();
+  const cachedTrades = getCachedTrades();
   const [editor, setEditor] = useState<Editor>(null);
   const [sales, setSales] = useState<SalesRecord[]>(cachedSales);
   const [purchases, setPurchases] = useState<InventoryPurchase[]>(cachedPurchases);
   const [expenses, setExpenses] = useState<BusinessExpense[]>(cachedExpenses);
+  const [trades, setTrades] = useState<TradeTransaction[]>(cachedTrades);
   const [events, setEvents] = useState<Event[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [editingSale, setEditingSale] = useState<SalesRecord>();
@@ -175,7 +179,8 @@ export function SalesControlPage() {
       withTimeout(listInventoryPurchases(75), "Inventory purchases"),
       withTimeout(listBusinessExpenses(75), "Expenses"),
       withTimeout(listPlannerEventOptions(40), "Events"),
-      withTimeout(listWorkers(), "Workers")
+      withTimeout(listWorkers(), "Workers"),
+      withTimeout(listTrades(), "Trades")
     ]);
     const errors: string[] = [];
     const refreshedSales = results[0].status === "fulfilled" ? results[0].value.records : sales;
@@ -194,6 +199,7 @@ export function SalesControlPage() {
     const eventRows = results[3].status === "fulfilled" ? results[3].value : [];
     if (results[3].status === "fulfilled") setEvents(eventRows); else errors.push(`Events: ${String(results[3].reason?.message || results[3].reason)}`);
     if (results[4].status === "fulfilled") setWorkers(results[4].value); else errors.push(`Workers: ${String(results[4].reason?.message || results[4].reason)}`);
+    if (results[5].status === "fulfilled") setTrades(results[5].value); else errors.push(`Trades: ${String(results[5].reason?.message || results[5].reason)}`);
     if (errors.length) setLoadError(errors.join("\n"));
     setUsingCachedData(errors.length > 0);
     setLoading(false);
@@ -709,7 +715,8 @@ export function SalesControlPage() {
       ["Type", "Date", "Item / Description", "Category", "Revenue", "Cost", "Event", "Worker"],
       ...sales.map((sale) => ["Sale", sale.soldAt, sale.itemName || "", pokemonCategoryLabels[sale.category || "other_pokemon_product"], sale.soldPrice || 0, sale.boughtPrice || 0, eventMap.get(sale.eventId || "")?.name || "", workerMap.get(sale.soldByWorkerId || "")?.name || ""]),
       ...purchases.map((purchase) => ["Inventory Purchase", purchase.purchaseDate, purchase.itemName, pokemonCategoryLabels[purchase.category], "", purchase.totalCost, eventMap.get(purchase.eventId || "")?.name || "", workerMap.get(purchase.purchasedByWorkerId || "")?.name || ""]),
-      ...expenses.map((expense) => ["Expense", expense.expenseDate, expense.description, expenseCategoryLabels[expense.category], "", expense.amount, eventMap.get(expense.eventId || "")?.name || "", workerMap.get(expense.paidByWorkerId || "")?.name || ""])
+      ...expenses.map((expense) => ["Expense", expense.expenseDate, expense.description, expenseCategoryLabels[expense.category], "", expense.amount, eventMap.get(expense.eventId || "")?.name || "", workerMap.get(expense.paidByWorkerId || "")?.name || ""]),
+      ...trades.map((trade) => ["Trade", trade.tradeDate, `${trade.items.filter((item) => item.direction === "outgoing").map((item) => item.itemName).join(" + ")} → ${trade.items.filter((item) => item.direction === "incoming").map((item) => item.itemName).join(" + ")}`, "Trade", trade.cashReceived, trade.cashPaid, eventMap.get(trade.eventId || "")?.name || "", workerMap.get(trade.enteredByWorkerId || "")?.name || ""])
     ];
     const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -731,7 +738,8 @@ export function SalesControlPage() {
           expenses: expenses.filter((row) => row.eventId === exportEventId),
           events: events.filter((row) => row.id === exportEventId)
         } : data;
-      await downloadFinancialWorkbook({ ...scoped, workers, scopeLabel: exportScope === "event" ? eventMap.get(exportEventId)?.name || "Selected event" : exportScope.replace(/_/g, " ") });
+      const scopedTrades = exportScope === "event" ? trades.filter((row) => row.eventId === exportEventId) : trades;
+      await downloadFinancialWorkbook({ ...scoped, trades: scopedTrades, workers, scopeLabel: exportScope === "event" ? eventMap.get(exportEventId)?.name || "Selected event" : exportScope.replace(/_/g, " ") });
       setExportOpen(false);
       setMessage("Excel workbook downloaded.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the Excel workbook."); }
@@ -813,7 +821,12 @@ export function SalesControlPage() {
     <div className="page-shell w-full min-w-0 max-w-full overflow-x-hidden">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="eyebrow">Financial control</p><h1 className="text-3xl font-black text-ink dark:text-white">Sales Control</h1><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Pokémon sales, inventory, and business costs in one place.</p></div>
-        <button onClick={() => openSale()} className="btn-primary"><Camera size={18} /> Add Sale</button>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <button onClick={() => openSale()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-3 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
+          <button onClick={() => openPurchase()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-black text-white"><PackagePlus size={18} /> Add Purchase</button>
+          <button onClick={() => openExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-500 px-3 text-sm font-black text-slate-950"><Receipt size={18} /> Add Expense</button>
+          <button onClick={() => navigate("/sales/trades")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><Handshake size={18} /> Add Trade</button>
+        </div>
       </header>
       <SyncStatusBadge syncing={syncing} />
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
@@ -828,6 +841,7 @@ export function SalesControlPage() {
             expenses={expenses}
             events={events}
             workers={workers}
+            trades={trades}
             dateRange={dateRange}
             customStart={customStart}
             customEnd={customEnd}
@@ -882,7 +896,7 @@ export function SalesControlPage() {
               <option value="all">All data</option><option value="sales">Sales only</option><option value="inventory">Inventory only</option><option value="expenses">Expenses only</option><option value="filtered">Current date filter</option><option value="date_range">Selected date range</option><option value="event">One event</option>
             </select>
             {exportScope === "event" ? <select value={exportEventId} onChange={(event) => setExportEventId(event.target.value)} className={compactInputClass()}><option value="">Choose event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select> : null}
-            <p className="text-sm text-slate-500">Workbook sheets: Overview, Sales, Inventory, Expenses, Event Summary, and Monthly Summary.</p>
+            <p className="text-sm text-slate-500">Workbook sheets include Overview, Sales, Inventory, Expenses, Trade Transactions, Individual Trade Items, All Financial Records, Event Summary, and Monthly Summary.</p>
             <button onClick={() => void exportExcel()} disabled={exporting || (exportScope === "event" && !exportEventId)} className="btn-primary min-h-12 w-full"><Download size={18} /> {exporting ? "Preparing workbook..." : "Download Excel"}</button>
           </section>
         </div>

@@ -1,13 +1,14 @@
 import { BarChart3, Camera, ChartArea, ChartBarStacked, ChartPie, FileSpreadsheet, LineChart, Maximize2, PackagePlus, Plus, Receipt, TrendingUp, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, Worker } from "../../types/models";
-import { filterFinancialRecords, financialDateRangeLabels, type FinancialDateRange } from "../../utils/financialDateRange";
+import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, TradeTransaction, Worker } from "../../types/models";
+import { filterFinancialRecords, financialDateRangeLabels, isWithinFinancialRange, type FinancialDateRange } from "../../utils/financialDateRange";
 import { formatMoney } from "../../utils/paymentMath";
 import { effectiveSaleOwnership, expenseCategoryLabels, financialOverview, inventoryQuantitySummary, inventoryStatusLabels, ownerProfitRows, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { ImageLightbox } from "./ImageLightbox";
+import { tradeSummary } from "../../utils/tradeMath";
 
 type FeedFilter = "all" | "in_stock" | "sold" | "sales" | "purchases" | "expenses" | "missing";
-type ChartMetric = "revenue" | "gross_profit" | "net_profit" | "expenses" | "inventory" | "unsold_inventory" | "items_sold" | "average_sale" | "owner_profit";
+type ChartMetric = "revenue" | "gross_profit" | "net_profit" | "expenses" | "inventory" | "unsold_inventory" | "items_sold" | "average_sale" | "owner_profit" | "trade_value" | "trade_value_in" | "trade_value_out" | "trade_gain" | "trade_cash_received" | "trade_cash_paid" | "trade_count" | "average_trade";
 type ChartGrouping = "daily" | "weekly" | "monthly" | "event" | "category" | "owner" | "payment";
 type ChartStyle = "line" | "bar" | "area" | "donut" | "stacked";
 
@@ -17,6 +18,7 @@ type Props = {
   expenses: BusinessExpense[];
   events: Event[];
   workers: Worker[];
+  trades: TradeTransaction[];
   dateRange: FinancialDateRange;
   customStart: string;
   customEnd: string;
@@ -51,6 +53,7 @@ export function SalesAnalyticsPanel(props: Props) {
   const [chartExpanded, setChartExpanded] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string }>();
   const filtered = useMemo(() => filterFinancialRecords(props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd), [props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd]);
+  const filteredTrades = useMemo(() => props.trades.filter((trade) => trade.status === "completed" && isWithinFinancialRange(trade.tradeDate, props.dateRange, props.customStart, props.customEnd)), [props.trades, props.dateRange, props.customStart, props.customEnd]);
   const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events), [filtered]);
 
   const chartRows = useMemo(() => {
@@ -74,7 +77,20 @@ export function SalesAnalyticsPanel(props: Props) {
       if (chartGrouping === "payment") return { key: payment || "unassigned", label: payment ? payment.replace(/_/g, " ") : "Not recorded" };
       return dateGroup(date, chartGrouping);
     };
-    if (chartMetric === "owner_profit" && chartGrouping !== "owner") {
+    if (chartMetric.startsWith("trade_") || chartMetric === "average_trade") {
+      filteredTrades.forEach((trade) => {
+        const summary = tradeSummary(trade);
+        const value = chartMetric === "trade_value" ? (summary.outgoingAgreed + summary.incomingAgreed) / 2
+          : chartMetric === "trade_value_in" ? summary.incomingAgreed
+          : chartMetric === "trade_value_out" ? summary.outgoingAgreed
+          : chartMetric === "trade_gain" ? summary.estimatedGainLoss
+          : chartMetric === "trade_cash_received" ? trade.cashReceived
+          : chartMetric === "trade_cash_paid" ? trade.cashPaid
+          : chartMetric === "trade_count" ? 1 : summary.incomingAgreed;
+        const g = group(trade.tradeDate, trade.eventId);
+        add(g.key, g.label, value);
+      });
+    } else if (chartMetric === "owner_profit" && chartGrouping !== "owner") {
       filtered.sales.forEach((sale) => {
         const g = group(sale.soldAt, sale.eventId, sale.category, sale.paymentMethod);
         const shares = effectiveSaleOwnership(sale, props.purchases);
@@ -109,10 +125,10 @@ export function SalesAnalyticsPanel(props: Props) {
       if (chartMetric === "net_profit") filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, -Number(row.amount || 0), 0); });
     }
     return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => ({
-      key, label: row.label, value: chartMetric === "average_sale" && row.count ? row.total / row.count : row.total,
+      key, label: row.label, value: (chartMetric === "average_sale" || chartMetric === "average_trade") && row.count ? row.total / row.count : row.total,
       segments: Array.from(row.segments.entries()).map(([label, value]) => ({ label, value }))
     }));
-  }, [filtered, chartMetric, chartGrouping, props.events, props.workers, props.purchases]);
+  }, [filtered, filteredTrades, chartMetric, chartGrouping, props.events, props.workers, props.purchases]);
 
   const maxChart = Math.max(1, ...chartRows.map((row) => Math.abs(row.value)));
   const linePoints = chartRows.map((row, index) => {
@@ -153,9 +169,15 @@ export function SalesAnalyticsPanel(props: Props) {
   const metricLabels: Record<ChartMetric, string> = {
     revenue: "Revenue", gross_profit: "Gross Profit", net_profit: "Net Profit", expenses: "Expenses",
     inventory: "Inventory Purchases", unsold_inventory: "Unsold Inventory Cost", items_sold: "Items Sold",
-    average_sale: "Average Sale", owner_profit: "Profit by Owner"
+    average_sale: "Average Sale", owner_profit: "Profit by Owner", trade_value: "Total Trade Value",
+    trade_value_in: "Value Traded In", trade_value_out: "Value Traded Out", trade_gain: "Estimated Trade Gain/Loss",
+    trade_cash_received: "Trade Cash Received", trade_cash_paid: "Trade Cash Paid", trade_count: "Number of Trades",
+    average_trade: "Average Trade Value"
   };
-  const groupingOptions: [ChartGrouping, string][] = chartMetric === "expenses" || chartMetric === "inventory" || chartMetric === "unsold_inventory"
+  const isTradeMetric = chartMetric.startsWith("trade_") || chartMetric === "average_trade";
+  const groupingOptions: [ChartGrouping, string][] = isTradeMetric
+    ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"]]
+    : chartMetric === "expenses" || chartMetric === "inventory" || chartMetric === "unsold_inventory"
     ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["category", "By Category"]]
     : chartMetric === "owner_profit"
       ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["owner", "By Owner"]]
@@ -163,11 +185,11 @@ export function SalesAnalyticsPanel(props: Props) {
   useEffect(() => {
     if (!groupingOptions.some(([value]) => value === chartGrouping)) setChartGrouping(groupingOptions[0][0]);
   }, [chartMetric, chartGrouping]);
-  const chartRecordCount = chartMetric === "expenses" ? filtered.expenses.length : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? filtered.purchases.length : filtered.sales.length;
-  const chartTotal = chartMetric === "average_sale"
-    ? (filtered.sales.length ? filtered.sales.reduce((sum, sale) => sum + Number(sale.soldPrice || 0), 0) / filtered.sales.length : 0)
+  const chartRecordCount = isTradeMetric ? filteredTrades.length : chartMetric === "expenses" ? filtered.expenses.length : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? filtered.purchases.length : filtered.sales.length;
+  const chartTotal = chartMetric === "average_sale" || chartMetric === "average_trade"
+    ? (chartRows.length ? chartRows.reduce((sum, row) => sum + row.value, 0) / chartRows.length : 0)
     : chartRows.reduce((sum, row) => sum + row.value, 0);
-  const compactValue = (value: number) => chartMetric === "items_sold" ? value.toFixed(1) : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: Math.abs(value) >= 1000 ? "compact" : "standard", maximumFractionDigits: Math.abs(value) >= 1000 ? 1 : 2 }).format(value);
+  const compactValue = (value: number) => chartMetric === "items_sold" || chartMetric === "trade_count" ? value.toFixed(1) : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: Math.abs(value) >= 1000 ? "compact" : "standard", maximumFractionDigits: Math.abs(value) >= 1000 ? 1 : 2 }).format(value);
 
   const recentRecords = useMemo(() => {
     const rows = [
@@ -222,7 +244,7 @@ export function SalesAnalyticsPanel(props: Props) {
       <section className="surface-card space-y-3 p-3 sm:p-4">
         <div className="flex items-center justify-between gap-2"><div><p className="eyebrow">Charts</p><h2 className="font-black text-ink dark:text-white">Explore performance</h2></div><button onClick={() => setChartExpanded(true)} className="inline-flex min-h-9 items-center gap-1 rounded-lg bg-slate-100 px-2 text-xs font-black dark:bg-slate-800"><Maximize2 size={15} /> Expand</button></div>
         <div className="grid gap-2 sm:grid-cols-3">
-          <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"],["trade_value","Total Trade Value"],["trade_value_in","Value Traded In"],["trade_value_out","Value Traded Out"],["trade_gain","Estimated Trade Gain/Loss"],["trade_cash_received","Trade Cash Received"],["trade_cash_paid","Trade Cash Paid"],["trade_count","Number of Trades"],["average_trade","Average Trade Value"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{groupingOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Date range<select value={props.dateRange} onChange={(event) => props.onDateRange(event.target.value as FinancialDateRange)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{Object.entries(financialDateRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         </div>

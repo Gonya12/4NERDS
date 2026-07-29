@@ -13,7 +13,7 @@ export type BuyItemPriority = "low" | "medium" | "high";
 export type PokemonProductCategory = "raw_card" | "graded_card" | "sealed_product" | "pokemon_accessory" | "bulk_lot" | "other_pokemon_product";
 export type PurchaseSource = "card_show" | "online" | "local" | "trade" | "personal_inventory" | "other";
 export type SalePaymentMethod = "cash" | "zelle" | "venmo" | "cash_app" | "paypal" | "card" | "trade" | "other";
-export type InventoryStatus = "in_stock" | "partially_sold" | "sold" | "personal";
+export type InventoryStatus = "in_stock" | "partially_sold" | "sold" | "personal" | "traded_out" | "removed" | "reversed";
 export type CardCondition = "Mint" | "Near Mint / NM" | "Lightly Played / LP" | "Moderately Played / MP" | "Heavily Played / HP" | "Damaged";
 export type CardScanStatus = "not_scanned" | "analyzing" | "needs_review" | "ready_to_import" | "imported" | "failed";
 export type BusinessExpenseCategory = "event_table_fee" | "gas" | "tolls" | "parking" | "food" | "supplies" | "shipping" | "packaging" | "card_show_equipment" | "software_subscription" | "advertising" | "other";
@@ -230,9 +230,88 @@ export interface InventoryPurchase {
   scanStatus?: CardScanStatus;
   imageHash?: string;
   scanResult?: Record<string, unknown>;
+  acquisitionMethod?: "purchased" | "trade" | "manual_entry" | "other";
+  acquiredTradeTransactionId?: string;
+  disposedTradeTransactionId?: string;
+  tradedAt?: string;
+  agreedTradeValue?: number;
+  priorInventoryPurchaseId?: string;
   createdAt: string;
   updatedAt: string;
   ownershipShares?: OwnershipShare[];
+}
+
+export type TradeStatus = "draft" | "completed" | "cancelled" | "reversed";
+export type TradeDirection = "outgoing" | "incoming";
+
+export interface TradeItemOwnershipShare extends OwnershipShare {
+  allocatedCostBasis?: number;
+  allocatedTradeValue?: number;
+}
+
+export interface TradeItem {
+  id: string;
+  tradeTransactionId: string;
+  inventoryPurchaseId?: string;
+  createdInventoryPurchaseId?: string;
+  priorInventoryPurchaseId?: string;
+  direction: TradeDirection;
+  itemName: string;
+  itemType: PokemonProductCategory;
+  quantity: number;
+  marketValue: number;
+  agreedTradeValue: number;
+  historicalCostBasis: number;
+  allocatedCostBasis: number;
+  cashAllocation?: number;
+  imageUrl?: string;
+  imagePath?: string;
+  backImageUrl?: string;
+  backImagePath?: string;
+  collectorNumber?: string;
+  cardSet?: string;
+  pokemonTcgCardId?: string;
+  cardCondition?: CardCondition;
+  stickerPrice?: number;
+  gradingCompany?: string;
+  grade?: string;
+  certificateNumber?: string;
+  ownershipShares: TradeItemOwnershipShare[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TradeTransaction {
+  id: string;
+  tradeDate: string;
+  eventId?: string;
+  eventDayId?: string;
+  tradePartner?: string;
+  cashReceived: number;
+  cashPaid: number;
+  notes?: string;
+  generalImageUrl?: string;
+  generalImagePath?: string;
+  proofImageUrl?: string;
+  proofImagePath?: string;
+  status: TradeStatus;
+  enteredByWorkerId?: string;
+  completedAt?: string;
+  reversedAt?: string;
+  reversalOfTradeId?: string;
+  createdAt: string;
+  updatedAt: string;
+  items: TradeItem[];
+}
+
+export interface InventoryTradeLineage {
+  id: string;
+  sourceInventoryPurchaseId: string;
+  resultingInventoryPurchaseId: string;
+  tradeTransactionId: string;
+  relationshipType: "exchanged_for";
+  createdAt: string;
 }
 
 export interface OwnershipShare {

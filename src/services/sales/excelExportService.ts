@@ -1,5 +1,6 @@
 import type { Cell, Sheet } from "write-excel-file/browser";
-import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, Worker } from "../../types/models";
+import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, TradeTransaction, Worker } from "../../types/models";
+import { tradeSummary } from "../../utils/tradeMath";
 import { expenseCategoryLabels, financialOverview, inventoryQuantitySummary, pokemonCategoryLabels, selectedEventCost } from "../../utils/salesControl";
 
 export type ExcelExportScope = "all" | "sales" | "inventory" | "expenses" | "filtered" | "date_range" | "event";
@@ -10,6 +11,7 @@ type ExportData = {
   expenses: BusinessExpense[];
   events: Event[];
   workers: Worker[];
+  trades?: TradeTransaction[];
   scopeLabel: string;
 };
 
@@ -22,6 +24,38 @@ const header = (labels: string[]): Cell[] => labels.map((value) => ({ value, typ
 
 function workerName(workers: Worker[], id?: string) {
   return workers.find((worker) => worker.id === id)?.name || "";
+}
+
+function tradeTransactionsSheet(data: ExportData) {
+  return sheet("Trade Transactions", [
+    header(["Date", "Type", "Trade Partner", "Items Given", "Items Received", "Value Given", "Value Received", "Cash Paid", "Cash Received", "Estimated Gain/Loss", "Event", "Status"]),
+    ...(data.trades || []).map((trade) => {
+      const summary = tradeSummary(trade);
+      return [date(trade.tradeDate), "Trade", text(trade.tradePartner), summary.outgoing.map((item) => item.itemName).join("; "), summary.incoming.map((item) => item.itemName).join("; "), money(summary.outgoingAgreed), money(summary.incomingAgreed), money(trade.cashPaid), money(trade.cashReceived), money(summary.estimatedGainLoss), text(eventName(data.events, trade.eventId)), text(trade.status)];
+    })
+  ], [20, 12, 24, 40, 40, 16, 16, 14, 16, 20, 28, 14]);
+}
+
+function tradeItemsSheet(data: ExportData) {
+  return sheet("Individual Trade Items", [
+    header(["Direction", "Item Name", "Collector Number", "Inventory Record", "Ownership", "Market Value", "Agreed Value", "Cost Basis", "Transaction", "Status"]),
+    ...(data.trades || []).flatMap((trade) => trade.items.map((item) => [
+      text(item.direction), text(item.itemName), text(item.collectorNumber), text(item.inventoryPurchaseId || item.createdInventoryPurchaseId),
+      text(item.ownershipShares.map((share) => `${workerName(data.workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; ")),
+      money(item.marketValue), money(item.agreedTradeValue), money(item.direction === "outgoing" ? item.historicalCostBasis : item.allocatedCostBasis),
+      text(trade.id), text(trade.status)
+    ]))
+  ], [14, 30, 18, 38, 32, 15, 15, 15, 38, 14]);
+}
+
+function allFinancialRecordsSheet(data: ExportData) {
+  const rows: Cell[][] = [
+    ...data.sales.map((row) => [date(row.soldAt), "Cash Sale", text(row.itemName), money(Number(row.soldPrice || 0)), money(Number(row.boughtPrice || 0)), text(row.id)]),
+    ...data.purchases.filter((row) => row.purchaseSource !== "trade").map((row) => [date(row.purchaseDate), "Cash Purchase", text(row.itemName), money(0), money(row.totalCost), text(row.id)]),
+    ...data.expenses.map((row) => [date(row.expenseDate), "Business Expense", text(row.description), money(0), money(row.amount), text(row.id)]),
+    ...(data.trades || []).map((row) => [date(row.tradeDate), "Trade", text(row.tradePartner || row.items.map((item) => item.itemName).join(" / ")), money(row.cashReceived), money(row.cashPaid), text(row.id)])
+  ].sort((a, b) => Number((b[0] as { value?: Date })?.value || 0) - Number((a[0] as { value?: Date })?.value || 0));
+  return sheet("All Financial Records", [header(["Date", "Type", "Description", "Cash In", "Cash Out", "Record ID"]), ...rows], [20, 20, 42, 15, 15, 38]);
 }
 
 function eventName(events: Event[], id?: string) {
@@ -102,6 +136,6 @@ export async function downloadFinancialWorkbook(data: ExportData) {
     ["Items sold", overview.itemsSold],
     ["Items in stock", overview.itemsInStock]
   ], [28, 24]);
-  const sheets: Sheet<Blob>[] = [overviewSheet, salesSheet(data), inventorySheet(data), expenseSheet(data), eventSummarySheet(data), monthlySummarySheet(data)];
+  const sheets: Sheet<Blob>[] = [overviewSheet, salesSheet(data), inventorySheet(data), expenseSheet(data), tradeTransactionsSheet(data), tradeItemsSheet(data), allFinancialRecordsSheet(data), eventSummarySheet(data), monthlySummarySheet(data)];
   await writeXlsxFile(sheets).toFile(`4-nerds-finances-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }

@@ -34,7 +34,10 @@ export const inventoryStatusLabels: Record<InventoryStatus, string> = {
   in_stock: "In Stock",
   partially_sold: "Partially Sold",
   sold: "Sold",
-  personal: "Personal / Not for Sale"
+  personal: "Personal / Not for Sale",
+  traded_out: "Traded Out",
+  removed: "Removed",
+  reversed: "Reversed / Unavailable"
 };
 
 export const expenseCategoryLabels: Record<BusinessExpenseCategory, string> = {
