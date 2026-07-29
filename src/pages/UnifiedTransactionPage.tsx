@@ -7,7 +7,7 @@ import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade } from "../services/database/tradeRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
-import { fileToDataUrl } from "../services/images/saleImageService";
+import { saveTransactionImage } from "../services/images/saleImageService";
 import type { BusinessExpenseCategory, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
@@ -36,6 +36,7 @@ export function UnifiedTransactionPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
+  const fileToDataUrl = async (file: File) => (await saveTransactionImage(file, transaction.id, editing?.id, editing ? "item" : "transaction")).imageUrl;
 
   useEffect(() => {
     void Promise.all([listInventoryPurchases(1000), listPlannerEventOptions(), listWorkers()]).then(async ([rows, eventRows, workerRows]) => {

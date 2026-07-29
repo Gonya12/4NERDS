@@ -909,7 +909,7 @@ export function SalesControlPage() {
               <option value="all">All data</option><option value="sales">Sales only</option><option value="inventory">Inventory only</option><option value="expenses">Expenses only</option><option value="filtered">Current date filter</option><option value="date_range">Selected date range</option><option value="event">One event</option>
             </select>
             {exportScope === "event" ? <select value={exportEventId} onChange={(event) => setExportEventId(event.target.value)} className={compactInputClass()}><option value="">Choose event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select> : null}
-            <p className="text-sm text-slate-500">Workbook sheets include Overview, Sales, Inventory, Expenses, Trade Transactions, Individual Trade Items, All Financial Records, Event Summary, and Monthly Summary.</p>
+            <p className="text-sm text-slate-500">Workbook sheets include Overview, Sales, Inventory, Expenses, Transactions, Individual Items, All Financial Records, Event Summary, and Monthly Summary.</p>
             <button onClick={() => void exportExcel()} disabled={exporting || (exportScope === "event" && !exportEventId)} className="btn-primary min-h-12 w-full"><Download size={18} /> {exporting ? "Preparing workbook..." : "Download Excel"}</button>
           </section>
         </div>

@@ -14,7 +14,7 @@ import {
 import { getCachedInventoryPurchases, listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
-import { fileToDataUrl } from "../services/images/saleImageService";
+import { saveTransactionImage } from "../services/images/saleImageService";
 import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { pokemonCategoryLabels } from "../utils/salesControl";
@@ -182,6 +182,7 @@ function TradeEditor(props: EditorProps) {
   const [editingItem, setEditingItem] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
   const [preview, setPreview] = useState<{ url: string; title: string }>();
+  const fileToDataUrl = async (file: File) => (await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction")).imageUrl;
   const fileRef = useRef<HTMLInputElement>(null);
   const update = (patch: Partial<TradeTransaction>) => onChange({ ...trade, ...patch });
   const updateItem = (item: TradeItem) => update({ items: trade.items.map((row) => row.id === item.id ? item : row) });

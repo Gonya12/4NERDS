@@ -170,6 +170,7 @@ export interface SalesRecord {
   targetBuyPrice?: number;
   inventoryPurchaseId?: string;
   financialTransactionId?: string;
+  financialTransactionItemId?: string;
   notes?: string;
   soldAt: string;
   pendingUpload: boolean;
@@ -232,12 +233,13 @@ export interface InventoryPurchase {
   imageHash?: string;
   scanResult?: Record<string, unknown>;
   acquisitionMethod?: "purchased" | "trade" | "manual_entry" | "other";
-  acquiredTradeTransactionId?: string;
-  disposedTradeTransactionId?: string;
+  acquiredFinancialTransactionId?: string;
+  disposedFinancialTransactionId?: string;
   tradedAt?: string;
   agreedTradeValue?: number;
   priorInventoryPurchaseId?: string;
   financialTransactionId?: string;
+  financialTransactionItemId?: string;
   createdAt: string;
   updatedAt: string;
   ownershipShares?: OwnershipShare[];
@@ -353,6 +355,7 @@ export interface BusinessExpense {
   receiptImagePath?: string;
   notes?: string;
   financialTransactionId?: string;
+  financialTransactionItemId?: string;
   createdAt: string;
   updatedAt: string;
 }

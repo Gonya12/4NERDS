@@ -43,6 +43,7 @@ type SalesRow = {
   target_buy_price?: number | null;
   inventory_purchase_id?: string | null;
   financial_transaction_id?: string | null;
+  financial_transaction_item_id?: string | null;
   notes?: string | null;
   sold_at: string;
   pending_upload: boolean;
@@ -88,6 +89,7 @@ function fromRow(row: SalesRow): SalesRecord {
     targetBuyPrice: row.target_buy_price === null || row.target_buy_price === undefined ? undefined : Number(row.target_buy_price),
     inventoryPurchaseId: row.inventory_purchase_id || undefined,
     financialTransactionId: row.financial_transaction_id || undefined,
+    financialTransactionItemId: row.financial_transaction_item_id || undefined,
     notes: row.notes || undefined,
     soldAt: row.sold_at,
     pendingUpload: Boolean(row.pending_upload),
@@ -134,6 +136,7 @@ function toRow(sale: SalesRecord): SalesRow {
     target_buy_price: sale.targetBuyPrice ?? null,
     inventory_purchase_id: sale.inventoryPurchaseId || null,
     financial_transaction_id: sale.financialTransactionId || null,
+    financial_transaction_item_id: sale.financialTransactionItemId || null,
     notes: sale.notes || null,
     sold_at: sale.soldAt,
     pending_upload: sale.pendingUpload,
@@ -145,6 +148,7 @@ function toRow(sale: SalesRecord): SalesRow {
 function withoutManualSearchColumns(row: SalesRow) {
   const {
     financial_transaction_id: _financialTransactionId,
+    financial_transaction_item_id: _financialTransactionItemId,
     market_price_source: _marketPriceSource,
     market_price_variant: _marketPriceVariant,
     market_price_updated_at: _marketPriceUpdatedAt,
@@ -203,7 +207,7 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
-  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,notes,sold_at,pending_upload,created_at,updated_at";
+  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,notes,sold_at,pending_upload,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("sales_records", "listSalesRecordsPage", columns);
   const extended = await supabase
     .from("sales_records")
@@ -328,6 +332,7 @@ export async function createSaleRecord(input: Partial<SalesRecord>, imageFile?: 
     targetBuyPrice: input.targetBuyPrice,
     inventoryPurchaseId: input.inventoryPurchaseId,
     financialTransactionId: input.financialTransactionId,
+    financialTransactionItemId: input.financialTransactionItemId,
     notes: input.notes,
     soldAt: input.soldAt || timestamp,
     pendingUpload,

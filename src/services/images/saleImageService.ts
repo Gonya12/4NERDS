@@ -73,3 +73,15 @@ export async function uploadFinancialImage(file: File, folder: "sales" | "purcha
   const { data } = supabase.storage.from(bucketName).getPublicUrl(imagePath);
   return { imageUrl: data.publicUrl, imagePath };
 }
+
+export async function saveTransactionImage(file: File, transactionId: string, itemId?: string, imageType = "transaction") {
+  if (!isSupabaseConfigured || !supabase) return { imageUrl: await fileToDataUrl(file), imagePath: undefined };
+  const compressed = await compressSaleImage(file);
+  const imagePath = `${transactionId}/${itemId || "shared"}/${imageType}-${Date.now()}.jpg`;
+  const { error } = await supabase.storage.from("transaction-images").upload(imagePath, compressed, {
+    cacheControl: "31536000", upsert: true, contentType: compressed.type
+  });
+  if (error) throw new Error(error.message);
+  const { data } = supabase.storage.from("transaction-images").getPublicUrl(imagePath);
+  return { imageUrl: data.publicUrl, imagePath };
+}

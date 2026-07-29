@@ -27,17 +27,17 @@ function workerName(workers: Worker[], id?: string) {
 }
 
 function tradeTransactionsSheet(data: ExportData) {
-  return sheet("Trade Transactions", [
+  return sheet("Transactions", [
     header(["Date", "Type", "Trade Partner", "Items Given", "Items Received", "Value Given", "Value Received", "Cash Paid", "Cash Received", "Estimated Gain/Loss", "Event", "Status"]),
     ...(data.trades || []).map((trade) => {
       const summary = tradeSummary(trade);
-      return [date(trade.tradeDate), "Trade", text(trade.tradePartner), summary.outgoing.map((item) => item.itemName).join("; "), summary.incoming.map((item) => item.itemName).join("; "), money(summary.outgoingAgreed), money(summary.incomingAgreed), money(trade.cashPaid), money(trade.cashReceived), money(summary.estimatedGainLoss), text(eventName(data.events, trade.eventId)), text(trade.status)];
+      return [date(trade.tradeDate), text(trade.transactionType), text(trade.tradePartner), summary.outgoing.map((item) => item.itemName).join("; "), summary.incoming.map((item) => item.itemName).join("; "), money(summary.outgoingAgreed || summary.outgoing.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0)), money(summary.incomingAgreed || summary.incoming.reduce((sum, item) => sum + Number(item.boughtPrice || 0), 0)), money(trade.cashPaid), money(trade.cashReceived), money(summary.estimatedGainLoss), text(eventName(data.events, trade.eventId)), text(trade.status)];
     })
   ], [20, 12, 24, 40, 40, 16, 16, 14, 16, 20, 28, 14]);
 }
 
 function tradeItemsSheet(data: ExportData) {
-  return sheet("Individual Trade Items", [
+  return sheet("Individual Items", [
     header(["Direction", "Item Name", "Collector Number", "Inventory Record", "Ownership", "Market Value", "Agreed Value", "Cost Basis", "Transaction", "Status"]),
     ...(data.trades || []).flatMap((trade) => trade.items.map((item) => [
       text(item.direction), text(item.itemName), text(item.collectorNumber), text(item.inventoryPurchaseId || item.createdInventoryPurchaseId),
@@ -53,7 +53,7 @@ function allFinancialRecordsSheet(data: ExportData) {
     ...data.sales.map((row) => [date(row.soldAt), "Cash Sale", text(row.itemName), money(Number(row.soldPrice || 0)), money(Number(row.boughtPrice || 0)), text(row.id)]),
     ...data.purchases.filter((row) => row.purchaseSource !== "trade").map((row) => [date(row.purchaseDate), "Cash Purchase", text(row.itemName), money(0), money(row.totalCost), text(row.id)]),
     ...data.expenses.map((row) => [date(row.expenseDate), "Business Expense", text(row.description), money(0), money(row.amount), text(row.id)]),
-    ...(data.trades || []).map((row) => [date(row.tradeDate), "Trade", text(row.tradePartner || row.items.map((item) => item.itemName).join(" / ")), money(row.cashReceived), money(row.cashPaid), text(row.id)])
+    ...(data.trades || []).map((row) => [date(row.tradeDate), text(row.transactionType), text(row.tradePartner || row.items.map((item) => item.itemName).join(" / ")), money(row.cashReceived), money(row.cashPaid), text(row.id)])
   ].sort((a, b) => Number((b[0] as { value?: Date })?.value || 0) - Number((a[0] as { value?: Date })?.value || 0));
   return sheet("All Financial Records", [header(["Date", "Type", "Description", "Cash In", "Cash Out", "Record ID"]), ...rows], [20, 20, 42, 15, 15, 38]);
 }

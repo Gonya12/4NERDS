@@ -15,17 +15,16 @@ const read = <T>(key: string): T[] => { try { return JSON.parse(localStorage.get
 const write = (key: string, values: unknown[]) => { try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* optional cache */ } };
 
 type TransactionRow = {
-  id: string; trade_date: string; event_id?: string | null; event_day_id?: string | null; trade_partner?: string | null;
-  cash_received: number; cash_paid: number; notes?: string | null; general_image_url?: string | null; general_image_path?: string | null;
-  proof_image_url?: string | null; proof_image_path?: string | null; status: TradeTransaction["status"]; entered_by_worker_id?: string | null;
-  completed_at?: string | null; reversed_at?: string | null; reversal_of_trade_id?: string | null; created_at: string; updated_at: string;
+  id: string; transaction_date: string; event_id?: string | null; event_day_id?: string | null; counterparty?: string | null;
+  notes?: string | null; status: TradeTransaction["status"]; entered_by_worker_id?: string | null;
+  completed_at?: string | null; reversed_at?: string | null; reversal_of_transaction_id?: string | null; created_at: string; updated_at: string;
   transaction_type?: TradeTransaction["transactionType"] | null; item_mode?: TradeTransaction["itemMode"] | null;
   pricing_mode?: TradeTransaction["pricingMode"] | null; bundle_total?: number | null; payment_method?: TradeTransaction["paymentMethod"] | null;
   purchase_source?: TradeTransaction["purchaseSource"] | null; expense_category?: TradeTransaction["expenseCategory"] | null;
   paid_by_worker_id?: string | null; keep_as_bundle?: boolean | null;
 };
 type ItemRow = {
-  id: string; trade_transaction_id: string; inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
+  id: string; financial_transaction_id: string; inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
   prior_inventory_purchase_id?: string | null; direction: TradeItem["direction"]; item_name: string; item_type: TradeItem["itemType"];
   quantity: number; market_value: number; agreed_trade_value: number; historical_cost_basis: number; allocated_cost_basis: number;
   cash_allocation?: number | null; image_url?: string | null; image_path?: string | null; back_image_url?: string | null; back_image_path?: string | null;
@@ -35,26 +34,32 @@ type ItemRow = {
   trade_percentage?: number | null; sold_price?: number | null; bought_price?: number | null;
   created_sales_record_id?: string | null; created_business_expense_id?: string | null;
 };
-type ShareRow = { id?: string; trade_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
+type ShareRow = { id?: string; financial_transaction_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
+type PaymentRow = { id: string; financial_transaction_id: string; direction: "received" | "paid"; payment_method: string; amount: number };
+type ImageRow = { id: string; financial_transaction_id: string; financial_transaction_item_id?: string | null; image_type: string; image_url: string; image_path: string };
+
+function transactionImagePath(url?: string) {
+  if (!url) return undefined;
+  const marker = "/storage/v1/object/public/transaction-images/";
+  return url.includes(marker) ? decodeURIComponent(url.split(marker)[1]) : undefined;
+}
 
 const transactionRow = (trade: TradeTransaction): TransactionRow => ({
-  id: trade.id, trade_date: trade.tradeDate, event_id: trade.eventId || null, event_day_id: trade.eventDayId || null,
-  trade_partner: trade.tradePartner || null, cash_received: Number(trade.cashReceived || 0), cash_paid: Number(trade.cashPaid || 0),
-  notes: trade.notes || null, general_image_url: trade.generalImageUrl || null, general_image_path: trade.generalImagePath || null,
-  proof_image_url: trade.proofImageUrl || null, proof_image_path: trade.proofImagePath || null, status: trade.status,
+  id: trade.id, transaction_date: trade.tradeDate, event_id: trade.eventId || null, event_day_id: trade.eventDayId || null,
+  counterparty: trade.tradePartner || null, notes: trade.notes || null, status: trade.status,
   entered_by_worker_id: trade.enteredByWorkerId || null, completed_at: trade.completedAt || null, reversed_at: trade.reversedAt || null,
-  reversal_of_trade_id: trade.reversalOfTradeId || null, created_at: trade.createdAt, updated_at: trade.updatedAt
+  reversal_of_transaction_id: trade.reversalOfTradeId || null, created_at: trade.createdAt, updated_at: trade.updatedAt
   , transaction_type: trade.transactionType, item_mode: trade.itemMode, pricing_mode: trade.pricingMode,
   bundle_total: trade.bundleTotal ?? null, payment_method: trade.paymentMethod || null, purchase_source: trade.purchaseSource || null,
   expense_category: trade.expenseCategory || null, paid_by_worker_id: trade.paidByWorkerId || null, keep_as_bundle: Boolean(trade.keepAsBundle)
 });
 const itemRow = (item: TradeItem): ItemRow => ({
-  id: item.id, trade_transaction_id: item.tradeTransactionId, inventory_purchase_id: item.inventoryPurchaseId || null,
+  id: item.id, financial_transaction_id: item.tradeTransactionId, inventory_purchase_id: item.inventoryPurchaseId || null,
   created_inventory_purchase_id: item.createdInventoryPurchaseId || null, prior_inventory_purchase_id: item.priorInventoryPurchaseId || null,
   direction: item.direction, item_name: item.itemName, item_type: item.itemType, quantity: item.quantity,
   market_value: item.marketValue, agreed_trade_value: item.agreedTradeValue, historical_cost_basis: item.historicalCostBasis,
   allocated_cost_basis: item.allocatedCostBasis, cash_allocation: item.cashAllocation ?? null, image_url: item.imageUrl || null,
-  image_path: item.imagePath || null, back_image_url: item.backImageUrl || null, back_image_path: item.backImagePath || null,
+  image_path: item.imagePath || transactionImagePath(item.imageUrl) || null, back_image_url: item.backImageUrl || null, back_image_path: item.backImagePath || transactionImagePath(item.backImageUrl) || null,
   collector_number: item.collectorNumber || null, card_set: item.cardSet || null, pokemon_tcg_card_id: item.pokemonTcgCardId || null,
   card_condition: item.cardCondition || null, sticker_price: item.stickerPrice ?? null, grading_company: item.gradingCompany || null,
   grade: item.grade || null, certificate_number: item.certificateNumber || null, notes: item.notes || null,
@@ -63,7 +68,7 @@ const itemRow = (item: TradeItem): ItemRow => ({
   created_sales_record_id: item.createdSalesRecordId || null, created_business_expense_id: item.createdBusinessExpenseId || null
 });
 const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem => ({
-  id: row.id, tradeTransactionId: row.trade_transaction_id, inventoryPurchaseId: row.inventory_purchase_id || undefined,
+  id: row.id, tradeTransactionId: row.financial_transaction_id, inventoryPurchaseId: row.inventory_purchase_id || undefined,
   createdInventoryPurchaseId: row.created_inventory_purchase_id || undefined, priorInventoryPurchaseId: row.prior_inventory_purchase_id || undefined,
   direction: row.direction, itemName: row.item_name, itemType: row.item_type, quantity: Number(row.quantity || 1),
   marketValue: Number(row.market_value || 0), agreedTradeValue: Number(row.agreed_trade_value || 0),
@@ -93,36 +98,54 @@ export function getCachedTrades() { return read<TradeTransaction>(cacheKey); }
 
 export async function listTrades() {
   if (!isSupabaseConfigured || !supabase) return read<TradeTransaction>(localKey);
-  const transactions = await supabase.from("trade_transactions").select("*").order("trade_date", { ascending: false });
+  const transactions = await supabase.from("financial_transactions").select("*").order("transaction_date", { ascending: false });
   if (transactions.error) throw new Error(transactions.error.message);
   const ids = (transactions.data || []).map((row) => row.id);
-  const items = ids.length ? await supabase.from("trade_items").select("*").in("trade_transaction_id", ids) : { data: [], error: null };
+  const items = ids.length ? await supabase.from("financial_transaction_items").select("*").in("financial_transaction_id", ids) : { data: [], error: null };
   if (items.error) throw new Error(items.error.message);
   const itemIds = (items.data || []).map((row) => row.id);
-  const shares = itemIds.length ? await supabase.from("trade_item_ownership_shares").select("*").in("trade_item_id", itemIds) : { data: [], error: null };
+  const shares = itemIds.length ? await supabase.from("transaction_item_ownership_shares").select("*").in("financial_transaction_item_id", itemIds) : { data: [], error: null };
   if (shares.error) throw new Error(shares.error.message);
+  const payments = ids.length ? await supabase.from("transaction_payments").select("*").in("financial_transaction_id", ids) : { data: [], error: null };
+  if (payments.error) throw new Error(payments.error.message);
+  const images = ids.length ? await supabase.from("transaction_images").select("*").in("financial_transaction_id", ids) : { data: [], error: null };
+  if (images.error) throw new Error(images.error.message);
   const shareMap = new Map<string, TradeItemOwnershipShare[]>();
-  (shares.data as ShareRow[] || []).forEach((row) => shareMap.set(row.trade_item_id, [...(shareMap.get(row.trade_item_id) || []), {
+  (shares.data as ShareRow[] || []).forEach((row) => shareMap.set(row.financial_transaction_item_id, [...(shareMap.get(row.financial_transaction_item_id) || []), {
     id: row.id, workerId: row.worker_id, ownershipPercentage: Number(row.ownership_percentage),
     allocatedCostBasis: row.allocated_cost_basis == null ? undefined : Number(row.allocated_cost_basis),
     allocatedTradeValue: row.allocated_trade_value == null ? undefined : Number(row.allocated_trade_value)
   }]));
   const itemMap = new Map<string, TradeItem[]>();
-  (items.data as ItemRow[] || []).forEach((row) => itemMap.set(row.trade_transaction_id, [...(itemMap.get(row.trade_transaction_id) || []), fromItem(row, shareMap.get(row.id) || [])]));
+  const imageRows = images.data as ImageRow[] || [];
+  (items.data as ItemRow[] || []).forEach((row) => {
+    const image = imageRows.find((value) => value.financial_transaction_item_id === row.id && value.image_type !== "back");
+    const back = imageRows.find((value) => value.financial_transaction_item_id === row.id && value.image_type === "back");
+    const value = { ...fromItem(row, shareMap.get(row.id) || []), imageUrl: image?.image_url || row.image_url || undefined, imagePath: image?.image_path || row.image_path || undefined, backImageUrl: back?.image_url || row.back_image_url || undefined, backImagePath: back?.image_path || row.back_image_path || undefined };
+    itemMap.set(row.financial_transaction_id, [...(itemMap.get(row.financial_transaction_id) || []), value]);
+  });
+  const paymentMap = new Map<string, { received: number; paid: number }>();
+  (payments.data as PaymentRow[] || []).forEach((row) => {
+    const current = paymentMap.get(row.financial_transaction_id) || { received: 0, paid: 0 };
+    current[row.direction] += Number(row.amount || 0);
+    paymentMap.set(row.financial_transaction_id, current);
+  });
   const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => ({
-    id: row.id, tradeDate: row.trade_date, eventId: row.event_id || undefined, eventDayId: row.event_day_id || undefined,
-    tradePartner: row.trade_partner || undefined, cashReceived: Number(row.cash_received || 0), cashPaid: Number(row.cash_paid || 0),
-    notes: row.notes || undefined, generalImageUrl: row.general_image_url || undefined, generalImagePath: row.general_image_path || undefined,
-    proofImageUrl: row.proof_image_url || undefined, proofImagePath: row.proof_image_path || undefined, status: row.status,
+    id: row.id, tradeDate: row.transaction_date, eventId: row.event_id || undefined, eventDayId: row.event_day_id || undefined,
+    tradePartner: row.counterparty || undefined, cashReceived: paymentMap.get(row.id)?.received || 0, cashPaid: paymentMap.get(row.id)?.paid || 0,
+    notes: row.notes || undefined, generalImageUrl: imageRows.find((value) => value.financial_transaction_id === row.id && !value.financial_transaction_item_id && value.image_type === "transaction")?.image_url,
+    generalImagePath: imageRows.find((value) => value.financial_transaction_id === row.id && !value.financial_transaction_item_id && value.image_type === "transaction")?.image_path,
+    proofImageUrl: imageRows.find((value) => value.financial_transaction_id === row.id && !value.financial_transaction_item_id && value.image_type === "proof")?.image_url,
+    proofImagePath: imageRows.find((value) => value.financial_transaction_id === row.id && !value.financial_transaction_item_id && value.image_type === "proof")?.image_path, status: row.status,
     enteredByWorkerId: row.entered_by_worker_id || undefined, completedAt: row.completed_at || undefined, reversedAt: row.reversed_at || undefined,
-    reversalOfTradeId: row.reversal_of_trade_id || undefined, createdAt: row.created_at, updatedAt: row.updated_at, items: itemMap.get(row.id) || []
+    reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at, updatedAt: row.updated_at, items: itemMap.get(row.id) || []
     , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.pricing_mode || "individual",
     bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
     purchaseSource: row.purchase_source || undefined, expenseCategory: row.expense_category || undefined,
     paidByWorkerId: row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
   }));
   write(cacheKey, values);
-  recordSupabaseRequest("trade_transactions", "listTrades", values.length);
+  recordSupabaseRequest("financial_transactions", "listTrades", values.length);
   return values;
 }
 
@@ -132,32 +155,59 @@ export async function saveTrade(input: TradeTransaction) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
     write(localKey, values); write(cacheKey, values); return trade;
   }
-  const saved = await supabase.from("trade_transactions").upsert(transactionRow(trade));
+  const saved = await supabase.from("financial_transactions").upsert(transactionRow(trade));
   if (saved.error) throw new Error(saved.error.message);
+  const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("financial_transaction_id", trade.id);
+  if (existingPayments.error) throw new Error(existingPayments.error.message);
+  const paymentRows = [
+    { direction: "received" as const, amount: Number(trade.cashReceived || 0) },
+    { direction: "paid" as const, amount: Number(trade.cashPaid || 0) }
+  ].map((payment) => ({
+    id: existingPayments.data?.find((row) => row.direction === payment.direction && row.payment_method === (trade.paymentMethod || "cash"))?.id || id("payment"),
+    financial_transaction_id: trade.id, direction: payment.direction, payment_method: trade.paymentMethod || "cash",
+    amount: payment.amount, worker_id: payment.direction === "paid" ? trade.paidByWorkerId || null : null, updated_at: trade.updatedAt
+  }));
+  const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows);
+  if (paymentResult.error) throw new Error(paymentResult.error.message);
   if (trade.status === "draft") {
-    const existing = await supabase.from("trade_items").select("id").eq("trade_transaction_id", trade.id);
+    const existing = await supabase.from("financial_transaction_items").select("id").eq("financial_transaction_id", trade.id);
     if (existing.error) throw new Error(existing.error.message);
     const activeIds = new Set(trade.items.map((item) => item.id));
     const removedIds = (existing.data || []).map((row) => row.id).filter((itemId) => !activeIds.has(itemId));
     if (removedIds.length) {
-      const removed = await supabase.from("trade_items").delete().in("id", removedIds);
+      const removed = await supabase.from("financial_transaction_items").delete().in("id", removedIds);
       if (removed.error) throw new Error(removed.error.message);
     }
   }
   if (trade.items.length) {
-    const itemResult = await supabase.from("trade_items").upsert(trade.items.map(itemRow));
+    const itemResult = await supabase.from("financial_transaction_items").upsert(trade.items.map(itemRow));
     if (itemResult.error) throw new Error(itemResult.error.message);
     for (const item of trade.items) {
-      const deletion = await supabase.from("trade_item_ownership_shares").delete().eq("trade_item_id", item.id);
+      const deletion = await supabase.from("transaction_item_ownership_shares").delete().eq("financial_transaction_item_id", item.id);
       if (deletion.error) throw new Error(deletion.error.message);
       if (item.ownershipShares.length) {
-        const result = await supabase.from("trade_item_ownership_shares").insert(item.ownershipShares.map((share) => ({
-          trade_item_id: item.id, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
+        const result = await supabase.from("transaction_item_ownership_shares").insert(item.ownershipShares.map((share) => ({
+          financial_transaction_item_id: item.id, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
           allocated_cost_basis: share.allocatedCostBasis ?? null, allocated_trade_value: share.allocatedTradeValue ?? null
         })));
         if (result.error) throw new Error(result.error.message);
       }
     }
+  }
+  const imageRows = [
+    trade.generalImageUrl && (trade.generalImagePath || transactionImagePath(trade.generalImageUrl)) ? { financial_transaction_id: trade.id, financial_transaction_item_id: null, image_type: "transaction", image_url: trade.generalImageUrl, image_path: trade.generalImagePath || transactionImagePath(trade.generalImageUrl)! } : null,
+    trade.proofImageUrl && (trade.proofImagePath || transactionImagePath(trade.proofImageUrl)) ? { financial_transaction_id: trade.id, financial_transaction_item_id: null, image_type: "proof", image_url: trade.proofImageUrl, image_path: trade.proofImagePath || transactionImagePath(trade.proofImageUrl)! } : null,
+    ...trade.items.flatMap((item) => [
+      item.imageUrl && (item.imagePath || transactionImagePath(item.imageUrl)) ? { financial_transaction_id: trade.id, financial_transaction_item_id: item.id, image_type: "item", image_url: item.imageUrl, image_path: item.imagePath || transactionImagePath(item.imageUrl)! } : null,
+      item.backImageUrl && (item.backImagePath || transactionImagePath(item.backImageUrl)) ? { financial_transaction_id: trade.id, financial_transaction_item_id: item.id, image_type: "back", image_url: item.backImageUrl, image_path: item.backImagePath || transactionImagePath(item.backImageUrl)! } : null
+    ])
+  ].filter(Boolean);
+  if (imageRows.length) {
+    const currentImages = await supabase.from("transaction_images").select("id,financial_transaction_item_id,image_type").eq("financial_transaction_id", trade.id);
+    if (currentImages.error) throw new Error(currentImages.error.message);
+    const withIds = imageRows.map((row) => ({ ...row!, id: currentImages.data?.find((value) => value.financial_transaction_item_id === row!.financial_transaction_item_id && value.image_type === row!.image_type)?.id || id("transaction-image"), updated_at: trade.updatedAt }));
+    const imageResult = await supabase.from("transaction_images").upsert(withIds);
+    if (imageResult.error) throw new Error(imageResult.error.message);
   }
   return trade;
 }
@@ -171,8 +221,9 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
     pokemonTcgCardId: item.pokemonTcgCardId, cardCondition: item.cardCondition, stickerPrice: item.stickerPrice,
     gradingCompany: item.gradingCompany, grade: item.grade, certificateNumber: item.certificateNumber, imageUrl: item.imageUrl,
     imagePath: item.imagePath, frontImageUrl: item.imageUrl, frontImagePath: item.imagePath, backImageUrl: item.backImageUrl,
-    backImagePath: item.backImagePath, notes: item.notes, acquisitionMethod: "trade", acquiredTradeTransactionId: trade.id,
-    agreedTradeValue: item.agreedTradeValue, priorInventoryPurchaseId: item.priorInventoryPurchaseId
+    backImagePath: item.backImagePath, notes: item.notes, acquisitionMethod: "trade", acquiredFinancialTransactionId: trade.id,
+    agreedTradeValue: item.agreedTradeValue, priorInventoryPurchaseId: item.priorInventoryPurchaseId,
+    financialTransactionId: trade.id, financialTransactionItemId: item.id
   };
 }
 
@@ -188,7 +239,7 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   await saveTrade(trade);
   for (const item of trade.items.filter((row) => row.direction === "outgoing")) {
     const source = inventory.find((row) => row.id === item.inventoryPurchaseId)!;
-    await saveInventoryPurchase({ ...source, status: "traded_out", tradedAt: timestamp, disposedTradeTransactionId: trade.id });
+    await saveInventoryPurchase({ ...source, status: "traded_out", tradedAt: timestamp, disposedFinancialTransactionId: trade.id, financialTransactionId: trade.id, financialTransactionItemId: item.id });
   }
   const created: InventoryPurchase[] = [];
   for (const item of trade.items.filter((row) => row.direction === "incoming")) {
@@ -199,7 +250,7 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   const lineage: InventoryTradeLineage[] = [];
   for (const source of outgoing) for (const target of created) lineage.push({ id: id("lineage"), sourceInventoryPurchaseId: source.inventoryPurchaseId!, resultingInventoryPurchaseId: target.id, tradeTransactionId: trade.id, relationshipType: "exchanged_for", createdAt: timestamp });
   if (isSupabaseConfigured && supabase && lineage.length) {
-    const result = await supabase.from("inventory_trade_lineage").upsert(lineage.map((row) => ({ id: row.id, source_inventory_purchase_id: row.sourceInventoryPurchaseId, resulting_inventory_purchase_id: row.resultingInventoryPurchaseId, trade_transaction_id: row.tradeTransactionId, relationship_type: row.relationshipType, created_at: row.createdAt })), { onConflict: "source_inventory_purchase_id,resulting_inventory_purchase_id,trade_transaction_id" });
+    const result = await supabase.from("inventory_lineage").upsert(lineage.map((row) => ({ id: row.id, source_inventory_purchase_id: row.sourceInventoryPurchaseId, resulting_inventory_purchase_id: row.resultingInventoryPurchaseId, financial_transaction_id: row.tradeTransactionId, relationship_type: row.relationshipType, created_at: row.createdAt })), { onConflict: "source_inventory_purchase_id,resulting_inventory_purchase_id,financial_transaction_id" });
     if (result.error) throw new Error(result.error.message);
   } else write(lineageKey, [...lineage, ...read<InventoryTradeLineage>(lineageKey)]);
   trade = { ...trade, status: "completed", completedAt: timestamp, updatedAt: timestamp };
@@ -225,13 +276,13 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         soldPrice: item.soldPrice || 0, boughtPrice: item.historicalCostBasis, marketValue: item.marketValue,
         paymentMethod: transaction.paymentMethod || "cash", soldByWorkerId: transaction.enteredByWorkerId,
         inventoryPurchaseId: source.id, notes: item.notes || transaction.notes, soldAt: transaction.tradeDate,
-        financialTransactionId: transaction.id
+        financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
       item.createdSalesRecordId = result.sale.id;
       await saveInventoryPurchase({
         ...source, status: "sold", quantitySold: source.quantity, soldPrice: item.soldPrice || 0,
         soldDate: transaction.tradeDate, soldByWorkerId: transaction.enteredByWorkerId, soldEventId: transaction.eventId,
-        soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id
+        soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
     }
     transaction.cashReceived = transaction.items.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0);
@@ -247,7 +298,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet, pokemonTcgCardId: item.pokemonTcgCardId,
         cardCondition: item.cardCondition, stickerPrice: item.stickerPrice, gradingCompany: item.gradingCompany, grade: item.grade,
         certificateNumber: item.certificateNumber, imageUrl: item.imageUrl || transaction.generalImageUrl, imagePath: item.imagePath,
-        acquisitionMethod: "purchased", financialTransactionId: transaction.id
+        acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
       item.createdInventoryPurchaseId = saved.id;
       if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
@@ -259,7 +310,8 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
       expenseDate: transaction.tradeDate, amount, category: transaction.expenseCategory || "other",
       description: transaction.items[0]?.itemName || transaction.notes || "Business expense", eventId: transaction.eventId,
       paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner, receiptImageUrl: transaction.generalImageUrl,
-      receiptImagePath: transaction.generalImagePath, notes: transaction.notes, financialTransactionId: transaction.id
+      receiptImagePath: transaction.generalImagePath, notes: transaction.notes, financialTransactionId: transaction.id,
+      financialTransactionItemId: transaction.items[0]?.id
     });
     if (transaction.items[0]) transaction.items[0].createdBusinessExpenseId = expense.id;
     transaction.cashPaid = amount;
@@ -269,9 +321,9 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   const balances = transactionReview(transaction).internalBalances;
   if (isSupabaseConfigured && supabase && balances.length) {
     const balanceResult = await supabase.from("transaction_internal_balances").upsert(balances.map((row) => ({
-      trade_transaction_id: transaction.id, owed_by_worker_id: row.owedByWorkerId, owed_to_worker_id: row.owedToWorkerId,
+      financial_transaction_id: transaction.id, owed_by_worker_id: row.owedByWorkerId, owed_to_worker_id: row.owedToWorkerId,
       amount: row.amount, settled: false, updated_at: timestamp
-    })), { onConflict: "trade_transaction_id,owed_by_worker_id,owed_to_worker_id" });
+    })), { onConflict: "financial_transaction_id,owed_by_worker_id,owed_to_worker_id" });
     if (balanceResult.error) throw new Error(balanceResult.error.message);
   }
   return { trade: transaction, created: [] as InventoryPurchase[] };
@@ -282,7 +334,7 @@ export async function reverseTrade(input: TradeTransaction, inventory: Inventory
   const timestamp = nowIso();
   for (const item of input.items.filter((row) => row.direction === "outgoing")) {
     const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
-    if (source?.status === "traded_out" && source.disposedTradeTransactionId === input.id) await saveInventoryPurchase({ ...source, status: "in_stock", tradedAt: undefined, disposedTradeTransactionId: undefined });
+    if (source?.status === "traded_out" && source.disposedFinancialTransactionId === input.id) await saveInventoryPurchase({ ...source, status: "in_stock", tradedAt: undefined, disposedFinancialTransactionId: undefined });
   }
   for (const item of input.items.filter((row) => row.direction === "incoming")) {
     const received = inventory.find((row) => row.id === item.createdInventoryPurchaseId);
@@ -296,9 +348,9 @@ export async function reverseTrade(input: TradeTransaction, inventory: Inventory
 export async function listTradeLineage(inventoryId: string) {
   if (!isSupabaseConfigured || !supabase) return read<InventoryTradeLineage>(lineageKey).filter((row) => row.sourceInventoryPurchaseId === inventoryId || row.resultingInventoryPurchaseId === inventoryId);
   const [source, result] = await Promise.all([
-    supabase.from("inventory_trade_lineage").select("*").eq("source_inventory_purchase_id", inventoryId),
-    supabase.from("inventory_trade_lineage").select("*").eq("resulting_inventory_purchase_id", inventoryId)
+    supabase.from("inventory_lineage").select("*").eq("source_inventory_purchase_id", inventoryId),
+    supabase.from("inventory_lineage").select("*").eq("resulting_inventory_purchase_id", inventoryId)
   ]);
   if (source.error || result.error) throw new Error((source.error || result.error)!.message);
-  return [...(source.data || []), ...(result.data || [])].map((row): InventoryTradeLineage => ({ id: row.id, sourceInventoryPurchaseId: row.source_inventory_purchase_id, resultingInventoryPurchaseId: row.resulting_inventory_purchase_id, tradeTransactionId: row.trade_transaction_id, relationshipType: "exchanged_for", createdAt: row.created_at }));
+  return [...(source.data || []), ...(result.data || [])].map((row): InventoryTradeLineage => ({ id: row.id, sourceInventoryPurchaseId: row.source_inventory_purchase_id, resultingInventoryPurchaseId: row.resulting_inventory_purchase_id, tradeTransactionId: row.financial_transaction_id, relationshipType: "exchanged_for", createdAt: row.created_at }));
 }

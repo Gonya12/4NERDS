@@ -19,6 +19,7 @@ type ExpenseRow = {
   receipt_image_path?: string | null;
   notes?: string | null;
   financial_transaction_id?: string | null;
+  financial_transaction_item_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -37,6 +38,7 @@ function fromRow(row: ExpenseRow): BusinessExpense {
     receiptImagePath: row.receipt_image_path || undefined,
     notes: row.notes || undefined,
     financialTransactionId: row.financial_transaction_id || undefined,
+    financialTransactionItemId: row.financial_transaction_item_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -56,6 +58,7 @@ function toRow(value: BusinessExpense): ExpenseRow {
     receipt_image_path: value.receiptImagePath || null,
     notes: value.notes || null,
     financial_transaction_id: value.financialTransactionId || null,
+    financial_transaction_item_id: value.financialTransactionItemId || null,
     created_at: value.createdAt,
     updated_at: value.updatedAt
   };
@@ -79,7 +82,7 @@ export function getCachedBusinessExpenses() {
 
 export async function listBusinessExpenses(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,expense_date,amount,category,description,event_id,paid_by_worker_id,vendor,receipt_image_url,receipt_image_path,notes,financial_transaction_id,created_at,updated_at";
+  const columns = "id,expense_date,amount,category,description,event_id,paid_by_worker_id,vendor,receipt_image_url,receipt_image_path,notes,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("business_expenses", "listBusinessExpenses", columns);
   const enhanced = await supabase.from("business_expenses")
     .select(columns)
@@ -87,7 +90,7 @@ export async function listBusinessExpenses(limit = 100) {
   let data = enhanced.data as unknown as ExpenseRow[] | null;
   let error = enhanced.error;
   if (isMissingColumnError(error)) {
-    const legacy = await supabase.from("business_expenses").select(columns.replace(",financial_transaction_id", "")).order("expense_date", { ascending: false }).limit(limit);
+    const legacy = await supabase.from("business_expenses").select(columns.replace(",financial_transaction_id,financial_transaction_item_id", "")).order("expense_date", { ascending: false }).limit(limit);
     data = legacy.data as unknown as ExpenseRow[] | null;
     error = legacy.error;
   }
@@ -128,6 +131,7 @@ export async function saveBusinessExpense(input: Partial<BusinessExpense>, recei
     receiptImagePath,
     notes: input.notes?.trim() || undefined,
     financialTransactionId: input.financialTransactionId,
+    financialTransactionItemId: input.financialTransactionItemId,
     createdAt: input.createdAt || timestamp,
     updatedAt: timestamp
   };
@@ -139,7 +143,7 @@ export async function saveBusinessExpense(input: Partial<BusinessExpense>, recei
   }
   let { data, error } = await supabase.from("business_expenses").upsert(toRow(value)).select("*").single();
   if (isMissingColumnError(error)) {
-    const { financial_transaction_id: _financialTransactionId, ...legacyRow } = toRow(value);
+    const { financial_transaction_id: _financialTransactionId, financial_transaction_item_id: _financialTransactionItemId, ...legacyRow } = toRow(value);
     const legacy = await supabase.from("business_expenses").upsert(legacyRow).select("*").single();
     data = legacy.data;
     error = legacy.error;
