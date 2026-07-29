@@ -1,4 +1,5 @@
 import {
+  buildPokemonApiQueries,
   normalizeCardSearchText,
   normalizeManualCardSearchTerms,
   parseCardSearchQuery,
@@ -15,6 +16,8 @@ import {
   type UnifiedCardSearchInput,
 } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
+import { CARD_SEARCH_FUNCTION_NAME } from "./cardSearchContract";
+export { CARD_SEARCH_FUNCTION_NAME } from "./cardSearchContract";
 
 export type ScanConfidence = "high" | "medium" | "low";
 export type TcgplayerPriceVariant = {
@@ -41,6 +44,20 @@ export type ManualCardSearchInput = UnifiedCardSearchInput & {
   page?: number;
   pageSize?: number;
 };
+export type CanonicalCardSearchRequest = {
+  game: Exclude<CardGame, "other">;
+  language: Exclude<CardLanguage, "unknown">;
+  query: string;
+  name: string | null;
+  collectorNumber: string | null;
+  set: string | null;
+  page: number;
+  pageSize: number;
+  finish?: string;
+  cardType?: string;
+  disableCorrection?: boolean;
+  providerCardId?: string;
+};
 export type ManualCardSearchPage = {
   matches: CardMatch[];
   page: number;
@@ -51,9 +68,12 @@ export type ManualCardSearchPage = {
   parsed: ParsedCardSearchQuery;
   warnings: string[];
   provider?: CardDataProvider;
+  query?: string;
 };
 
 type UnifiedApiPayload = {
+  success?: boolean;
+  results?: UnifiedCardMatch[];
   data?: UnifiedCardMatch[] | UnifiedCardMatch;
   page?: number;
   pageSize?: number;
@@ -63,32 +83,83 @@ type UnifiedApiPayload = {
   warnings?: string[];
   parsed?: ParsedCardSearchQuery;
   provider?: CardDataProvider;
+  query?: string;
+  code?: string;
+  message?: string;
+  error?: string;
+  requestId?: string;
+  edgeFunctionReached?: boolean;
+  upstreamReached?: boolean;
+  providerResponseStatus?: number;
 };
 
 export type PokemonCardSearchErrorCode =
   | "NOT_CONFIGURED"
   | "INVALID_QUERY"
+  | "AUTH_CONFIGURATION"
+  | "FUNCTION_NOT_DEPLOYED"
   | "RATE_LIMITED"
   | "UPSTREAM_TIMEOUT"
   | "UPSTREAM_UNAVAILABLE"
   | "NETWORK_ERROR"
   | "MALFORMED_RESPONSE";
 
+export type CardSearchDiagnostics = {
+  provider: CardDataProvider;
+  httpStatus?: number;
+  providerResponseStatus?: number;
+  edgeFunctionName: string;
+  edgeFunctionReached: boolean;
+  upstreamReached: boolean;
+  timeout: boolean;
+  cancelled: boolean;
+  requestId?: string;
+  errorCode: PokemonCardSearchErrorCode | string;
+  providerErrorCode?: string;
+  providerMessage?: string;
+};
+
 export class PokemonCardSearchError extends Error {
   code: PokemonCardSearchErrorCode;
   retryAfterSeconds?: number;
+  diagnostics: CardSearchDiagnostics;
 
-  constructor(message: string, code: PokemonCardSearchErrorCode, retryAfterSeconds?: number) {
+  constructor(
+    message: string,
+    code: PokemonCardSearchErrorCode,
+    diagnostics: Omit<CardSearchDiagnostics, "errorCode">,
+    retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = "PokemonCardSearchError";
     this.code = code;
+    this.diagnostics = { ...diagnostics, errorCode: code };
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
+export function cardSearchDeveloperDebug(error: unknown) {
+  if (!(error instanceof PokemonCardSearchError)) return undefined;
+  return JSON.stringify({
+    provider: error.diagnostics.provider,
+    httpStatus: error.diagnostics.httpStatus ?? null,
+    providerResponseStatus: error.diagnostics.providerResponseStatus ?? null,
+    errorCode: error.code,
+    providerErrorCode: error.diagnostics.providerErrorCode ?? null,
+    edgeFunctionName: error.diagnostics.edgeFunctionName,
+    edgeFunctionReached: error.diagnostics.edgeFunctionReached,
+    upstreamReached: error.diagnostics.upstreamReached,
+    timeout: error.diagnostics.timeout,
+    cancelled: error.diagnostics.cancelled,
+    retryAfterSeconds: error.retryAfterSeconds ?? null,
+    requestId: error.diagnostics.requestId ?? null,
+    providerMessage: error.diagnostics.providerMessage ?? null,
+  }, null, 2);
+}
+
 const memoryCache = new Map<string, { expiresAt: number; value: ManualCardSearchPage }>();
 const inFlight = new Map<string, Promise<ManualCardSearchPage>>();
-const sessionPrefix = "4nerds_unified_card_search_v1:";
+const sessionPrefix = "4nerds_unified_card_search_v2:";
 const cacheTtlMs = 5 * 60_000;
 
 export function cardProviderLabel(provider: CardDataProvider | undefined) {
@@ -138,11 +209,21 @@ function abortError() {
   return new DOMException("Card search cancelled.", "AbortError");
 }
 
+function devSearchLog(event: string, details: Record<string, unknown>) {
+  if (import.meta.env.DEV) console.info("[smart-card-search]", { event, ...details });
+}
+
 function waitForCaller<T>(promise: Promise<T>, signal?: AbortSignal) {
   if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(abortError());
+  if (signal.aborted) {
+    devSearchLog("request cancellation", { cancelled: true });
+    return Promise.reject(abortError());
+  }
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(abortError());
+    const abort = () => {
+      devSearchLog("request cancellation", { cancelled: true });
+      reject(abortError());
+    };
     signal.addEventListener("abort", abort, { once: true });
     promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
@@ -173,31 +254,109 @@ function writeCache(key: string, value: ManualCardSearchPage) {
   }
 }
 
-function providerFor(input: ManualCardSearchInput) {
+export function buildCanonicalCardSearchRequest(input: ManualCardSearchInput): CanonicalCardSearchRequest {
+  const game = normalizeCardGame(input.game);
+  const canonicalGame = game === "one_piece" ? "one_piece" : "pokemon";
+  const language = normalizeCardLanguage(input.language, canonicalGame);
+  const canonicalLanguage = language === "ja" ? "ja" : "en";
+  const page = Math.max(1, Math.floor(input.page || 1));
+  const pageSize = Math.min(30, Math.max(1, Math.floor(input.pageSize || 30)));
+  const query = String(input.query || [input.name, input.collectorNumber].filter(Boolean).join(" ")).trim();
+  const parsed = parseCardSearchQuery({ ...input, query });
+  return {
+    game: canonicalGame,
+    language: canonicalLanguage,
+    query,
+    name: input.name || parsed.originalName || null,
+    collectorNumber: input.collectorNumber || parsed.collector?.normalized || null,
+    set: input.set || null,
+    page,
+    pageSize,
+    ...(canonicalGame === "pokemon" && canonicalLanguage === "en" && input.finish ? { finish: input.finish } : {}),
+    ...(input.cardType ? { cardType: input.cardType } : {}),
+    ...(input.disableCorrection ? { disableCorrection: true } : {}),
+    ...(input.providerCardId ? { providerCardId: input.providerCardId } : {}),
+  };
+}
+
+function providerCodeFor(input: ManualCardSearchInput): CardDataProvider {
   const game = normalizeCardGame(input.game);
   const language = normalizeCardLanguage(input.language, game);
-  return game === "one_piece" ? "OPTCG API" : language === "ja" ? "TCGdex" : "Pokémon TCG API";
+  return game === "one_piece" ? "optcgapi" : language === "ja" ? "tcgdex" : "pokemontcg";
+}
+
+function providerFor(input: ManualCardSearchInput) {
+  return cardProviderLabel(providerCodeFor(input));
+}
+
+function baseDiagnostics(input: ManualCardSearchInput): Omit<CardSearchDiagnostics, "errorCode"> {
+  return {
+    provider: providerCodeFor(input),
+    edgeFunctionName: CARD_SEARCH_FUNCTION_NAME,
+    edgeFunctionReached: false,
+    upstreamReached: false,
+    timeout: false,
+    cancelled: false,
+  };
 }
 
 function friendlyError(
   status: number,
-  payload: { code?: string; message?: string },
+  payload: UnifiedApiPayload,
   retryAfter: string | null,
   input: ManualCardSearchInput,
 ) {
   const retrySeconds = Math.max(0, Number(retryAfter || 0)) || undefined;
   const provider = providerFor(input);
+  const providerMessage = payload.message || payload.error;
+  const diagnostics = {
+    ...baseDiagnostics(input),
+    httpStatus: status,
+    providerResponseStatus: payload.providerResponseStatus,
+    edgeFunctionReached: payload.edgeFunctionReached ?? status !== 404,
+    upstreamReached: payload.upstreamReached ?? false,
+    requestId: payload.requestId,
+    providerMessage,
+    providerErrorCode: payload.code,
+  };
   if (status === 429) {
     return new PokemonCardSearchError(
       retrySeconds ? `${provider} is busy. Retry in about ${retrySeconds} seconds.` : `${provider} rate limit was reached. Wait a moment, then retry.`,
       "RATE_LIMITED",
+      diagnostics,
       retrySeconds,
     );
   }
-  if (status === 400) return new PokemonCardSearchError(payload.message || "Check the card search and try again.", "INVALID_QUERY");
-  if (status === 504) return new PokemonCardSearchError(payload.message || `${provider} took too long to respond.`, "UPSTREAM_TIMEOUT");
-  if (status >= 500) return new PokemonCardSearchError(payload.message || `${provider} is temporarily unavailable.`, "UPSTREAM_UNAVAILABLE");
-  return new PokemonCardSearchError(payload.message || `Card search failed (${status}).`, "NETWORK_ERROR");
+  if (status === 400) return new PokemonCardSearchError(
+    providerMessage || "Search request was rejected because the generated query was invalid.",
+    "INVALID_QUERY",
+    diagnostics,
+  );
+  if (status === 401 || status === 403) return new PokemonCardSearchError(
+    providerMessage || `${provider} authentication or server configuration is unavailable.`,
+    "AUTH_CONFIGURATION",
+    diagnostics,
+  );
+  if (status === 404) return new PokemonCardSearchError(
+    `${provider} search function is not deployed.`,
+    "FUNCTION_NOT_DEPLOYED",
+    diagnostics,
+  );
+  if (status === 504) return new PokemonCardSearchError(
+    providerMessage || `${provider} took too long to respond.`,
+    "UPSTREAM_TIMEOUT",
+    { ...diagnostics, timeout: true },
+  );
+  if (status >= 500) return new PokemonCardSearchError(
+    providerMessage || `${provider} search temporarily failed. HTTP ${status}.`,
+    "UPSTREAM_UNAVAILABLE",
+    diagnostics,
+  );
+  return new PokemonCardSearchError(
+    providerMessage || `Card search failed (HTTP ${status}).`,
+    "NETWORK_ERROR",
+    diagnostics,
+  );
 }
 
 async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiPayload> {
@@ -205,12 +364,27 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
     throw new PokemonCardSearchError(
       "Card search needs the app's Supabase connection. Manual transaction fields remain available.",
       "NOT_CONFIGURED",
+      baseDiagnostics(request),
     );
   }
+  const parsed = parseCardSearchQuery(request);
+  devSearchLog("request", {
+    selectedGame: normalizeCardGame(request.game),
+    selectedLanguage: normalizeCardLanguage(request.language, normalizeCardGame(request.game)),
+    rawInput: request.query,
+    normalizedInput: parsed.normalizedQuery,
+    parsedCardName: parsed.name || null,
+    parsedCollectorNumber: parsed.collector?.normalized || null,
+    generatedApiQueries: providerCodeFor(request) === "pokemontcg"
+      ? buildPokemonApiQueries(parsed).map((candidate) => candidate.query)
+      : [],
+    selectedProvider: providerCodeFor(request),
+    edgeFunctionName: CARD_SEARCH_FUNCTION_NAME,
+  });
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 18_000);
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/pokemon-card-search`, {
+    const response = await fetch(`${supabaseUrl}/functions/v1/${CARD_SEARCH_FUNCTION_NAME}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -220,20 +394,54 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
       body: JSON.stringify(request),
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => null) as (UnifiedApiPayload & { code?: string; message?: string }) | null;
-    if (!response.ok) throw friendlyError(response.status, payload || {}, response.headers.get("Retry-After"), request);
-    if (!payload || (!Array.isArray(payload.data) && !(payload.data && typeof payload.data === "object"))) {
-      throw new PokemonCardSearchError("The selected card provider returned an unreadable response.", "MALFORMED_RESPONSE");
+    const payload = await response.json().catch(() => null) as UnifiedApiPayload | null;
+    devSearchLog("response", {
+      selectedProvider: providerCodeFor(request),
+      edgeFunctionName: CARD_SEARCH_FUNCTION_NAME,
+      httpStatus: response.status,
+      providerResponseStatus: payload?.providerResponseStatus,
+      resultCount: payload?.count ?? payload?.results?.length ?? 0,
+      normalizationFailure: response.ok && !Array.isArray(payload?.results) && !Array.isArray(payload?.data),
+      requestId: payload?.requestId || response.headers.get("x-request-id"),
+    });
+    if (!response.ok) throw friendlyError(
+      response.status,
+      {
+        ...(payload || {}),
+        requestId: payload?.requestId || response.headers.get("x-request-id") || undefined,
+      },
+      response.headers.get("Retry-After"),
+      request,
+    );
+    if (!payload || (!Array.isArray(payload.results) && !Array.isArray(payload.data) && !(payload.data && typeof payload.data === "object"))) {
+      throw new PokemonCardSearchError(
+        "The selected card provider returned an unreadable response.",
+        "MALFORMED_RESPONSE",
+        {
+          ...baseDiagnostics(request),
+          httpStatus: response.status,
+          edgeFunctionReached: true,
+          upstreamReached: Boolean(payload?.upstreamReached),
+          providerResponseStatus: payload?.providerResponseStatus,
+          requestId: payload?.requestId || response.headers.get("x-request-id") || undefined,
+        },
+      );
     }
     return payload;
   } catch (error) {
     if (error instanceof PokemonCardSearchError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new PokemonCardSearchError(`${providerFor(request)} took too long to respond. Retry when ready.`, "UPSTREAM_TIMEOUT");
+      devSearchLog("timeout", { selectedProvider: providerCodeFor(request), timeout: true });
+      throw new PokemonCardSearchError(
+        `${providerFor(request)} took too long to respond. Retry when ready.`,
+        "UPSTREAM_TIMEOUT",
+        { ...baseDiagnostics(request), timeout: true },
+      );
     }
     throw new PokemonCardSearchError(
       error instanceof Error ? `Could not reach ${providerFor(request)}: ${error.message}` : `Could not reach ${providerFor(request)}.`,
       "NETWORK_ERROR",
+      baseDiagnostics(request),
     );
   } finally {
     window.clearTimeout(timeout);
@@ -257,22 +465,9 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
       provider: "manual" as const,
     });
   }
-  const page = Math.max(1, Math.floor(input.page || 1));
-  const pageSize = Math.min(24, Math.max(1, Math.floor(input.pageSize || 20)));
-  const request: ManualCardSearchInput = {
-    game,
-    language,
-    query: input.query || [input.name, input.collectorNumber].filter(Boolean).join(" "),
-    name: input.name,
-    collectorNumber: input.collectorNumber,
-    set: input.set,
-    finish: game === "pokemon" && language === "en" ? input.finish : undefined,
-    cardType: input.cardType,
-    disableCorrection: input.disableCorrection,
-    providerCardId: input.providerCardId,
-    page,
-    pageSize,
-  };
+  const request = buildCanonicalCardSearchRequest(input);
+  const page = request.page;
+  const pageSize = request.pageSize;
   const cacheKey = JSON.stringify({
     game,
     language,
@@ -298,7 +493,9 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
   if (existing) return waitForCaller(existing, signal);
 
   const promise = invokeSearch(request).then((payload) => {
-    const matches = (Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [])
+    const canonicalResults = payload.results
+      || (Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : []);
+    const matches = canonicalResults
       .filter((match) => match.searchConfidence !== "unreliable");
     const result: ManualCardSearchPage = {
       matches,
@@ -310,6 +507,7 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
       parsed: payload.parsed || parseCardSearchQuery(input),
       warnings: payload.warnings || [],
       provider: payload.provider,
+      query: payload.query,
     };
     writeCache(cacheKey, result);
     return result;
@@ -350,6 +548,6 @@ export async function fetchPokemonCardById(
     pageSize: 1,
   });
   const payload = await waitForCaller(promise, signal);
-  const card = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+  const card = payload.results?.[0] || (Array.isArray(payload.data) ? payload.data[0] : payload.data);
   return card || undefined;
 }

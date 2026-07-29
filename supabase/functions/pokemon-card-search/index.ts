@@ -29,7 +29,9 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Expose-Headers": "x-request-id, retry-after",
 };
+const edgeDebugEnabled = Deno.env.get("CARD_SEARCH_DEBUG") === "true";
 
 type SearchRequest = UnifiedCardSearchInput & { id?: string };
 type JsonRecord = Record<string, unknown>;
@@ -49,9 +51,32 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
   });
 }
 
-function structuredError(code: string, message: string, status: number, retryAfter?: string) {
+function edgeDebug(event: string, details: Record<string, unknown>) {
+  if (edgeDebugEnabled) console.info("[smart-card-search]", { event, ...details });
+}
+
+function withRequestId(response: Response, requestId: string) {
+  const headers = new Headers(response.headers);
+  headers.set("x-request-id", requestId);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function structuredError(
+  code: string,
+  message: string,
+  status: number,
+  retryAfter?: string,
+  details: { upstreamReached?: boolean; providerResponseStatus?: number } = {},
+) {
   return json(
-    { success: false, code, message },
+    {
+      success: false,
+      code,
+      message,
+      edgeFunctionReached: true,
+      upstreamReached: details.upstreamReached ?? false,
+      providerResponseStatus: details.providerResponseStatus,
+    },
     status,
     retryAfter ? { "Retry-After": retryAfter, "Cache-Control": "no-store" } : { "Cache-Control": "no-store" },
   );
@@ -88,6 +113,11 @@ async function fetchUpstream(
     try {
       const upstream = await fetch(endpoint, { headers: options.headers, signal: controller.signal });
       const payload = await upstream.json().catch(() => null);
+      edgeDebug("provider response", {
+        providerHost: new URL(endpoint).host,
+        providerResponseStatus: upstream.status,
+        resultCount: rows(payload).length,
+      });
       const result = {
         payload,
         status: upstream.status,
@@ -175,7 +205,16 @@ function pokemonEndpoint(query: string, page: number, pageSize: number) {
 
 async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize: number) {
   const apiKey = Deno.env.get("POKEMON_TCG_API_KEY");
-  const headers = apiKey ? { "X-Api-Key": apiKey } : undefined;
+  if (!apiKey) {
+    return {
+      error: structuredError(
+        "POKEMON_TCG_API_KEY_NOT_CONFIGURED",
+        "POKEMON_TCG_API_KEY is not configured",
+        503,
+      ),
+    };
+  }
+  const headers = { "X-Api-Key": apiKey };
   const providerCardId = String(input.providerCardId || input.id || "").trim();
   if (providerCardId) {
     if (!/^[a-z0-9-]{2,80}$/i.test(providerCardId)) {
@@ -184,13 +223,21 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
     const params = new URLSearchParams({ select: selectedPokemonFields });
     const result = await fetchUpstream(`${pokemonCardsUrl}/${encodeURIComponent(providerCardId)}?${params}`, { headers });
     if (result.status === 429) {
-      return { error: structuredError("RATE_LIMITED", "Pokémon TCG API rate limit reached.", 429, result.retryAfter) };
+      return { error: structuredError("RATE_LIMITED", "Pokémon TCG API rate limit reached.", 429, result.retryAfter, { upstreamReached: true, providerResponseStatus: 429 }) };
     }
     if (result.status < 200 || result.status >= 300) {
-      return { error: structuredError("POKEMON_TCG_UNAVAILABLE", "Pokémon TCG API could not load that card.", result.status >= 500 ? 503 : result.status) };
+      return { error: structuredError("POKEMON_TCG_UNAVAILABLE", "Pokémon TCG API could not load that card.", result.status >= 500 ? 503 : result.status, undefined, { upstreamReached: true, providerResponseStatus: result.status }) };
     }
     const card = rows(result.payload)[0] as unknown as RankablePokemonCard | undefined;
-    return { matches: card ? [pokemonMatch(card, 100, ["Exact provider card ID"], "exact")] : [], totalCount: card ? 1 : 0, hasMore: false, warnings: [] };
+    return {
+      matches: card ? [pokemonMatch(card, 100, ["Exact provider card ID"], "exact")] : [],
+      totalCount: card ? 1 : 0,
+      hasMore: false,
+      warnings: [],
+      query: `id:${providerCardId}`,
+      providerResponseStatus: result.status,
+      upstreamReached: true,
+    };
   }
 
   const validation = manualCardSearchValidationError(input);
@@ -202,21 +249,31 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
   let reportedTotal = 0;
   let hasMore = false;
   let successfulQueries = 0;
+  let successfulQuery = "";
+  let lastProviderStatus: number | undefined;
 
   for (const candidate of queries) {
+    edgeDebug("provider request", {
+      provider: "pokemontcg",
+      generatedApiQuery: candidate.query,
+      page,
+      pageSize,
+    });
     const result = await fetchUpstream(pokemonEndpoint(candidate.query, page, pageSize), { headers });
+    lastProviderStatus = result.status;
     if (result.status === 429) {
-      if (!cards.size) return { error: structuredError("RATE_LIMITED", "Pokémon TCG API rate limit reached.", 429, result.retryAfter) };
+      if (!cards.size) return { error: structuredError("RATE_LIMITED", "Pokémon TCG API rate limit reached.", 429, result.retryAfter, { upstreamReached: true, providerResponseStatus: 429 }) };
       warnings.push("Pokémon TCG API rate limiting stopped broader fallbacks; existing results are shown.");
       break;
     }
     if (result.status === 400) continue;
     if (result.status === 401 || result.status === 403) {
-      return { error: structuredError("POKEMON_TCG_AUTH_UNAVAILABLE", "Pokémon TCG API authentication is unavailable.", 503) };
+      return { error: structuredError("POKEMON_TCG_AUTH_UNAVAILABLE", "Pokémon TCG API authentication is unavailable.", 503, undefined, { upstreamReached: true, providerResponseStatus: result.status }) };
     }
     if (result.status >= 500) continue;
     if (result.status < 200 || result.status >= 300) continue;
     successfulQueries += 1;
+    if (!successfulQuery) successfulQuery = candidate.query;
     const root = record(result.payload);
     const found = rows(result.payload) as unknown as RankablePokemonCard[];
     found.forEach((card) => cards.set(card.id, card));
@@ -225,7 +282,18 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
     if (cards.size >= pageSize) break;
   }
   if (!successfulQueries && !cards.size) {
-    return { error: structuredError("POKEMON_TCG_UNAVAILABLE", "Pokémon TCG API did not complete a usable search.", 503) };
+    const allRejected = lastProviderStatus === 400;
+    return {
+      error: structuredError(
+        allRejected ? "INVALID_GENERATED_QUERY" : "POKEMON_TCG_UNAVAILABLE",
+        allRejected
+          ? "The Pokémon TCG API rejected every safe generated query."
+          : "Pokémon TCG API did not complete a usable search.",
+        allRejected ? 400 : 503,
+        undefined,
+        { upstreamReached: true, providerResponseStatus: lastProviderStatus },
+      ),
+    };
   }
   if (parsed.correction) warnings.push(`Possible spelling: ${parsed.correction.suggestion}. Original wording was also searched.`);
   const ranked = rankPokemonCardResults([...cards.values()], parsed)
@@ -237,6 +305,9 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
     hasMore,
     warnings,
     parsed,
+    query: successfulQuery || queries[0]?.query || "",
+    providerResponseStatus: lastProviderStatus,
+    upstreamReached: true,
   };
 }
 
@@ -311,16 +382,16 @@ function tcgdexMatch(detail: TcgDexDetail, input: SearchRequest, aliasLookup: bo
   if (!rawQuery) score = 0;
   score = Math.max(0, Math.min(100, score));
   const directPricing = tcgdexMarket(detail.pricing);
-  const variants = (detail.variants_detailed || []).map((variant) => {
+  const variants: UnifiedCardPriceVariant[] = (detail.variants_detailed || []).flatMap((variant) => {
     const price = tcgdexMarket(variant.pricing);
-    return price ? {
+    return price ? [{
       name: [variant.type, variant.size].filter(Boolean).join(" ") || "Provider variant",
       market: price.market,
       low: price.low,
       mid: price.mid,
       high: price.high,
-    } : undefined;
-  }).filter((variant): variant is UnifiedCardPriceVariant => Boolean(variant));
+    }] : [];
+  });
   const pricing = directPricing ? { ...directPricing, variants } : undefined;
   const image = detail.image ? String(detail.image) : undefined;
   const searchConfidence: CardSearchConfidence = exactName && exactNumber
@@ -553,28 +624,59 @@ async function searchOnePiece(input: SearchRequest, page: number, pageSize: numb
 }
 
 Deno.serve(async (request) => {
-  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (request.method !== "POST") return structuredError("METHOD_NOT_ALLOWED", "Method not allowed.", 405);
+  const requestId = crypto.randomUUID();
+  const respond = (response: Response) => withRequestId(response, requestId);
+  if (request.method === "OPTIONS") return respond(new Response(null, { status: 204, headers: corsHeaders }));
+  if (request.method !== "POST") return respond(structuredError("METHOD_NOT_ALLOWED", "Method not allowed.", 405));
   let input: SearchRequest;
   try {
-    input = await request.json();
+    const body = await request.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return respond(structuredError("INVALID_REQUEST", "The request body must be a JSON object.", 400));
+    }
+    input = body as SearchRequest;
   } catch {
-    return structuredError("INVALID_JSON", "A valid JSON request body is required.", 400);
+    return respond(structuredError("INVALID_JSON", "A valid JSON request body is required.", 400));
+  }
+  if (!["pokemon", "one_piece", "other"].includes(String(input.game || ""))) {
+    return respond(structuredError("INVALID_GAME", "game must be pokemon, one_piece, or other.", 400));
+  }
+  if (!["en", "ja", "unknown"].includes(String(input.language || ""))) {
+    return respond(structuredError("INVALID_LANGUAGE", "language must be en, ja, or unknown.", 400));
   }
   const game = normalizeCardGame(input.game);
   const language = normalizeCardLanguage(input.language, game);
+  const parsed = parseCardSearchQuery(input);
   const page = Math.min(100, Math.max(1, Math.floor(Number(input.page) || 1)));
-  const pageSize = Math.min(24, Math.max(1, Math.floor(Number(input.pageSize) || 20)));
+  const pageSize = Math.min(30, Math.max(1, Math.floor(Number(input.pageSize) || 30)));
+  const provider = game === "one_piece" ? "optcgapi" : language === "ja" ? "tcgdex" : "pokemontcg";
+  edgeDebug("request", {
+    requestId,
+    selectedGame: game,
+    selectedLanguage: language,
+    rawInput: input.query || "",
+    normalizedInput: parsed.normalizedQuery,
+    parsedCardName: parsed.name || null,
+    parsedCollectorNumber: parsed.collector?.normalized || null,
+    selectedProvider: provider,
+    edgeFunctionName: "pokemon-card-search",
+  });
   if (game === "other") {
-    return json({
-      data: [],
+    return respond(json({
+      success: true,
+      provider: "manual",
+      query: "",
+      results: [],
       page,
       pageSize,
       count: 0,
       totalCount: 0,
       hasMore: false,
       warnings: ["Other / Manual items do not use an external card provider."],
-    });
+      requestId,
+      edgeFunctionReached: true,
+      upstreamReached: false,
+    }));
   }
 
   try {
@@ -583,29 +685,47 @@ Deno.serve(async (request) => {
       : language === "ja"
         ? await searchJapanesePokemon(input, page, pageSize)
         : await searchEnglishPokemon(input, page, pageSize);
-    if (result.error) return result.error;
-    return json({
-      data: result.matches || [],
+    const normalizedResult = result as {
+      error?: Response;
+      matches?: UnifiedCardMatch[];
+      totalCount?: number;
+      hasMore?: boolean;
+      warnings?: string[];
+      parsed?: ReturnType<typeof parseCardSearchQuery>;
+      query?: string;
+      upstreamReached?: boolean;
+      providerResponseStatus?: number;
+    };
+    if (normalizedResult.error) return respond(normalizedResult.error);
+    return respond(json({
+      success: true,
+      provider,
+      query: normalizedResult.query || parsed.normalizedQuery,
+      results: normalizedResult.matches || [],
       page,
       pageSize,
-      count: result.matches?.length || 0,
-      totalCount: result.totalCount || 0,
-      hasMore: Boolean(result.hasMore),
-      warnings: result.warnings || [],
-      parsed: result.parsed,
-      provider: game === "one_piece" ? "optcgapi" : language === "ja" ? "tcgdex" : "pokemontcg",
-    }, 200, { "Cache-Control": "public, max-age=120" });
+      count: normalizedResult.matches?.length || 0,
+      totalCount: normalizedResult.totalCount || 0,
+      hasMore: Boolean(normalizedResult.hasMore),
+      warnings: normalizedResult.warnings || [],
+      parsed: normalizedResult.parsed,
+      requestId,
+      edgeFunctionReached: true,
+      upstreamReached: normalizedResult.upstreamReached ?? true,
+      providerResponseStatus: normalizedResult.providerResponseStatus ?? 200,
+    }, 200, { "Cache-Control": "public, max-age=120" }));
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      const provider = game === "one_piece" ? "OPTCG API" : language === "ja" ? "TCGdex" : "Pokémon TCG API";
-      return structuredError("UPSTREAM_TIMEOUT", `${provider} took too long to respond.`, 504);
+      edgeDebug("timeout", { requestId, provider, timeout: true });
+      const providerLabel = game === "one_piece" ? "OPTCG API" : language === "ja" ? "TCGdex" : "Pokémon TCG API";
+      return respond(structuredError("UPSTREAM_TIMEOUT", `${providerLabel} took too long to respond.`, 504, undefined, { upstreamReached: true }));
     }
     console.error("unified-card-search", {
       game,
       language,
       kind: error instanceof Error ? error.name : "unknown",
     });
-    const provider = game === "one_piece" ? "OPTCG API" : language === "ja" ? "TCGdex" : "Pokémon TCG API";
-    return structuredError("UPSTREAM_CONNECTION_FAILED", `${provider} could not be reached. Other card providers were not affected.`, 502);
+    const providerLabel = game === "one_piece" ? "OPTCG API" : language === "ja" ? "TCGdex" : "Pokémon TCG API";
+    return respond(structuredError("UPSTREAM_CONNECTION_FAILED", `${providerLabel} could not be reached. Other card providers were not affected.`, 502, undefined, { upstreamReached: true }));
   }
 });

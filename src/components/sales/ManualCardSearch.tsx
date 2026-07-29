@@ -4,6 +4,7 @@ import { usePokemonCardSearch } from "../../hooks/usePokemonCardSearch";
 import type { PokemonProductCategory } from "../../types/models";
 import type { CardMatch, CardScanSuggestion } from "../../services/sales/cardScanService";
 import {
+  cardSearchDeveloperDebug,
   cardProviderLabel,
   type ManualCardSearchInput,
 } from "../../services/sales/pokemonCardSearchService";
@@ -136,7 +137,7 @@ export function ManualCardSearch({
   const searchInput = (nextTerms: SearchTerms, page = 1, disableCorrection = false): ManualCardSearchInput => ({
     ...nextTerms,
     page,
-    pageSize: 20,
+    pageSize: 30,
     disableCorrection,
   });
 
@@ -320,6 +321,7 @@ export function ManualCardSearch({
         {error ? <div role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-bold text-rose-800 dark:bg-rose-950/50 dark:text-rose-200">
           <p>{error.message}</p>
           <button type="button" onClick={() => void retry()} className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-xl bg-rose-700 px-4 font-black text-white"><RotateCcw size={15} />Retry search</button>
+          {cardSearchDeveloperDebug(error) ? <details className="mt-2 rounded-lg border border-rose-300 bg-white/70 p-2 text-xs text-slate-700 dark:border-rose-800 dark:bg-slate-950/50 dark:text-slate-200"><summary className="cursor-pointer font-black">Developer Debug</summary><code className="mt-2 block whitespace-pre-wrap break-all">{cardSearchDeveloperDebug(error)}</code></details> : null}
         </div> : null}
         {selectionError ? <div role="alert" className="rounded-xl bg-rose-100 p-3 text-sm font-bold text-rose-800 dark:bg-rose-950/50 dark:text-rose-200"><p>{selectionError}</p>{retryMatch ? <button type="button" onClick={() => void chooseCard(retryMatch)} className="mt-2 rounded-lg bg-rose-700 px-3 py-2 font-black text-white">Retry pricing</button> : null}</div> : null}
         {selectionMessage ? <p role="status" className="rounded-xl bg-violet-50 p-3 text-sm font-black text-violet-800 dark:bg-violet-950/40 dark:text-violet-100">{selectionMessage}</p> : null}

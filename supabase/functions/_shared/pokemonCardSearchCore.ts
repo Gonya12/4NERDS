@@ -417,6 +417,9 @@ export function buildPokemonApiQueries(input: CardSearchInput | ParsedCardSearch
     if (query && !values.some((value) => value.query === query)) values.push({ label, query });
   };
   const number = parsed.collector?.numerator || "";
+  const alternativeNumber = parsed.collector?.variants
+    .map((value) => value.split("/")[0])
+    .find((value) => value && value !== number) || "";
   const set = setClause(parsed.set);
   const spacedName = parsed.name;
   const hyphenatedName = parsed.suffix && parsed.baseName
@@ -429,12 +432,37 @@ export function buildPokemonApiQueries(input: CardSearchInput | ParsedCardSearch
   const originalName = parsed.originalName && normalizeCardSearchText(parsed.originalName) !== parsed.normalizedName
     ? parsed.originalName
     : "";
+  const normalizedBase = normalizeCardSearchText(parsed.baseName);
+  const simpleName = parsed.name && !parsed.suffix && /^[\p{L}\p{N}]+$/u.test(parsed.name)
+    ? normalizeCardSearchText(parsed.name)
+    : "";
+  const safePrefix = normalizedBase.length >= 3
+    ? escapePokemonLuceneValue(normalizedBase.slice(0, Math.min(4, normalizedBase.length)))
+    : "";
+
+  // Short names work best as a bounded provider wildcard. Keep exact and broader
+  // fallbacks close behind it so a single rejected Lucene expression is harmless.
+  if (!number && !set && simpleName) {
+    add("name prefix", [`name:${escapePokemonLuceneValue(simpleName)}*`]);
+    add("exact normalized name", [unquoted("name", simpleName)]);
+  }
 
   for (const name of nameVariants) {
-    if (number && set) add("exact name, number, and set", [quoted("name", name), unquoted("number", number), set]);
+    if (number && set) {
+      add("exact name, number, and set", [
+        simpleName ? unquoted("name", simpleName) : quoted("name", name),
+        unquoted("number", number),
+        set,
+      ]);
+    }
   }
   for (const name of nameVariants) {
-    if (number) add("exact name and number", [quoted("name", name), unquoted("number", number)]);
+    if (number) {
+      add("exact name and number", [
+        simpleName ? unquoted("name", simpleName) : quoted("name", name),
+        unquoted("number", number),
+      ]);
+    }
   }
   if (parsed.baseName && number && parsed.baseName !== parsed.name) {
     add("base name and number", [quoted("name", parsed.baseName), unquoted("number", number)]);
@@ -444,16 +472,20 @@ export function buildPokemonApiQueries(input: CardSearchInput | ParsedCardSearch
   for (const name of nameVariants) {
     if (set) add("exact name and set", [quoted("name", name), set]);
   }
-  for (const name of nameVariants) add("exact card name", [quoted("name", name)]);
+  if (number && simpleName) add("exact normalized name", [unquoted("name", simpleName)]);
+  for (const name of nameVariants) {
+    if (!simpleName) add("exact card name", [quoted("name", name)]);
+  }
   if (originalName && number) add("original name and number", [quoted("name", originalName), unquoted("number", number)]);
   if (originalName) add("original typed name", [quoted("name", originalName)]);
   if (parsed.baseName && parsed.baseName !== parsed.name) add("base card name", [quoted("name", parsed.baseName)]);
-  if (parsed.baseName.length >= 3) {
-    const prefix = escapePokemonLuceneValue(parsed.baseName.slice(0, Math.min(7, parsed.baseName.length)));
-    add("name prefix", [`name:${prefix}*`]);
+  if (safePrefix) add("broader name prefix", [`name:${safePrefix}*`]);
+  if (alternativeNumber && simpleName) {
+    add("unpadded name and collector number", [unquoted("name", simpleName), unquoted("number", alternativeNumber)]);
   }
+  if (alternativeNumber) add("unpadded collector number", [unquoted("number", alternativeNumber)]);
   if (!parsed.name && set) add("set", [set]);
-  return values.slice(0, 10);
+  return values.slice(0, 8);
 }
 
 function normalizedCardNumber(value: string) {
@@ -504,6 +536,9 @@ export function rankPokemonCardResults(cards: RankablePokemonCard[], input: Card
     if (exactName) {
       score += 45;
       reasons.push("Exact printed name");
+    } else if (wantedName.length >= 3 && cardName.startsWith(wantedName)) {
+      score += 50;
+      reasons.push("Card name starts with search");
     } else if (baseSimilarity >= 0.92) {
       score += 34;
       reasons.push("Card name closely matches");

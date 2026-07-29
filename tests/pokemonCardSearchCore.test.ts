@@ -80,6 +80,27 @@ test("builds escaped bounded Lucene queries from structured input", () => {
   assert.ok(queries.some((query) => query.query === "number:SWSH133"));
 });
 
+test("builds progressive prefix and exact fallbacks for short Pokémon names", () => {
+  const pika = buildPokemonApiQueries(parseCardSearchQuery("pika")).map((value) => value.query);
+  assert.deepEqual(pika.slice(0, 2), ["name:pika*", "name:pika"]);
+
+  const numbered = buildPokemonApiQueries(parseCardSearchQuery("Pikachu 067")).map((value) => value.query);
+  assert.deepEqual(numbered.slice(0, 4), [
+    "name:pikachu number:067",
+    "number:067",
+    "name:pikachu",
+    "name:pika*",
+  ]);
+  assert.ok(numbered.includes("number:67"));
+
+  const ranked = rankPokemonCardResults([
+    { id: "pikachu", name: "Pikachu", number: "25" },
+    { id: "unrelated", name: "Raichu", number: "26" },
+  ], "pika");
+  assert.equal(ranked[0].id, "pikachu");
+  assert.notEqual(ranked[0].confidence, "unreliable");
+});
+
 test("generates hyphenated and spaced suffix queries without merging suffix types", () => {
   const queries = buildPokemonApiQueries(parseCardSearchQuery("Pikachu GX 067")).map((value) => value.query);
   assert.equal(queries[0], 'name:"Pikachu\\-GX" number:067');
@@ -110,11 +131,26 @@ test("invalid punctuation cannot create a raw query or crash parsing", () => {
 test("client cancellation and Edge rate-limit contracts prevent stale or retry-loop behavior", () => {
   const hook = readFileSync(new URL("../src/hooks/usePokemonCardSearch.ts", import.meta.url), "utf8");
   const edge = readFileSync(new URL("../supabase/functions/pokemon-card-search/index.ts", import.meta.url), "utf8");
+  const client = readFileSync(new URL("../src/services/sales/pokemonCardSearchService.ts", import.meta.url), "utf8");
+  const contract = readFileSync(new URL("../src/services/sales/cardSearchContract.ts", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("../src/components/sales/ManualCardSearch.tsx", import.meta.url), "utf8");
   assert.match(hook, /requestId\.current/);
   assert.match(hook, /controller\.current\?\.abort/);
   assert.match(hook, /currentRequest !== requestId\.current/);
   assert.match(edge, /Retry-After/);
   assert.match(edge, /result\.status === 429/);
   assert.match(edge, /for \(const candidate of queries\)/);
+  assert.match(edge, /results:\s*normalizedResult\.matches/);
+  assert.match(edge, /POKEMON_TCG_API_KEY is not configured/);
+  assert.match(edge, /status:\s*204/);
+  assert.match(client, /payload\.results/);
+  assert.match(client, /edgeFunctionReached/);
+  assert.match(client, /providerResponseStatus/);
+  assert.match(client, /buildCanonicalCardSearchRequest/);
+  assert.match(client, /name:\s*input\.name\s*\|\|\s*parsed\.originalName\s*\|\|\s*null/);
+  assert.match(client, /collectorNumber:\s*input\.collectorNumber\s*\|\|\s*parsed\.collector\?\.normalized\s*\|\|\s*null/);
+  assert.doesNotMatch(client, /Check the card search and try again/);
+  assert.match(contract, /CARD_SEARCH_FUNCTION_NAME\s*=\s*"pokemon-card-search"/);
+  assert.match(ui, /Developer Debug/);
   assert.doesNotMatch(edge, /while\s*\(/);
 });

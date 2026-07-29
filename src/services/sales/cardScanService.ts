@@ -18,6 +18,7 @@ import {
 } from "./cardScanParsing";
 import {
   cardProviderLabel,
+  CARD_SEARCH_FUNCTION_NAME,
   fetchPokemonCardById,
   pricingFromUnifiedCard,
   searchPokemonCards,
@@ -430,7 +431,7 @@ async function fetchPokemonApi(
   if (isSupabaseConfigured && supabaseUrl && supabasePublishableKey) {
     try {
       const proxied = await fetchWithTimeout(
-        `${supabaseUrl}/functions/v1/pokemon-card-search`,
+        `${supabaseUrl}/functions/v1/${CARD_SEARCH_FUNCTION_NAME}`,
         signal,
         8_000,
         {

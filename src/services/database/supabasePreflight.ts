@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
+import { CARD_SEARCH_FUNCTION_NAME } from "../sales/cardSearchContract";
 
 export type SupabaseHealthStatus = "pass" | "fail";
 
@@ -177,11 +178,11 @@ export async function runSupabaseHealthCheck(): Promise<SupabaseHealthReport> {
   });
 
   checks.push({
-    id: "function:pokemon-card-search",
-    label: "pokemon-card-search Edge Function",
+    id: `function:${CARD_SEARCH_FUNCTION_NAME}`,
+    label: `${CARD_SEARCH_FUNCTION_NAME} Edge Function`,
     group: "function",
     run: async () => {
-      const response = await fetch(`${projectUrl}/functions/v1/pokemon-card-search`, {
+      const response = await fetch(`${projectUrl}/functions/v1/${CARD_SEARCH_FUNCTION_NAME}`, {
         method: "OPTIONS",
         headers: {
           apikey: publishableKey,
