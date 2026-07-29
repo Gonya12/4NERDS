@@ -3,7 +3,7 @@ import {
   PackagePlus, RefreshCcw, Save, Search, ShieldAlert, Trash2, Upload, X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ImageLightbox } from "../components/sales/ImageLightbox";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
@@ -37,6 +37,7 @@ function itemImage(item: TradeItem) { return item.imageUrl || ""; }
 
 export function TradePage() {
   const params = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const requestedId = params.id;
   const [trades, setTrades] = useState<TradeTransaction[]>(getCachedTrades());
@@ -61,8 +62,15 @@ export function TradePage() {
       ]);
       const ownership = await listOwnershipShares(inventoryRows.map((row) => row.id), []);
       const hydrated = inventoryRows.map((row) => ({ ...row, ownershipShares: ownership.inventory.get(row.id) || [] }));
-      setTrades(tradeRows); setInventory(hydrated); setEvents(eventRows); setWorkers(workerRows);
-      if (requestedId) setDetail(tradeRows.find((row) => row.id === requestedId));
+      const tradeOnlyRows = tradeRows.filter((row) => row.transactionType === "trade" || row.transactionType === "cash_trade");
+      setTrades(tradeOnlyRows); setInventory(hydrated); setEvents(eventRows); setWorkers(workerRows);
+      if (requestedId) setDetail(tradeOnlyRows.find((row) => row.id === requestedId));
+      if (searchParams.get("new")) {
+        const next = blankTrade();
+        next.transactionType = searchParams.get("new") === "cash_trade" ? "cash_trade" : "trade";
+        next.itemMode = searchParams.get("items") === "single" ? "single" : "multiple";
+        setEditor(next); setStep(0);
+      }
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Trade data could not be loaded."); }
     finally { setLoading(false); }
   }
@@ -250,6 +258,7 @@ function TradeEditor(props: EditorProps) {
       <div className="flex items-center justify-between"><h2 className="text-xl font-black">{editingItem.direction === "incoming" ? "Incoming item" : "Outgoing item"}</h2><button onClick={() => setEditingItem(undefined)} className="rounded-full bg-slate-100 p-2"><X size={18} /></button></div>
       <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Item name</span><input value={editingItem.itemName} onChange={(event) => { const item = { ...editingItem, itemName: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Item type</span><select value={editingItem.itemType} onChange={(event) => { const item = { ...editingItem, itemType: event.target.value as PokemonProductCategory }; setEditingItem(item); updateItem(item); }} className={inputClass}>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Quantity</span><input type="number" min="1" value={editingItem.quantity} onChange={(event) => { const item = { ...editingItem, quantity: Math.max(1, Number(event.target.value)) }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Collector number</span><input value={editingItem.collectorNumber || ""} onChange={(event) => { const item = { ...editingItem, collectorNumber: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Set</span><input value={editingItem.cardSet || ""} onChange={(event) => { const item = { ...editingItem, cardSet: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Market value</span>{money(editingItem.marketValue, (marketValue) => { const item = { ...editingItem, marketValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Agreed trade value</span>{money(editingItem.agreedTradeValue, (agreedTradeValue) => { const item = { ...editingItem, agreedTradeValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "outgoing" ? "Historical cost basis" : "Allocated cost basis"}</span>{money(editingItem.direction === "outgoing" ? editingItem.historicalCostBasis : editingItem.allocatedCostBasis, (value) => { const item = editingItem.direction === "outgoing" ? { ...editingItem, historicalCostBasis: value } : { ...editingItem, allocatedCostBasis: value }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Grading company</span><input value={editingItem.gradingCompany || ""} onChange={(event) => { const item = { ...editingItem, gradingCompany: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Grade / certificate</span><input value={[editingItem.grade, editingItem.certificateNumber].filter(Boolean).join(" / ")} onChange={(event) => { const [grade, certificateNumber] = event.target.value.split("/").map((value) => value.trim()); const item = { ...editingItem, grade, certificateNumber }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label></div>
       {editingItem.direction === "incoming" ? <><div className="grid grid-cols-3 gap-2"><button onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><Upload size={16} className="mx-auto mb-1" /> Upload / Take Photo</button><button onClick={() => void pasteImage()} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><ImagePlus size={16} className="mx-auto mb-1" /> Paste Image</button><button onClick={() => setManualSearch(true)} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><Search size={16} className="mx-auto mb-1" /> Search Card</button></div><input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void chooseImage(event.target.files?.[0])} />{editingItem.imageUrl ? <button onClick={() => setPreview({ url: editingItem.imageUrl!, title: editingItem.itemName })}><img src={editingItem.imageUrl} className="h-40 w-full rounded-xl object-contain" /></button> : null}</> : null}
+      {editingItem.direction === "incoming" ? <label><span className="text-xs font-black">Trade percentage</span><input type="number" min="0" max="100" step=".1" value={editingItem.tradePercentage ?? 100} onChange={(event) => { const tradePercentage = Number(event.target.value || 0); const item = { ...editingItem, tradePercentage, agreedTradeValue: Math.round(editingItem.marketValue * tradePercentage) / 100 }; setEditingItem(item); updateItem(item); }} className={inputClass} /><small className="block text-slate-500">Accepted value: {formatMoney(editingItem.marketValue * (editingItem.tradePercentage ?? 100) / 100)}</small></label> : null}
       <OwnershipEditor workers={props.workers} shares={editingItem.ownershipShares} totalCost={editingItem.direction === "incoming" ? editingItem.allocatedCostBasis : editingItem.historicalCostBasis} label={`${editingItem.direction === "incoming" ? "Incoming" : "Outgoing"} item ownership`} onChange={(ownershipShares) => { const item = { ...editingItem, ownershipShares }; setEditingItem(item); updateItem(item); }} />
       <label><span className="text-xs font-black">Notes</span><textarea value={editingItem.notes || ""} onChange={(event) => { const item = { ...editingItem, notes: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label>
       <button onClick={() => setEditingItem(undefined)} className="btn-primary w-full"><Check size={17} /> Done</button>

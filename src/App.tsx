@@ -23,6 +23,8 @@ import { applyPwaUpdate, getPwaStatus, subscribePwaStatus } from "./services/pwa
 
 const SalesControlPage = lazy(() => import("./pages/SalesControlPage").then((module) => ({ default: module.SalesControlPage })));
 const TradePage = lazy(() => import("./pages/TradePage").then((module) => ({ default: module.TradePage })));
+const UnifiedTransactionPage = lazy(() => import("./pages/UnifiedTransactionPage").then((module) => ({ default: module.UnifiedTransactionPage })));
+const DailySummaryPage = lazy(() => import("./pages/DailySummaryPage").then((module) => ({ default: module.DailySummaryPage })));
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   useEffect(() => {
@@ -129,6 +131,8 @@ export default function App() {
             <Route path="/sales" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Sales Control…</div>}><SalesControlPage /></Suspense>} />
             <Route path="/sales/trades" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Trade Control…</div>}><TradePage /></Suspense>} />
             <Route path="/sales/trades/:id" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Trade…</div>}><TradePage /></Suspense>} />
+            <Route path="/sales/transactions/new" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Transaction…</div>}><UnifiedTransactionPage /></Suspense>} />
+            <Route path="/sales/daily" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Daily Summary…</div>}><DailySummaryPage /></Suspense>} />
             <Route path="/buy" element={<NeedsToBuyPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/events/new" element={<EventFormPage />} />

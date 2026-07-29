@@ -18,6 +18,7 @@ type ExpenseRow = {
   receipt_image_url?: string | null;
   receipt_image_path?: string | null;
   notes?: string | null;
+  financial_transaction_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -35,6 +36,7 @@ function fromRow(row: ExpenseRow): BusinessExpense {
     receiptImageUrl: row.receipt_image_url || undefined,
     receiptImagePath: row.receipt_image_path || undefined,
     notes: row.notes || undefined,
+    financialTransactionId: row.financial_transaction_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -53,6 +55,7 @@ function toRow(value: BusinessExpense): ExpenseRow {
     receipt_image_url: value.receiptImageUrl || null,
     receipt_image_path: value.receiptImagePath || null,
     notes: value.notes || null,
+    financial_transaction_id: value.financialTransactionId || null,
     created_at: value.createdAt,
     updated_at: value.updatedAt
   };
@@ -66,17 +69,28 @@ function write(key: string, values: BusinessExpense[]) {
   try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* Cache is optional. */ }
 }
 
+function isMissingColumnError(error?: { code?: string; message?: string } | null) {
+  return Boolean(error && (error.code === "42703" || error.code === "PGRST204" || /column .* does not exist|schema cache/i.test(error.message || "")));
+}
+
 export function getCachedBusinessExpenses() {
   return read(cacheKey);
 }
 
 export async function listBusinessExpenses(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,expense_date,amount,category,description,event_id,paid_by_worker_id,vendor,receipt_image_url,receipt_image_path,notes,created_at,updated_at";
+  const columns = "id,expense_date,amount,category,description,event_id,paid_by_worker_id,vendor,receipt_image_url,receipt_image_path,notes,financial_transaction_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("business_expenses", "listBusinessExpenses", columns);
-  const { data, error } = await supabase.from("business_expenses")
+  const enhanced = await supabase.from("business_expenses")
     .select(columns)
     .order("expense_date", { ascending: false }).limit(limit);
+  let data = enhanced.data as unknown as ExpenseRow[] | null;
+  let error = enhanced.error;
+  if (isMissingColumnError(error)) {
+    const legacy = await supabase.from("business_expenses").select(columns.replace(",financial_transaction_id", "")).order("expense_date", { ascending: false }).limit(limit);
+    data = legacy.data as unknown as ExpenseRow[] | null;
+    error = legacy.error;
+  }
   completeTrace(data?.length || 0, error);
   recordSupabaseRequest("business_expenses", "listBusinessExpenses", data?.length || 0);
   if (error) throw new Error(error.message);
@@ -113,6 +127,7 @@ export async function saveBusinessExpense(input: Partial<BusinessExpense>, recei
     receiptImageUrl,
     receiptImagePath,
     notes: input.notes?.trim() || undefined,
+    financialTransactionId: input.financialTransactionId,
     createdAt: input.createdAt || timestamp,
     updatedAt: timestamp
   };
@@ -122,7 +137,13 @@ export async function saveBusinessExpense(input: Partial<BusinessExpense>, recei
     write(cacheKey, values);
     return value;
   }
-  const { data, error } = await supabase.from("business_expenses").upsert(toRow(value)).select("*").single();
+  let { data, error } = await supabase.from("business_expenses").upsert(toRow(value)).select("*").single();
+  if (isMissingColumnError(error)) {
+    const { financial_transaction_id: _financialTransactionId, ...legacyRow } = toRow(value);
+    const legacy = await supabase.from("business_expenses").upsert(legacyRow).select("*").single();
+    data = legacy.data;
+    error = legacy.error;
+  }
   recordSupabaseRequest("business_expenses", "saveBusinessExpense", data ? 1 : 0);
   if (error) throw new Error(error.message);
   return fromRow(data as ExpenseRow);

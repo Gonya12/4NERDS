@@ -3,6 +3,9 @@ import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
+import { createSaleRecord } from "./salesRepository";
+import { saveBusinessExpense } from "./businessExpenseRepository";
+import { transactionReview } from "../../utils/transactionMath";
 
 const localKey = "4nerds_trade_transactions_local_v1";
 const cacheKey = "4nerds_trade_transactions_cache_v1";
@@ -16,6 +19,10 @@ type TransactionRow = {
   cash_received: number; cash_paid: number; notes?: string | null; general_image_url?: string | null; general_image_path?: string | null;
   proof_image_url?: string | null; proof_image_path?: string | null; status: TradeTransaction["status"]; entered_by_worker_id?: string | null;
   completed_at?: string | null; reversed_at?: string | null; reversal_of_trade_id?: string | null; created_at: string; updated_at: string;
+  transaction_type?: TradeTransaction["transactionType"] | null; item_mode?: TradeTransaction["itemMode"] | null;
+  pricing_mode?: TradeTransaction["pricingMode"] | null; bundle_total?: number | null; payment_method?: TradeTransaction["paymentMethod"] | null;
+  purchase_source?: TradeTransaction["purchaseSource"] | null; expense_category?: TradeTransaction["expenseCategory"] | null;
+  paid_by_worker_id?: string | null; keep_as_bundle?: boolean | null;
 };
 type ItemRow = {
   id: string; trade_transaction_id: string; inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
@@ -25,6 +32,8 @@ type ItemRow = {
   collector_number?: string | null; card_set?: string | null; pokemon_tcg_card_id?: string | null; card_condition?: TradeItem["cardCondition"] | null;
   sticker_price?: number | null; grading_company?: string | null; grade?: string | null; certificate_number?: string | null;
   notes?: string | null; created_at: string; updated_at: string;
+  trade_percentage?: number | null; sold_price?: number | null; bought_price?: number | null;
+  created_sales_record_id?: string | null; created_business_expense_id?: string | null;
 };
 type ShareRow = { id?: string; trade_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
 
@@ -35,6 +44,9 @@ const transactionRow = (trade: TradeTransaction): TransactionRow => ({
   proof_image_url: trade.proofImageUrl || null, proof_image_path: trade.proofImagePath || null, status: trade.status,
   entered_by_worker_id: trade.enteredByWorkerId || null, completed_at: trade.completedAt || null, reversed_at: trade.reversedAt || null,
   reversal_of_trade_id: trade.reversalOfTradeId || null, created_at: trade.createdAt, updated_at: trade.updatedAt
+  , transaction_type: trade.transactionType, item_mode: trade.itemMode, pricing_mode: trade.pricingMode,
+  bundle_total: trade.bundleTotal ?? null, payment_method: trade.paymentMethod || null, purchase_source: trade.purchaseSource || null,
+  expense_category: trade.expenseCategory || null, paid_by_worker_id: trade.paidByWorkerId || null, keep_as_bundle: Boolean(trade.keepAsBundle)
 });
 const itemRow = (item: TradeItem): ItemRow => ({
   id: item.id, trade_transaction_id: item.tradeTransactionId, inventory_purchase_id: item.inventoryPurchaseId || null,
@@ -47,6 +59,8 @@ const itemRow = (item: TradeItem): ItemRow => ({
   card_condition: item.cardCondition || null, sticker_price: item.stickerPrice ?? null, grading_company: item.gradingCompany || null,
   grade: item.grade || null, certificate_number: item.certificateNumber || null, notes: item.notes || null,
   created_at: item.createdAt, updated_at: item.updatedAt
+  , trade_percentage: item.tradePercentage ?? null, sold_price: item.soldPrice ?? null, bought_price: item.boughtPrice ?? null,
+  created_sales_record_id: item.createdSalesRecordId || null, created_business_expense_id: item.createdBusinessExpenseId || null
 });
 const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem => ({
   id: row.id, tradeTransactionId: row.trade_transaction_id, inventoryPurchaseId: row.inventory_purchase_id || undefined,
@@ -60,11 +74,14 @@ const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem =>
   cardCondition: row.card_condition || undefined, stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
   gradingCompany: row.grading_company || undefined, grade: row.grade || undefined, certificateNumber: row.certificate_number || undefined,
   notes: row.notes || undefined, ownershipShares: shares, createdAt: row.created_at, updatedAt: row.updated_at
+  , tradePercentage: row.trade_percentage == null ? undefined : Number(row.trade_percentage),
+  soldPrice: row.sold_price == null ? undefined : Number(row.sold_price), boughtPrice: row.bought_price == null ? undefined : Number(row.bought_price),
+  createdSalesRecordId: row.created_sales_record_id || undefined, createdBusinessExpenseId: row.created_business_expense_id || undefined
 });
 
 export function blankTrade(): TradeTransaction {
   const timestamp = nowIso();
-  return { id: id("trade"), tradeDate: timestamp, cashReceived: 0, cashPaid: 0, status: "draft", createdAt: timestamp, updatedAt: timestamp, items: [] };
+  return { id: id("trade"), tradeDate: timestamp, transactionType: "trade", itemMode: "multiple", pricingMode: "individual", cashReceived: 0, cashPaid: 0, status: "draft", createdAt: timestamp, updatedAt: timestamp, items: [] };
 }
 
 export function blankTradeItem(tradeId: string, direction: TradeItem["direction"]): TradeItem {
@@ -99,6 +116,10 @@ export async function listTrades() {
     proofImageUrl: row.proof_image_url || undefined, proofImagePath: row.proof_image_path || undefined, status: row.status,
     enteredByWorkerId: row.entered_by_worker_id || undefined, completedAt: row.completed_at || undefined, reversedAt: row.reversed_at || undefined,
     reversalOfTradeId: row.reversal_of_trade_id || undefined, createdAt: row.created_at, updatedAt: row.updated_at, items: itemMap.get(row.id) || []
+    , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.pricing_mode || "individual",
+    bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
+    purchaseSource: row.purchase_source || undefined, expenseCategory: row.expense_category || undefined,
+    paidByWorkerId: row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
   }));
   write(cacheKey, values);
   recordSupabaseRequest("trade_transactions", "listTrades", values.length);
@@ -184,6 +205,76 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   trade = { ...trade, status: "completed", completedAt: timestamp, updatedAt: timestamp };
   await saveTrade(trade);
   return { trade, created };
+}
+
+export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[]) {
+  if (input.transactionType === "trade" || input.transactionType === "cash_trade") return completeTrade(input, inventory);
+  if (input.status !== "draft") throw new Error("Only a draft transaction can be completed.");
+  const timestamp = nowIso();
+  let transaction: TradeTransaction = { ...input, status: "draft" };
+  await saveTrade(transaction);
+  if (transaction.transactionType === "sale") {
+    const items = transaction.items.filter((item) => item.direction === "outgoing");
+    if (!items.length) throw new Error("Add at least one inventory item to the sale.");
+    for (const item of items) {
+      const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
+      if (!source || source.status !== "in_stock") throw new Error(`${item.itemName} is no longer available.`);
+      const result = await createSaleRecord({
+        eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
+        imagePath: item.imagePath || transaction.generalImagePath, itemName: item.itemName, category: item.itemType, quantity: item.quantity,
+        soldPrice: item.soldPrice || 0, boughtPrice: item.historicalCostBasis, marketValue: item.marketValue,
+        paymentMethod: transaction.paymentMethod || "cash", soldByWorkerId: transaction.enteredByWorkerId,
+        inventoryPurchaseId: source.id, notes: item.notes || transaction.notes, soldAt: transaction.tradeDate,
+        financialTransactionId: transaction.id
+      });
+      item.createdSalesRecordId = result.sale.id;
+      await saveInventoryPurchase({
+        ...source, status: "sold", quantitySold: source.quantity, soldPrice: item.soldPrice || 0,
+        soldDate: transaction.tradeDate, soldByWorkerId: transaction.enteredByWorkerId, soldEventId: transaction.eventId,
+        soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id
+      });
+    }
+    transaction.cashReceived = transaction.items.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0);
+  } else if (transaction.transactionType === "purchase") {
+    const items = transaction.items.filter((item) => item.direction === "incoming");
+    if (!items.length) throw new Error("Add at least one purchased item.");
+    for (const item of items) {
+      const saved = await saveInventoryPurchase({
+        itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
+        totalCost: item.boughtPrice || item.allocatedCostBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
+        purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
+        purchasedByWorkerId: transaction.paidByWorkerId, notes: item.notes || transaction.notes, status: "in_stock",
+        cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet, pokemonTcgCardId: item.pokemonTcgCardId,
+        cardCondition: item.cardCondition, stickerPrice: item.stickerPrice, gradingCompany: item.gradingCompany, grade: item.grade,
+        certificateNumber: item.certificateNumber, imageUrl: item.imageUrl || transaction.generalImageUrl, imagePath: item.imagePath,
+        acquisitionMethod: "purchased", financialTransactionId: transaction.id
+      });
+      item.createdInventoryPurchaseId = saved.id;
+      if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
+    }
+    transaction.cashPaid = transaction.items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0);
+  } else {
+    const amount = transaction.bundleTotal ?? transaction.cashPaid;
+    const expense = await saveBusinessExpense({
+      expenseDate: transaction.tradeDate, amount, category: transaction.expenseCategory || "other",
+      description: transaction.items[0]?.itemName || transaction.notes || "Business expense", eventId: transaction.eventId,
+      paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner, receiptImageUrl: transaction.generalImageUrl,
+      receiptImagePath: transaction.generalImagePath, notes: transaction.notes, financialTransactionId: transaction.id
+    });
+    if (transaction.items[0]) transaction.items[0].createdBusinessExpenseId = expense.id;
+    transaction.cashPaid = amount;
+  }
+  transaction = { ...transaction, status: "completed", completedAt: timestamp, updatedAt: timestamp };
+  await saveTrade(transaction);
+  const balances = transactionReview(transaction).internalBalances;
+  if (isSupabaseConfigured && supabase && balances.length) {
+    const balanceResult = await supabase.from("transaction_internal_balances").upsert(balances.map((row) => ({
+      trade_transaction_id: transaction.id, owed_by_worker_id: row.owedByWorkerId, owed_to_worker_id: row.owedToWorkerId,
+      amount: row.amount, settled: false, updated_at: timestamp
+    })), { onConflict: "trade_transaction_id,owed_by_worker_id,owed_to_worker_id" });
+    if (balanceResult.error) throw new Error(balanceResult.error.message);
+  }
+  return { trade: transaction, created: [] as InventoryPurchase[] };
 }
 
 export async function reverseTrade(input: TradeTransaction, inventory: InventoryPurchase[]) {

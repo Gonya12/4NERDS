@@ -53,7 +53,7 @@ export function SalesAnalyticsPanel(props: Props) {
   const [chartExpanded, setChartExpanded] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string }>();
   const filtered = useMemo(() => filterFinancialRecords(props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd), [props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd]);
-  const filteredTrades = useMemo(() => props.trades.filter((trade) => trade.status === "completed" && isWithinFinancialRange(trade.tradeDate, props.dateRange, props.customStart, props.customEnd)), [props.trades, props.dateRange, props.customStart, props.customEnd]);
+  const filteredTrades = useMemo(() => props.trades.filter((trade) => trade.status === "completed" && (trade.transactionType === "trade" || trade.transactionType === "cash_trade") && isWithinFinancialRange(trade.tradeDate, props.dateRange, props.customStart, props.customEnd)), [props.trades, props.dateRange, props.customStart, props.customEnd]);
   const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events), [filtered]);
 
   const chartRows = useMemo(() => {

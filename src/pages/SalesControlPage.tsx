@@ -1,5 +1,5 @@
 import {
-  Camera, ClipboardPaste, Download, FileSpreadsheet, Handshake, ImagePlus, PackagePlus, Receipt,
+  Camera, ClipboardPaste, Download, FileSpreadsheet, Handshake, ImagePlus, PackagePlus, Plus, Receipt,
   RotateCcw, Save, ScanLine, SwitchCamera, Trash2, Upload, X
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -133,6 +133,8 @@ export function SalesControlPage() {
   const [exportEventId, setExportEventId] = useState("");
   const [exporting, setExporting] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
+  const [addSheet, setAddSheet] = useState<"main" | "purchase_cost" | "item_mode" | null>(null);
+  const [pendingTransactionPath, setPendingTransactionPath] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -276,6 +278,16 @@ export function SalesControlPage() {
       setCameraMode(true);
       setCameraError("");
     }
+  }
+
+  function chooseTransaction(path: string) {
+    setPendingTransactionPath(path);
+    setAddSheet("item_mode");
+  }
+
+  function launchTransaction(itemMode: "single" | "multiple") {
+    setAddSheet(null);
+    navigate(`${pendingTransactionPath}${pendingTransactionPath.includes("?") ? "&" : "?"}items=${itemMode}`);
   }
 
   function openPurchase(purchase?: InventoryPurchase) {
@@ -821,13 +833,13 @@ export function SalesControlPage() {
     <div className="page-shell w-full min-w-0 max-w-full overflow-x-hidden">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="eyebrow">Financial control</p><h1 className="text-3xl font-black text-ink dark:text-white">Sales Control</h1><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Pokémon sales, inventory, and business costs in one place.</p></div>
-        <div className="grid grid-cols-2 gap-2 sm:flex">
-          <button onClick={() => openSale()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-600 px-3 text-sm font-black text-white"><Camera size={18} /> Add Sale</button>
-          <button onClick={() => openPurchase()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-black text-white"><PackagePlus size={18} /> Add Purchase</button>
-          <button onClick={() => openExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-500 px-3 text-sm font-black text-slate-950"><Receipt size={18} /> Add Expense</button>
-          <button onClick={() => navigate("/sales/trades")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><Handshake size={18} /> Add Trade</button>
-        </div>
+        <button onClick={() => setAddSheet("main")} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-coral px-5 font-black text-white shadow-lg"><Plus size={20} /> Add</button>
       </header>
+      {addSheet ? <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/65 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddSheet(null); }}><section className="w-full max-w-md space-y-3 rounded-t-3xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl dark:bg-slate-900 sm:rounded-3xl"><div className="flex items-center justify-between"><div><p className="eyebrow">Sales Control</p><h2 className="text-xl font-black">{addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"}</h2></div><button onClick={() => setAddSheet(null)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
+        {addSheet === "main" ? <div className="grid grid-cols-2 gap-2"><button onClick={() => chooseTransaction("/sales/transactions/new?type=sale")} className="min-h-20 rounded-2xl bg-orange-600 p-3 font-black text-white">Sold</button><button onClick={() => setAddSheet("purchase_cost")} className="min-h-20 rounded-2xl bg-sky-600 p-3 font-black text-white">Purchased / Cost</button><button onClick={() => chooseTransaction("/sales/trades?new=trade")} className="min-h-20 rounded-2xl bg-violet-600 p-3 font-black text-white">Trade</button><button onClick={() => chooseTransaction("/sales/trades?new=cash_trade")} className="min-h-20 rounded-2xl bg-emerald-600 p-3 font-black text-white">Cash + Trade</button></div> : null}
+        {addSheet === "purchase_cost" ? <div className="space-y-3"><p className="text-xs font-black uppercase text-slate-500">Inventory Purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <button key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=purchase&source=${source}`)} className="min-h-12 rounded-xl bg-sky-100 px-2 text-sm font-black text-sky-800">{label}</button>)}</div><p className="text-xs font-black uppercase text-slate-500">Business Cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <button key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=expense&category=${category}`)} className="min-h-12 rounded-xl bg-amber-100 px-2 text-sm font-black text-amber-800">{label}</button>)}</div></div> : null}
+        {addSheet === "item_mode" ? <div className="grid grid-cols-2 gap-2"><button onClick={() => launchTransaction("single")} className="min-h-24 rounded-2xl bg-slate-100 p-3 font-black dark:bg-slate-800">Single Item</button><button onClick={() => launchTransaction("multiple")} className="min-h-24 rounded-2xl bg-violet-600 p-3 font-black text-white">Multiple Items / Lot</button></div> : null}
+      </section></div> : null}
       <SyncStatusBadge syncing={syncing} />
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
@@ -857,6 +869,7 @@ export function SalesControlPage() {
             onEditExpense={openExpense}
           />
           <section className="mt-4 grid grid-cols-2 gap-2">
+            <button onClick={() => navigate("/sales/daily")} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-black text-white">Daily Summary</button>
             <button onClick={() => setBatchOpen(true)} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white"><PackagePlus size={17} /> Batch Add Inventory</button>
             <button onClick={() => setExportOpen(true)} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-black text-white"><Download size={17} /> Download Excel</button>
             <button onClick={exportData} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-ink dark:bg-slate-800 dark:text-white"><FileSpreadsheet size={17} /> Download CSV</button>

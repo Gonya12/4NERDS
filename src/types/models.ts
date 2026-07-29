@@ -169,6 +169,7 @@ export interface SalesRecord {
   buyPercentage?: number;
   targetBuyPrice?: number;
   inventoryPurchaseId?: string;
+  financialTransactionId?: string;
   notes?: string;
   soldAt: string;
   pendingUpload: boolean;
@@ -236,6 +237,7 @@ export interface InventoryPurchase {
   tradedAt?: string;
   agreedTradeValue?: number;
   priorInventoryPurchaseId?: string;
+  financialTransactionId?: string;
   createdAt: string;
   updatedAt: string;
   ownershipShares?: OwnershipShare[];
@@ -243,6 +245,9 @@ export interface InventoryPurchase {
 
 export type TradeStatus = "draft" | "completed" | "cancelled" | "reversed";
 export type TradeDirection = "outgoing" | "incoming";
+export type FinancialTransactionType = "sale" | "purchase" | "expense" | "trade" | "cash_trade";
+export type TransactionItemMode = "single" | "multiple";
+export type TransactionPricingMode = "individual" | "bundle_total";
 
 export interface TradeItemOwnershipShare extends OwnershipShare {
   allocatedCostBasis?: number;
@@ -264,6 +269,11 @@ export interface TradeItem {
   historicalCostBasis: number;
   allocatedCostBasis: number;
   cashAllocation?: number;
+  tradePercentage?: number;
+  soldPrice?: number;
+  boughtPrice?: number;
+  createdSalesRecordId?: string;
+  createdBusinessExpenseId?: string;
   imageUrl?: string;
   imagePath?: string;
   backImageUrl?: string;
@@ -288,6 +298,15 @@ export interface TradeTransaction {
   eventId?: string;
   eventDayId?: string;
   tradePartner?: string;
+  transactionType: FinancialTransactionType;
+  itemMode: TransactionItemMode;
+  pricingMode: TransactionPricingMode;
+  bundleTotal?: number;
+  paymentMethod?: SalePaymentMethod;
+  purchaseSource?: PurchaseSource;
+  expenseCategory?: BusinessExpenseCategory;
+  paidByWorkerId?: string;
+  keepAsBundle?: boolean;
   cashReceived: number;
   cashPaid: number;
   notes?: string;
@@ -333,6 +352,7 @@ export interface BusinessExpense {
   receiptImageUrl?: string;
   receiptImagePath?: string;
   notes?: string;
+  financialTransactionId?: string;
   createdAt: string;
   updatedAt: string;
 }
