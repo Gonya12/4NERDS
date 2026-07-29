@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Check, Copy, PackagePlus, Save, ScanLine, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Copy, PackagePlus, RotateCcw, Save, ScanLine, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
@@ -12,7 +12,9 @@ import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, Toast, t
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import {
-  completeFinancialTransaction, blankTrade, blankTradeItem, saveFinancialTransactionDraft, saveTrade,
+  completeFinancialTransaction, blankTrade, blankTradeItem, isTransactionPaymentSaveError,
+  saveFinancialTransactionDraft, saveTrade, saveTransactionPayments,
+  type TransactionPaymentSaveError,
   type TransactionSaveStage
 } from "../services/database/tradeRepository";
 import {
@@ -85,6 +87,10 @@ export function UnifiedTransactionPage() {
   const [confirmMode, setConfirmMode] = useState<"discard" | "exit" | undefined>(undefined);
   const [saveStage, setSaveStage] = useState<TransactionSaveStage | undefined>(undefined);
   const [saveComplete, setSaveComplete] = useState(false);
+  const [paymentRetry, setPaymentRetry] = useState<{
+    error: TransactionPaymentSaveError;
+    operation: "draft" | "complete";
+  }>();
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "warning" | "info" } | undefined>(undefined);
   const [allocation, setAllocation] = useState<AllocationMethod>("market");
   const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
@@ -163,7 +169,7 @@ export function UnifiedTransactionPage() {
       if (next.some((image) => image.metadataStatus === "pending")) {
         await saveFinancialTransactionDraft(updated);
       } else {
-        await saveTrade(updated, { syncImages: false });
+        await saveTrade(updated, { syncImages: false, syncPayments: false });
       }
       setDraftSaveError("");
       setDraftSaveDebug("");
@@ -192,7 +198,7 @@ export function UnifiedTransactionPage() {
       const metadataPending = next.some((image) => image.metadataStatus === "pending");
       await saveTrade(nextTransaction, {
         syncImages: false,
-        syncPayments: !metadataPending,
+        syncPayments: false,
         syncOwnership: !metadataPending
       });
       setDraftSaveError("");
@@ -315,6 +321,7 @@ export function UnifiedTransactionPage() {
   };
   async function complete() {
     setMessage("");
+    setPaymentRetry(undefined);
     const relevant = transaction.transactionType === "expense" ? transaction.items : transaction.items.filter((item) => item.itemName.trim());
     if (!relevant.length) { setMessage("Add at least one item or expense description."); return; }
     const missingBasis = missingHistoricalCostBasisItems(transaction);
@@ -337,10 +344,15 @@ export function UnifiedTransactionPage() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Transaction could not be completed.");
       setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
+      if (isTransactionPaymentSaveError(error)) {
+        setPaymentRetry({ error, operation: "complete" });
+        setDraftSaveError("");
+      }
     }
     finally { setBusy(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function saveDraft() {
+    setPaymentRetry(undefined);
     setBusy(true); setSaveStage("transaction");
     try {
       await saveTrade(transaction);
@@ -349,10 +361,46 @@ export function UnifiedTransactionPage() {
       setDraftSaveDebug("");
       setToast({ message: "Draft saved. You can safely return to it later.", tone: "success" });
     } catch (error) {
-      setDraftSaveError(error instanceof Error ? error.message : "Draft could not be saved.");
       setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
+      if (isTransactionPaymentSaveError(error)) {
+        setPaymentRetry({ error, operation: "draft" });
+        setDraftSaveError("");
+      } else {
+        setDraftSaveError(error instanceof Error ? error.message : "Draft could not be saved.");
+      }
     }
     finally { setBusy(false); setSaveStage(undefined); }
+  }
+  async function retryPaymentOnly() {
+    if (!paymentRetry) return;
+    setBusy(true);
+    setSaveStage("finalizing");
+    try {
+      await saveTransactionPayments(paymentRetry.error.transactionId, paymentRetry.error.transaction);
+      const persisted = paymentRetry.error.transaction;
+      setTransaction(persisted);
+      setPaymentRetry(undefined);
+      setDraftSaveError("");
+      setDraftSaveDebug("");
+      if (paymentRetry.operation === "complete") {
+        localStorage.removeItem(draftKey);
+        setSaveComplete(true);
+        navigate("/sales", { replace: true });
+      } else {
+        localStorage.setItem(draftKey, JSON.stringify({ transaction: persisted, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+        setToast({ message: "Payment saved to the existing transaction. No duplicate draft was created.", tone: "success" });
+      }
+    } catch (error) {
+      if (isTransactionPaymentSaveError(error)) {
+        setPaymentRetry({ error, operation: paymentRetry.operation });
+      } else {
+        setDraftSaveError(error instanceof Error ? error.message : "The payment could not be saved.");
+      }
+    } finally {
+      setBusy(false);
+      setSaveStage(undefined);
+      setSaveComplete(false);
+    }
   }
   function requestExit() {
     if (imageUploading) {
@@ -404,6 +452,7 @@ export function UnifiedTransactionPage() {
     <div className="grid grid-cols-3 gap-1">{["Shared Info", "Items", "Review"].map((label, index) => <button key={label} disabled={imageUploading} onClick={() => setStep(index)} className={`min-h-11 rounded-xl text-xs font-black disabled:opacity-50 ${step === index ? "bg-violet-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{index + 1}. {label}</button>)}</div>
     {message ? <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{message}</p> : null}
     {draftSaveError ? <p role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800"><span className="block text-xs uppercase tracking-wide">Transaction draft error</span>{draftSaveError}</p> : null}
+    {paymentRetry ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800"><p className="min-w-0 flex-1"><span className="block text-xs uppercase tracking-wide">Payment save error</span>{paymentRetry.error.message}</p><button type="button" disabled={busy} onClick={() => void retryPaymentOnly()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 text-sm font-black text-white disabled:opacity-50"><RotateCcw size={16} /> Retry payment only</button></div> : null}
     {draftSaveDebug ? <details className="rounded-xl border border-slate-300 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><summary className="cursor-pointer font-black">Developer Debug</summary><code className="mt-2 block whitespace-pre-wrap break-all">{draftSaveDebug}</code></details> : null}
     {imageUploadError ? <p role="alert" className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-sm font-bold text-orange-800"><span className="block text-xs uppercase tracking-wide">Image upload error</span>{imageUploadError}</p> : null}
 

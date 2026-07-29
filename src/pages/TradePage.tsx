@@ -1,6 +1,6 @@
 import {
   ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, Copy, Link2,
-  PackagePlus, RefreshCcw, Save, Search, Trash2, Upload, X
+  PackagePlus, RefreshCcw, RotateCcw, Save, Search, Trash2, Upload, X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -14,7 +14,8 @@ import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, type Pro
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import {
   blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade,
-  saveFinancialTransactionDraft, saveTrade, type TransactionSaveStage
+  isTransactionPaymentSaveError, saveFinancialTransactionDraft, saveTrade, saveTransactionPayments,
+  type TransactionPaymentSaveError, type TransactionSaveStage
 } from "../services/database/tradeRepository";
 import {
   normalizeTransactionForApplication,
@@ -86,6 +87,10 @@ export function TradePage() {
   const [saveDebug, setSaveDebug] = useState("");
   const [saveStage, setSaveStage] = useState<TransactionSaveStage | undefined>(undefined);
   const [saveComplete, setSaveComplete] = useState(false);
+  const [paymentRetry, setPaymentRetry] = useState<{
+    error: TransactionPaymentSaveError;
+    operation: "draft" | "complete";
+  }>();
   const [recoverableDraft, setRecoverableDraft] = useState<LocalTradeDraft | undefined>(() => readLocalTradeDraft());
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
 
@@ -183,6 +188,7 @@ export function TradePage() {
   }
   async function persistDraft() {
     if (!editor) return;
+    setPaymentRetry(undefined);
     setSaving(true); setMessage(""); setSaveStage("transaction");
     try {
       const saved = await saveTrade(editor);
@@ -193,6 +199,7 @@ export function TradePage() {
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Draft could not be saved.");
       setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
+      if (isTransactionPaymentSaveError(caught)) setPaymentRetry({ error: caught, operation: "draft" });
     }
     finally { setSaving(false); setSaveStage(undefined); }
   }
@@ -201,6 +208,7 @@ export function TradePage() {
     const incoming = editor.items.filter((item) => item.direction === "incoming");
     if (incoming.some((item) => !ownershipIsValid(item))) { setMessage("Assign ownership totaling 100% to every incoming item."); setStep(4); return; }
     if (incoming.some((item) => !item.itemName.trim())) { setMessage("Every incoming item needs a name."); setStep(2); return; }
+    setPaymentRetry(undefined);
     setSaving(true); setMessage(""); setSaveComplete(false); setSaveStage("transaction");
     try {
       const result = await completeTrade(editor, inventory, setSaveStage);
@@ -214,8 +222,42 @@ export function TradePage() {
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Trade could not be completed.");
       setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
+      if (isTransactionPaymentSaveError(caught)) setPaymentRetry({ error: caught, operation: "complete" });
     }
     finally { setSaving(false); setSaveStage(undefined); setSaveComplete(false); }
+  }
+  async function retryPaymentOnly() {
+    if (!paymentRetry) return;
+    setSaving(true);
+    setSaveStage("finalizing");
+    try {
+      await saveTransactionPayments(paymentRetry.error.transactionId, paymentRetry.error.transaction);
+      const persisted = paymentRetry.error.transaction;
+      setPaymentRetry(undefined);
+      setSaveDebug("");
+      if (paymentRetry.operation === "complete") {
+        localStorage.removeItem(localTradeDraftKey);
+        setRecoverableDraft(undefined);
+        setEditor(undefined);
+        setDetail(persisted);
+        setTrades((rows) => [persisted, ...rows.filter((row) => row.id !== persisted.id)]);
+        setMessage("Trade completed and its payment was saved without creating a duplicate transaction.");
+        await load();
+      } else {
+        setEditor(persisted);
+        setTrades((rows) => [persisted, ...rows.filter((row) => row.id !== persisted.id)]);
+        localStorage.setItem(localTradeDraftKey, JSON.stringify({ trade: persisted, step, savedAt: new Date().toISOString() } satisfies LocalTradeDraft));
+        setMessage("Payment saved to the existing trade draft. No duplicate was created.");
+      }
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "The trade payment could not be saved.");
+      if (isTransactionPaymentSaveError(caught)) {
+        setPaymentRetry({ error: caught, operation: paymentRetry.operation });
+      }
+    } finally {
+      setSaving(false);
+      setSaveStage(undefined);
+    }
   }
   async function reverseCurrent() {
     if (!detail || !confirm("Reverse this completed trade? The original history will remain and inventory availability will be adjusted safely.")) return;
@@ -249,7 +291,7 @@ export function TradePage() {
           }
         }} className="btn-primary">Resume Draft</button><button type="button" onClick={() => setDiscardDraftOpen(true)} className="btn-secondary">Discard</button></div>
       </section> : null}
-      <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} developerDebug={saveDebug} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />
+      <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} developerDebug={saveDebug} paymentRetry={Boolean(paymentRetry)} onRetryPayment={() => void retryPaymentOnly()} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />
       {saveStage ? <div className="fixed inset-x-3 bottom-24 z-[70] mx-auto max-w-2xl"><ProgressSteps steps={tradeSaveSteps} activeStep={saveStageIndex} complete={saveComplete} /></div> : null}
       <ConfirmDialog open={discardDraftOpen} title="Discard recovered trade?" description="The locally recovered trade will be removed. Supabase drafts are not affected." confirmLabel="Discard Draft" onConfirm={() => { localStorage.removeItem(localTradeDraftKey); setRecoverableDraft(undefined); setDiscardDraftOpen(false); }} onCancel={() => setDiscardDraftOpen(false)} />
     </>;
@@ -288,6 +330,8 @@ export function TradePage() {
 type EditorProps = {
   trade: TradeTransaction; inventory: InventoryPurchase[]; events: Event[]; workers: Worker[]; step: number; saving: boolean; message: string;
   developerDebug?: string;
+  paymentRetry?: boolean;
+  onRetryPayment?: () => void;
   onChange: (trade: TradeTransaction) => void; onStep: (step: number) => void; onSave: () => void; onComplete: () => void; onClose: () => void;
 };
 function TradeEditor(props: EditorProps) {
@@ -372,7 +416,7 @@ function TradeEditor(props: EditorProps) {
       if (next.some((image) => image.metadataStatus === "pending")) {
         await saveFinancialTransactionDraft(updated);
       } else {
-        await saveTrade(updated, { syncImages: false });
+        await saveTrade(updated, { syncImages: false, syncPayments: false });
       }
       setDraftSaveError("");
       setDraftSaveDebug("");
@@ -401,7 +445,7 @@ function TradeEditor(props: EditorProps) {
       const metadataPending = next.some((image) => image.metadataStatus === "pending");
       await saveTrade(updated, {
         syncImages: false,
-        syncPayments: !metadataPending,
+        syncPayments: false,
         syncOwnership: !metadataPending
       });
       setDraftSaveError("");
@@ -463,6 +507,7 @@ function TradeEditor(props: EditorProps) {
     <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">{workflowTitle} · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button type="button" onClick={props.onClose} disabled={imageUploading} aria-label="Close trade editor" className="rounded-full bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><X size={19} /></button></header>
     <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} disabled={imageUploading} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full disabled:opacity-50 ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
     {props.message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{props.message}</p> : null}
+    {props.paymentRetry ? <button type="button" disabled={props.saving} onClick={props.onRetryPayment} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 text-sm font-black text-white disabled:opacity-50"><RotateCcw size={16} /> Retry payment only</button> : null}
     {draftSaveError ? <p role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800"><span className="block text-xs uppercase tracking-wide">Transaction draft error</span>{draftSaveError}</p> : null}
     {draftSaveDebug || props.developerDebug ? <details className="rounded-xl border border-slate-300 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><summary className="cursor-pointer font-black">Developer Debug</summary><code className="mt-2 block whitespace-pre-wrap break-all">{draftSaveDebug || props.developerDebug}</code></details> : null}
     {imageUploadError ? <p role="alert" className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-sm font-bold text-orange-800"><span className="block text-xs uppercase tracking-wide">Image upload error</span>{imageUploadError}</p> : null}

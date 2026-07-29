@@ -76,7 +76,7 @@ No application or SQL references were found for:
 | `financial_transactions` | select, upsert | Explicit parent payload builder exists; item mode is canonical. |
 | `financial_transaction_items` | select, upsert, delete | Hand-built payload; should become typed and reusable. |
 | `transaction_item_ownership_shares` | select, insert, delete | Delete-before-insert creates an avoidable partial-write window. |
-| `transaction_payments` | select, upsert, delete | Existing IDs are reused; uniqueness is expected on transaction/direction/method. |
+| `transaction_payments` | select, upsert, delete | Explicit canonical payload uses `paid_by_worker_id`; positive amounts upsert idempotently on transaction/direction/method and stale rows are removed. |
 | `transaction_internal_balances` | select, upsert | Currently written after the parent is marked completed. |
 | `inventory_lineage` | select, upsert | Cross-product lineage is intentional; self-reference needs a constraint. |
 | `transaction_images` | select, upsert, insert, delete | App reads/writes `sort_order`; checked-in unified SQL does not define it. |

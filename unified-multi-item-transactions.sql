@@ -82,8 +82,9 @@ create table if not exists public.transaction_payments (
   direction text not null check (direction in ('received','paid')),
   payment_method text not null default 'cash',
   amount numeric(12,2) not null default 0 check (amount >= 0),
-  worker_id uuid references public.workers(id) on delete set null,
-  notes text,
+  paid_by_worker_id uuid references public.workers(id) on delete set null,
+  note text,
+  paid_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -127,6 +128,9 @@ alter table public.financial_transactions add column if not exists cash_paid num
 alter table public.financial_transaction_items add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;
 alter table public.transaction_item_ownership_shares add column if not exists transaction_item_id uuid references public.financial_transaction_items(id) on delete cascade;
 alter table public.transaction_payments add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;
+alter table public.transaction_payments add column if not exists paid_by_worker_id uuid references public.workers(id) on delete set null;
+alter table public.transaction_payments add column if not exists note text;
+alter table public.transaction_payments add column if not exists paid_at timestamptz not null default now();
 alter table public.transaction_internal_balances add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;
 alter table public.inventory_lineage add column if not exists transaction_id uuid references public.financial_transactions(id) on delete restrict;
 alter table public.transaction_images add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;

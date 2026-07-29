@@ -2,9 +2,14 @@ import type {
   InventoryTradeLineage,
   TradeItem,
   TradeItemOwnershipShare,
+  TradeTransaction,
   TransactionImageAttachment
 } from "../../types/models";
-import type { FinancialTransactionItemRow, Json } from "../../types/database.types";
+import type {
+  FinancialTransactionItemRow,
+  Json,
+  TransactionPaymentRow
+} from "../../types/database.types";
 
 function removeUndefinedFields<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
@@ -93,24 +98,60 @@ export function buildTransactionOwnershipPayload(
   });
 }
 
+export type TransactionPaymentPayload = Pick<TransactionPaymentRow,
+  "transaction_id"
+  | "direction"
+  | "payment_method"
+  | "amount"
+  | "paid_by_worker_id"
+  | "note"
+  | "paid_at"
+>;
+
 export function buildTransactionPaymentPayload(input: {
-  id: string;
   transactionId: string;
   direction: "received" | "paid";
   paymentMethod: string;
   amount: number;
-  workerId?: string;
-  updatedAt: string;
-}) {
+  paidByWorkerId?: string | null;
+  note?: string | null;
+  paidAt: string;
+}): TransactionPaymentPayload {
+  const transactionId = input.transactionId.trim();
+  if (!transactionId) throw new Error("A transaction payment requires a transaction_id.");
+  const paidByWorkerId = input.paidByWorkerId?.trim() || null;
   return {
-    id: input.id,
-    transaction_id: input.transactionId,
+    transaction_id: transactionId,
     direction: input.direction,
-    payment_method: input.paymentMethod,
+    payment_method: input.paymentMethod.trim() || "cash",
     amount: Number(input.amount || 0),
-    worker_id: input.workerId || null,
-    updated_at: input.updatedAt
+    paid_by_worker_id: paidByWorkerId,
+    note: input.note?.trim() || null,
+    paid_at: input.paidAt
   };
+}
+
+export function buildTransactionPaymentPayloads(
+  transactionId: string,
+  transaction: Pick<TradeTransaction,
+    "cashReceived" | "cashPaid" | "paymentMethod" | "paidByWorkerId" | "notes" | "tradeDate"
+  >
+): TransactionPaymentPayload[] {
+  const candidates = [
+    { direction: "received" as const, amount: Number(transaction.cashReceived || 0), paidByWorkerId: null },
+    { direction: "paid" as const, amount: Number(transaction.cashPaid || 0), paidByWorkerId: transaction.paidByWorkerId }
+  ];
+  return candidates
+    .filter((payment) => Number.isFinite(payment.amount) && payment.amount > 0)
+    .map((payment) => buildTransactionPaymentPayload({
+      transactionId,
+      direction: payment.direction,
+      paymentMethod: transaction.paymentMethod || "cash",
+      amount: payment.amount,
+      paidByWorkerId: payment.paidByWorkerId,
+      note: transaction.notes,
+      paidAt: transaction.tradeDate
+    }));
 }
 
 export function buildTransactionImagePayload(

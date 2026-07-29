@@ -109,6 +109,19 @@ export type FinancialTransactionItemRow = {
   updated_at: string;
 };
 
+export type TransactionPaymentRow = {
+  id: string;
+  transaction_id: string;
+  direction: "received" | "paid";
+  payment_method: string;
+  amount: number;
+  paid_by_worker_id: string | null;
+  note: string | null;
+  paid_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type CanonicalTable<Row extends LooseRow> = {
   Row: Row;
   Insert: Partial<Row> & Pick<Row, "id">;
@@ -116,11 +129,26 @@ type CanonicalTable<Row extends LooseRow> = {
   Relationships: [];
 };
 
+type TransactionPaymentTable = {
+  Row: TransactionPaymentRow;
+  Insert: Pick<TransactionPaymentRow,
+    "transaction_id"
+    | "direction"
+    | "payment_method"
+    | "amount"
+    | "paid_by_worker_id"
+    | "note"
+    | "paid_at"
+  > & { id?: string };
+  Update: Partial<Omit<TransactionPaymentRow, "id">>;
+  Relationships: [];
+};
+
 type CanonicalTables = {
   financial_transactions: CanonicalTable<FinancialTransactionRow>;
   financial_transaction_items: CanonicalTable<FinancialTransactionItemRow>;
   transaction_item_ownership_shares: LooseTable;
-  transaction_payments: LooseTable;
+  transaction_payments: TransactionPaymentTable;
   transaction_internal_balances: LooseTable;
   inventory_lineage: LooseTable;
   transaction_images: LooseTable;

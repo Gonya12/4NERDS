@@ -4,7 +4,9 @@ import test from "node:test";
 import type { TradeItem, TradeTransaction } from "../src/types/models.ts";
 import {
   buildTransactionImagePayload,
-  buildTransactionItemPayload
+  buildTransactionItemPayload,
+  buildTransactionPaymentPayload,
+  buildTransactionPaymentPayloads
 } from "../src/services/database/databasePayloads.ts";
 import { prepareTransactionForCompletion } from "../src/services/database/transactionReliability.ts";
 import { ownershipValidationError } from "../src/utils/tradeMath.ts";
@@ -159,6 +161,117 @@ test("transaction image payload is allowlisted and leaves timestamps to the data
     imagePath: "transaction/item/front.jpg",
     sortOrder: 0
   }, "fallback", "10000000-0000-4000-8000-000000000000"), /transaction_item_id/);
+});
+
+test("transaction payment payload uses the canonical worker column and exact allowlist", () => {
+  const payload = buildTransactionPaymentPayload({
+    transactionId: "10000000-0000-4000-8000-000000000000",
+    direction: "paid",
+    paymentMethod: "cash",
+    amount: 25,
+    paidByWorkerId: "",
+    note: "  collection lot  ",
+    paidAt: timestamp
+  });
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "amount",
+    "direction",
+    "note",
+    "paid_at",
+    "paid_by_worker_id",
+    "payment_method",
+    "transaction_id"
+  ]);
+  assert.equal(payload.paid_by_worker_id, null);
+  assert.equal(payload.note, "collection lot");
+  assert.equal("worker_id" in payload, false);
+  assert.equal("updated_at" in payload, false);
+  assert.throws(() => buildTransactionPaymentPayload({
+    transactionId: " ",
+    direction: "paid",
+    paymentMethod: "cash",
+    amount: 1,
+    paidAt: timestamp
+  }), /transaction_id/);
+});
+
+test("payment rows cover purchases, sales, and both cash-trade directions without zero-dollar drafts", () => {
+  const transactionId = "10000000-0000-4000-8000-000000000000";
+  const gonzalo = "20000000-0000-4000-8000-000000000001";
+  const thiago = "20000000-0000-4000-8000-000000000002";
+  const base = transaction("purchase", []);
+
+  const unassignedPurchase = buildTransactionPaymentPayloads(transactionId, {
+    ...base, cashPaid: 40, paidByWorkerId: undefined
+  });
+  assert.equal(unassignedPurchase.length, 1);
+  assert.equal(unassignedPurchase[0].direction, "paid");
+  assert.equal(unassignedPurchase[0].paid_by_worker_id, null);
+
+  const gonzaloPurchase = buildTransactionPaymentPayloads(transactionId, {
+    ...base, cashPaid: 40, paidByWorkerId: gonzalo
+  });
+  assert.equal(gonzaloPurchase[0].paid_by_worker_id, gonzalo);
+
+  const thiagoLot = buildTransactionPaymentPayloads(transactionId, {
+    ...base, itemMode: "multiple", cashPaid: 75, paidByWorkerId: thiago
+  });
+  assert.equal(thiagoLot.length, 1);
+  assert.equal(thiagoLot[0].paid_by_worker_id, thiago);
+
+  const cashSale = buildTransactionPaymentPayloads(transactionId, {
+    ...transaction("sale", []), cashReceived: 30
+  });
+  assert.deepEqual(cashSale.map((row) => row.direction), ["received"]);
+  assert.equal(cashSale[0].paid_by_worker_id, null);
+
+  const cashTrade = buildTransactionPaymentPayloads(transactionId, {
+    ...transaction("cash_trade", []), cashPaid: 12, cashReceived: 8, paidByWorkerId: gonzalo
+  });
+  assert.deepEqual(cashTrade.map((row) => row.direction), ["received", "paid"]);
+  assert.equal(cashTrade.find((row) => row.direction === "paid")?.paid_by_worker_id, gonzalo);
+  assert.equal(cashTrade.find((row) => row.direction === "received")?.paid_by_worker_id, null);
+
+  assert.deepEqual(buildTransactionPaymentPayloads(transactionId, base), []);
+  assert.deepEqual(
+    buildTransactionPaymentPayloads(transactionId, { ...base, cashPaid: 40, paidByWorkerId: gonzalo }),
+    gonzaloPurchase
+  );
+});
+
+test("transaction payment repository reads and writes only canonical payment columns", () => {
+  const repository = readFileSync(new URL("../src/services/database/tradeRepository.ts", import.meta.url), "utf8");
+  const preflight = readFileSync(new URL("../src/services/database/supabasePreflight.ts", import.meta.url), "utf8");
+  const types = readFileSync(new URL("../src/types/database.types.ts", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/20260729120000_unified_transaction_reconciliation.sql", import.meta.url), "utf8");
+  const bootstrap = readFileSync(new URL("../unified-multi-item-transactions.sql", import.meta.url), "utf8");
+  const paymentMigration = migration.match(/create table if not exists public\.transaction_payments[\s\S]*?\n\);/)?.[0] || "";
+  const paymentBootstrap = bootstrap.match(/create table if not exists public\.transaction_payments[\s\S]*?\n\);/)?.[0] || "";
+
+  for (const source of [repository, preflight, types, paymentMigration, paymentBootstrap]) {
+    assert.doesNotMatch(source, /\btransaction_payments\b[\s\S]{0,240}\bworker_id\b(?!\s*:)/);
+  }
+  assert.match(repository, /\.select\("id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at"\)/);
+  assert.match(repository, /buildTransactionPaymentPayloads\(transactionId,\s*transaction\)/);
+  assert.match(repository, /\.upsert\(paymentRows,\s*\{\s*onConflict:\s*"transaction_id,direction,payment_method"\s*\}\)/);
+  assert.match(repository, /saveTrade\(transaction,\s*\{\s*syncPayments:\s*false\s*\}\)/);
+  assert.ok(
+    repository.lastIndexOf("await saveTransactionPayments(transactionId, persistedTrade)")
+      > repository.lastIndexOf('from("transaction_item_ownership_shares")'),
+    "payment persistence must run after the other child rows so payment-only Retry is safe"
+  );
+  assert.match(types, /paid_by_worker_id:\s*string\s*\|\s*null/);
+  assert.match(paymentMigration, /paid_by_worker_id uuid/);
+  assert.match(paymentBootstrap, /paid_by_worker_id uuid/);
+});
+
+test("payment retry UI calls only the dedicated payment operation", () => {
+  const unified = readFileSync(new URL("../src/pages/UnifiedTransactionPage.tsx", import.meta.url), "utf8");
+  const trade = readFileSync(new URL("../src/pages/TradePage.tsx", import.meta.url), "utf8");
+  for (const source of [unified, trade]) {
+    assert.match(source, /Retry payment only/);
+    assert.match(source, /saveTransactionPayments\(paymentRetry\.error\.transactionId,\s*paymentRetry\.error\.transaction\)/);
+  }
 });
 
 test("image retry preserves Storage and metadata identity and can be disabled after draft failure", () => {

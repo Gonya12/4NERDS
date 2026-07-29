@@ -14,7 +14,7 @@ import {
   buildTransactionBalancePayload,
   buildTransactionImagePayload,
   buildTransactionOwnershipPayload,
-  buildTransactionPaymentPayload
+  buildTransactionPaymentPayloads
 } from "./databasePayloads";
 import { ownershipValidationError } from "../../utils/tradeMath";
 import { prepareTransactionForCompletion } from "./transactionReliability";
@@ -67,7 +67,16 @@ type ItemRow = {
   card_selection_source?: TradeItem["cardSelectionSource"] | null; cost_basis_is_estimate?: boolean | null;
 };
 type ShareRow = { id?: string; transaction_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
-type PaymentRow = { id: string; transaction_id: string; direction: "received" | "paid"; payment_method: string; amount: number };
+type PaymentRow = {
+  id: string;
+  transaction_id: string;
+  direction: "received" | "paid";
+  payment_method: string;
+  amount: number;
+  paid_by_worker_id: string | null;
+  note: string | null;
+  paid_at: string;
+};
 type ImageRow = { id: string; transaction_id: string; transaction_item_id?: string | null; image_type: string; image_url: string; image_path: string; sort_order?: number | null };
 
 const imageAttachment = (row: ImageRow): TransactionImageAttachment => ({
@@ -199,7 +208,12 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
   const itemIds = (items.data || []).map((row) => row.id);
   const shares = itemIds.length ? await supabase.from("transaction_item_ownership_shares").select("*").in("transaction_item_id", itemIds) : { data: [], error: null };
   if (shares.error) throw new Error(shares.error.message);
-  const payments = ids.length ? await supabase.from("transaction_payments").select("*").in("transaction_id", ids) : { data: [], error: null };
+  const payments = ids.length
+    ? await supabase
+      .from("transaction_payments")
+      .select("id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at")
+      .in("transaction_id", ids)
+    : { data: [], error: null };
   if (payments.error) throw new Error(payments.error.message);
   const images = ids.length ? await supabase.from("transaction_images").select("*").in("transaction_id", ids) : { data: [], error: null };
   if (images.error) throw new Error(images.error.message);
@@ -242,10 +256,12 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     };
     itemMap.set(row.transaction_id, [...(itemMap.get(row.transaction_id) || []), value]);
   });
-  const paymentMap = new Map<string, { received: number; paid: number }>();
+  const paymentMap = new Map<string, { received: number; paid: number; paidByWorkerId?: string }>();
   (payments.data as PaymentRow[] || []).forEach((row) => {
-    const current = paymentMap.get(row.transaction_id) || { received: 0, paid: 0 };
+    const current: { received: number; paid: number; paidByWorkerId?: string } =
+      paymentMap.get(row.transaction_id) || { received: 0, paid: 0 };
     current[row.direction] += Number(row.amount || 0);
+    if (row.direction === "paid" && row.paid_by_worker_id) current.paidByWorkerId = row.paid_by_worker_id;
     paymentMap.set(row.transaction_id, current);
   });
   const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => {
@@ -267,7 +283,7 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
     purchaseSource: applicationType === "purchase" ? (row.transaction_subtype as TradeTransaction["purchaseSource"]) || row.purchase_source || undefined : undefined,
     expenseCategory: applicationType === "expense" ? row.expense_category || undefined : undefined,
-    paidByWorkerId: row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
+    paidByWorkerId: paymentMap.get(row.id)?.paidByWorkerId || row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
   });
   });
   write(cacheKey, values);
@@ -290,6 +306,59 @@ export class FinancialTransactionDraftError extends Error {
 
 export function isFinancialTransactionDraftError(error: unknown): error is FinancialTransactionDraftError {
   return error instanceof FinancialTransactionDraftError;
+}
+
+export class TransactionPaymentSaveError extends Error {
+  transactionId: string;
+  transaction: TradeTransaction;
+  cause?: unknown;
+  constructor(message: string, transactionId: string, transaction: TradeTransaction, cause?: unknown) {
+    super(message);
+    this.name = "TransactionPaymentSaveError";
+    this.transactionId = transactionId;
+    this.transaction = transaction;
+    this.cause = cause;
+  }
+}
+
+export function isTransactionPaymentSaveError(error: unknown): error is TransactionPaymentSaveError {
+  return error instanceof TransactionPaymentSaveError;
+}
+
+export async function saveTransactionPayments(transactionId: string, transaction: TradeTransaction) {
+  const paymentRows = buildTransactionPaymentPayloads(transactionId, transaction);
+  if (!isSupabaseConfigured || !supabase) return paymentRows;
+  try {
+    const existing = await supabase
+      .from("transaction_payments")
+      .select("id,direction,payment_method")
+      .eq("transaction_id", transactionId);
+    if (existing.error) throw new Error(existing.error.message);
+
+    if (paymentRows.length) {
+      const saved = await supabase
+        .from("transaction_payments")
+        .upsert(paymentRows, { onConflict: "transaction_id,direction,payment_method" });
+      if (saved.error) throw new Error(saved.error.message);
+    }
+
+    const desiredKeys = new Set(paymentRows.map((row) => `${row.direction}:${row.payment_method}`));
+    const staleIds = (existing.data || [])
+      .filter((row) => !desiredKeys.has(`${row.direction}:${row.payment_method}`))
+      .map((row) => row.id);
+    if (staleIds.length) {
+      const removed = await supabase.from("transaction_payments").delete().in("id", staleIds);
+      if (removed.error) throw new Error(removed.error.message);
+    }
+    return paymentRows;
+  } catch (error) {
+    throw new TransactionPaymentSaveError(
+      error instanceof Error ? error.message : "The transaction payment could not be saved.",
+      transactionId,
+      transaction,
+      error
+    );
+  }
 }
 
 async function upsertFinancialTransactionParent(transaction: TradeTransaction) {
@@ -374,24 +443,6 @@ export async function saveTrade(input: TradeTransaction, options?: {
     }
     if (itemResult.error) throw new Error(itemResult.error.message);
   }
-  if (options?.syncPayments !== false) {
-    const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("transaction_id", transactionId);
-    if (existingPayments.error) throw new Error(existingPayments.error.message);
-    const paymentRows = [
-      { direction: "received" as const, amount: Number(persistedTrade.cashReceived || 0) },
-      { direction: "paid" as const, amount: Number(persistedTrade.cashPaid || 0) }
-    ].map((payment) => buildTransactionPaymentPayload({
-      id: existingPayments.data?.find((row) => row.direction === payment.direction && row.payment_method === (persistedTrade.paymentMethod || "cash"))?.id || id("payment"),
-      transactionId,
-      direction: payment.direction,
-      paymentMethod: persistedTrade.paymentMethod || "cash",
-      amount: payment.amount,
-      workerId: payment.direction === "paid" ? persistedTrade.paidByWorkerId : undefined,
-      updatedAt: persistedTrade.updatedAt
-    }));
-    const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows, { onConflict: "transaction_id,direction,payment_method" });
-    if (paymentResult.error) throw new Error(paymentResult.error.message);
-  }
   if (options?.syncImages !== false) {
   const transactionImages = persistedTrade.images?.length
     ? persistedTrade.images
@@ -460,6 +511,9 @@ export async function saveTrade(input: TradeTransaction, options?: {
       const deletion = await supabase.from("transaction_item_ownership_shares").delete().in("id", staleIds);
       if (deletion.error) throw new Error(deletion.error.message);
     }
+  }
+  if (options?.syncPayments !== false) {
+    await saveTransactionPayments(transactionId, persistedTrade);
   }
   return persistedTrade;
 }
@@ -563,7 +617,7 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   const timestamp = nowIso();
   let trade = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
-  await saveTrade(trade);
+  await saveTrade(trade, { syncPayments: false });
   onProgress?.("inventory");
   await claimOutgoingInventory(trade, inventory, "traded_out");
   for (const item of trade.items.filter((row) => row.direction === "outgoing")) {
@@ -600,7 +654,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   const timestamp = nowIso();
   let transaction = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
-  await saveTrade(transaction);
+  await saveTrade(transaction, { syncPayments: false });
   onProgress?.("items");
   if (transaction.transactionType === "sale") {
     const items = transaction.items.filter((item) => item.direction === "outgoing");

@@ -42,7 +42,7 @@ const tableChecks: Array<{ table: string; columns: string }> = [
   },
   {
     table: "transaction_payments",
-    columns: "id,transaction_id,direction,payment_method,amount,worker_id,notes,created_at,updated_at"
+    columns: "id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at,created_at,updated_at"
   },
   {
     table: "transaction_internal_balances",

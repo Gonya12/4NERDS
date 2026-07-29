@@ -26,6 +26,7 @@ test("CSV filenames are descriptive and range-specific", () => {
 test("CSV and XLSX shared transaction export schema uses Item Mode", () => {
   const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
   assert.ok(source.includes('"Item Mode"'));
+  assert.ok(source.includes('"Paid By"'));
   assert.ok(!source.includes('"Entry Mode"'));
 });
 

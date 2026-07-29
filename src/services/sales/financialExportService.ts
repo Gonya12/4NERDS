@@ -54,12 +54,12 @@ const transactionHeaders = [
   "Item Mode", "Item Count", "Customer or Seller", "Event", "Event Day", "Payment Method", "Cash Received",
   "Cash Paid", "Bundle Total", "Allocation Method", "Market Value In", "Market Value Out", "Agreed Value In",
   "Agreed Value Out", "Total Cost Basis", "Gross Profit", "Estimated Trade Gain/Loss", "Operating Expense",
-  "Entered By", "Notes", "Created At", "Updated At"
+  "Entered By", "Paid By", "Notes", "Created At", "Updated At"
 ];
 const transactionKinds: ExportColumnKind[] = [
   "text", "date", "text", "text", "text", "text", "text", "number", "text", "text", "text", "text",
   "currency", "currency", "currency", "text", "currency", "currency", "currency", "currency", "currency",
-  "currency", "currency", "currency", "text", "text", "date", "date"
+  "currency", "currency", "currency", "text", "text", "text", "date", "date"
 ];
 const itemHeaders = [
   "Transaction ID", "Transaction Item ID", "Date", "Transaction Type", "Direction", "Item Name", "Item Type",
@@ -182,21 +182,21 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       transaction.cashReceived, transaction.cashPaid, transaction.bundleTotal ?? "", transaction.pricingMode,
       summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed, transaction.transactionType === "sale" && !review.basisComplete ? "" : review.basis,
       transaction.transactionType === "sale" ? review.grossProfit ?? "" : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.estimatedGainLoss : "",
-      operatingExpense || "", workerName(input.workers, transaction.enteredByWorkerId || transaction.paidByWorkerId), transaction.notes || "",
+      operatingExpense || "", workerName(input.workers, transaction.enteredByWorkerId), workerName(input.workers, transaction.paidByWorkerId), transaction.notes || "",
       transaction.createdAt, transaction.updatedAt
     ];
   });
   legacySales.forEach((sale) => {
     const parts = dateParts(sale.soldAt);
-    transactionRows.push([sale.id, parts.date, parts.time, "sale", "legacy-compatible", "completed", "single", 1, "", eventName(input.events, sale.eventId), sale.eventDayId || "", sale.paymentMethod || "", sale.soldPrice ?? "", "", "", "individual", "", sale.marketValue ?? "", "", sale.soldPrice ?? "", sale.boughtPrice ?? "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)), "", "", workerName(input.workers, sale.soldByWorkerId), sale.notes || "", sale.createdAt, sale.updatedAt]);
+    transactionRows.push([sale.id, parts.date, parts.time, "sale", "legacy-compatible", "completed", "single", 1, "", eventName(input.events, sale.eventId), sale.eventDayId || "", sale.paymentMethod || "", sale.soldPrice ?? "", "", "", "individual", "", sale.marketValue ?? "", "", sale.soldPrice ?? "", sale.boughtPrice ?? "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)), "", "", workerName(input.workers, sale.soldByWorkerId), "", sale.notes || "", sale.createdAt, sale.updatedAt]);
   });
   legacyPurchases.filter((purchase) => filters.recordType !== "inventory").forEach((purchase) => {
     const parts = dateParts(purchase.purchaseDate);
-    transactionRows.push([purchase.id, parts.date, parts.time, "purchase", purchase.purchaseSource || "legacy-compatible", purchase.status, "single", 1, purchase.seller || "", eventName(input.events, purchase.eventId), "", "", "", purchase.totalCost, "", "individual", purchase.marketValue ?? "", "", purchase.agreedTradeValue ?? "", "", "", "", "", "", workerName(input.workers, purchase.purchasedByWorkerId), purchase.notes || "", purchase.createdAt, purchase.updatedAt]);
+    transactionRows.push([purchase.id, parts.date, parts.time, "purchase", purchase.purchaseSource || "legacy-compatible", purchase.status, "single", 1, purchase.seller || "", eventName(input.events, purchase.eventId), "", "", "", purchase.totalCost, "", "individual", purchase.marketValue ?? "", "", purchase.agreedTradeValue ?? "", "", "", "", "", "", "", workerName(input.workers, purchase.purchasedByWorkerId), purchase.notes || "", purchase.createdAt, purchase.updatedAt]);
   });
   legacyExpenses.forEach((expense) => {
     const parts = dateParts(expense.expenseDate);
-    transactionRows.push([expense.id, parts.date, parts.time, "expense", expense.category, "completed", "single", 1, expense.vendor || "", eventName(input.events, expense.eventId), "", "", "", expense.amount, "", "individual", "", "", "", "", "", "", "", expense.amount, workerName(input.workers, expense.paidByWorkerId), expense.notes || "", expense.createdAt, expense.updatedAt]);
+    transactionRows.push([expense.id, parts.date, parts.time, "expense", expense.category, "completed", "single", 1, expense.vendor || "", eventName(input.events, expense.eventId), "", "", "", expense.amount, "", "individual", "", "", "", "", "", "", "", expense.amount, "", workerName(input.workers, expense.paidByWorkerId), expense.notes || "", expense.createdAt, expense.updatedAt]);
   });
   transactionRows.sort((a, b) => String(b[1]).localeCompare(String(a[1])));
 
