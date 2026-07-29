@@ -1,5 +1,5 @@
 import { ArrowRight, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { BottomNav } from "./components/BottomNav";
 import { DesktopSidebar } from "./components/DesktopSidebar";
@@ -21,10 +21,52 @@ import { canRunAction, markActionRun } from "./utils/supabase";
 import { addDebugLog, appVersion } from "./services/debug/debugLog";
 import { applyPwaUpdate, getPwaStatus, subscribePwaStatus } from "./services/pwa/registerPwa";
 
+function loadLazyRoute<T>(label: string, loader: () => Promise<T>) {
+  if (import.meta.env.DEV) console.info("[transaction-flow] lazy import started", { editor: label });
+  return Promise.race([
+    loader(),
+    new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error(`${label} took too long to load.`)), 18_000))
+  ]).then((module) => {
+    if (import.meta.env.DEV) console.info("[transaction-flow] lazy import completed", { editor: label });
+    return module;
+  }).catch((error) => {
+    if (import.meta.env.DEV) console.error("[transaction-flow] lazy import failed", { editor: label, error });
+    throw error;
+  });
+}
+
 const SalesControlPage = lazy(() => import("./pages/SalesControlPage").then((module) => ({ default: module.SalesControlPage })));
-const TradePage = lazy(() => import("./pages/TradePage").then((module) => ({ default: module.TradePage })));
-const UnifiedTransactionPage = lazy(() => import("./pages/UnifiedTransactionPage").then((module) => ({ default: module.UnifiedTransactionPage })));
+const TradePage = lazy(() => loadLazyRoute("trade", () => import("./pages/TradePage")).then((module) => ({ default: module.TradePage })));
+const UnifiedTransactionPage = lazy(() => loadLazyRoute("unified transaction", () => import("./pages/UnifiedTransactionPage")).then((module) => ({ default: module.UnifiedTransactionPage })));
 const DailySummaryPage = lazy(() => import("./pages/DailySummaryPage").then((module) => ({ default: module.DailySummaryPage })));
+
+function TransactionRouteFallback({ label }: { label: string }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 3_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return <div className="surface-card p-5 font-bold" role="status" aria-live="polite">{slow ? "Still preparing your transaction…" : label}</div>;
+}
+
+class TransactionRouteBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
+  state: { error?: Error } = {};
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    if (import.meta.env.DEV) console.error("[transaction-flow] caught runtime error", { error, componentStack: info.componentStack });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <section className="surface-card mx-auto max-w-xl p-5" role="alert">
+      <h1 className="text-xl font-black">We could not open this transaction editor.</h1>
+      <p className="mt-2 text-sm text-slate-500">Your existing financial records were not changed.</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button type="button" className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
+        <button type="button" className="btn-secondary" onClick={() => window.location.assign("/sales")}>Return to transaction types</button>
+      </div>
+    </section>;
+  }
+}
 
 function Onboarding({ onClose }: { onClose: () => void }) {
   useEffect(() => {
@@ -134,9 +176,9 @@ export default function App() {
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/flyers" element={<FlyerGalleryPage />} />
             <Route path="/sales" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Sales Control…</div>}><SalesControlPage /></Suspense>} />
-            <Route path="/sales/trades" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Trade Control…</div>}><TradePage /></Suspense>} />
-            <Route path="/sales/trades/:id" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Trade…</div>}><TradePage /></Suspense>} />
-            <Route path="/sales/transactions/new" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Transaction…</div>}><UnifiedTransactionPage /></Suspense>} />
+            <Route path="/sales/trades" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Preparing trade workspace…" />}><TradePage /></Suspense></TransactionRouteBoundary>} />
+            <Route path="/sales/trades/:id" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Loading trade…" />}><TradePage /></Suspense></TransactionRouteBoundary>} />
+            <Route path="/sales/transactions/new" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Opening transaction editor…" />}><UnifiedTransactionPage /></Suspense></TransactionRouteBoundary>} />
             <Route path="/sales/daily" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Daily Summary…</div>}><DailySummaryPage /></Suspense>} />
             <Route path="/buy" element={<NeedsToBuyPage />} />
             <Route path="/settings" element={<SettingsPage />} />

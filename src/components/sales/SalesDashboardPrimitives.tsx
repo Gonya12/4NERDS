@@ -226,11 +226,12 @@ export function StatusChip({ label, tone = "neutral", dot = true }: {
   return <span className={`transaction-status-chip status-${tone}`}>{dot ? <span className="size-1.5 rounded-full bg-current" aria-hidden="true" /> : null}{label}</span>;
 }
 
-export function ResponsiveModal({ open, title, description, onClose, restoreFocusRef, children, size = "md", dismissible = true }: {
+export function ResponsiveModal({ open, title, description, onClose, onBack, restoreFocusRef, children, size = "md", dismissible = true }: {
   open: boolean;
   title: string;
   description?: string;
   onClose: () => void;
+  onBack?: () => boolean;
   restoreFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   size?: "sm" | "md" | "lg";
@@ -241,8 +242,10 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
   const panelRef = useRef<HTMLElement>(null);
   const touchStartY = useRef<number | undefined>(undefined);
   const onCloseRef = useRef(onClose);
+  const onBackRef = useRef(onBack);
   const historyEntryRef = useRef(false);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => { onBackRef.current = onBack; }, [onBack]);
   const requestClose = useCallback(() => {
     if (historyEntryRef.current) {
       historyEntryRef.current = false;
@@ -258,15 +261,17 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
     const onPopState = (event: PopStateEvent) => {
       if (!historyEntryRef.current || event.state?.salesControlModal === titleId) return;
       historyEntryRef.current = false;
-      onCloseRef.current();
+      const keepOpen = onBackRef.current?.() ?? false;
+      if (!onBackRef.current) onCloseRef.current();
+      if (keepOpen) {
+        window.history.pushState({ ...window.history.state, salesControlModal: titleId }, "");
+        historyEntryRef.current = true;
+      }
     };
     window.addEventListener("popstate", onPopState);
     return () => {
       window.removeEventListener("popstate", onPopState);
-      if (historyEntryRef.current) {
-        historyEntryRef.current = false;
-        window.history.back();
-      }
+      historyEntryRef.current = false;
     };
   }, [open, titleId]);
 

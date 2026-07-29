@@ -22,7 +22,11 @@ import { getCachedTrades, listFinancialTransactions } from "../services/database
 import { listOwnershipShares, saveInventoryOwnership, saveSaleOwnership } from "../services/database/ownershipRepository";
 import { compressSaleImage, imageFromClipboard } from "../services/images/saleImageService";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
-import { downloadFinancialWorkbook, type ExcelExportScope } from "../services/sales/excelExportService";
+import { downloadFinancialWorkbook } from "../services/sales/excelExportService";
+import {
+  buildFinancialExportData, downloadCsv, financialExportFilename,
+  type FinancialExportFilters, type FinancialExportKind
+} from "../services/sales/financialExportService";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 import type {
   BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
@@ -30,7 +34,7 @@ import type {
 } from "../types/models";
 import { safeDateFromLocalInput } from "../utils/browserCompat";
 import { eventDays, shortScheduleSummary } from "../utils/eventSchedule";
-import { filterFinancialRecords, type FinancialDateRange } from "../utils/financialDateRange";
+import type { FinancialDateRange } from "../utils/financialDateRange";
 import { formatMoney, roundMoney } from "../utils/paymentMath";
 import {
   expenseCategoryLabels, inventoryStatusForQuantity, inventoryStatusLabels, paymentMethodLabels,
@@ -43,6 +47,28 @@ const CardScanPanel = lazy(() => import("../components/sales/CardScanPanel").the
 const BatchInventoryImporter = lazy(() => import("../components/sales/BatchInventoryImporter").then((module) => ({ default: module.BatchInventoryImporter })));
 
 type Editor = "sale" | "purchase" | "expense" | null;
+type TransactionFlowType = "sold" | "purchased" | "cost" | "trade" | "cash_trade";
+type TransactionEntryMode = "single" | "multiple";
+type TransactionFlowStage = "closed" | "choose_type" | "choose_subtype" | "choose_mode" | "opening" | "editing" | "error";
+type TransactionFlowState = {
+  stage: TransactionFlowStage;
+  transactionType: TransactionFlowType | null;
+  entryMode: TransactionEntryMode | null;
+  editorPath: string;
+  openingLabel?: string;
+  error?: string;
+};
+
+const closedTransactionFlow: TransactionFlowState = {
+  stage: "closed",
+  transactionType: null,
+  entryMode: null,
+  editorPath: ""
+};
+
+function traceTransactionFlow(event: string, details?: Record<string, string | null | undefined>) {
+  if (import.meta.env.DEV) console.info(`[transaction-flow] ${event}`, details || {});
+}
 
 const categoryOptions = Object.entries(pokemonCategoryLabels) as [PokemonProductCategory, string][];
 const sourceOptions = Object.entries(purchaseSourceLabels) as [PurchaseSource, string][];
@@ -53,10 +79,6 @@ const expenseOptions = Object.entries(expenseCategoryLabels) as [BusinessExpense
 function localDateTime() {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-}
-
-function isoDay(value: string) {
-  return value.slice(0, 10);
 }
 
 function compactInputClass() {
@@ -135,14 +157,19 @@ export function SalesControlPage() {
   const [customEnd, setCustomEnd] = useState(new Date().toISOString().slice(0, 10));
   const [mobileSpreadsheetOpen, setMobileSpreadsheetOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportScope, setExportScope] = useState<ExcelExportScope>("all");
+  const [exportFormat, setExportFormat] = useState<"csv" | "xlsx">("csv");
+  const [exportKind, setExportKind] = useState<FinancialExportKind>("transactions");
   const [exportEventId, setExportEventId] = useState("");
+  const [exportRecordType, setExportRecordType] = useState<NonNullable<FinancialExportFilters["recordType"]>>("all");
+  const [exportOwnerId, setExportOwnerId] = useState("");
+  const [exportStatus, setExportStatus] = useState("all");
+  const [exportQuery, setExportQuery] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState("");
+  const [exportSlow, setExportSlow] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
-  const [addSheet, setAddSheet] = useState<"main" | "purchase_cost" | "item_mode" | null>(null);
-  const [pendingTransactionPath, setPendingTransactionPath] = useState("");
-  const [chooserSelection, setChooserSelection] = useState<{ key: string; label: string }>();
-  const chooserTimerRef = useRef<number | undefined>(undefined);
+  const [transactionFlow, setTransactionFlow] = useState<TransactionFlowState>(closedTransactionFlow);
+  const flowTimerRef = useRef<number | undefined>(undefined);
   const addTransactionTriggerRef = useRef<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -231,7 +258,7 @@ export function SalesControlPage() {
   }, [location.search]);
   useEffect(() => () => stopCamera(), []);
   useEffect(() => () => {
-    if (chooserTimerRef.current) window.clearTimeout(chooserTimerRef.current);
+    if (flowTimerRef.current) window.clearTimeout(flowTimerRef.current);
   }, []);
   useEffect(() => {
     if (!cameraMode) return;
@@ -298,33 +325,93 @@ export function SalesControlPage() {
     }
   }
 
-  function chooseTransaction(path: string) {
-    setPendingTransactionPath(path);
-    setAddSheet("item_mode");
-  }
-
-  function transitionChooser(key: string, label: string, action: () => void) {
-    if (chooserSelection) return;
-    setChooserSelection({ key, label });
-    chooserTimerRef.current = window.setTimeout(() => {
-      action();
-      setChooserSelection(undefined);
-      chooserTimerRef.current = undefined;
-    }, 220);
-  }
-
-  const closeAddSheet = useCallback(() => {
-    if (chooserTimerRef.current) window.clearTimeout(chooserTimerRef.current);
-    chooserTimerRef.current = undefined;
-    setChooserSelection(undefined);
-    setAddSheet(null);
+  const closeTransactionFlow = useCallback(() => {
+    traceTransactionFlow("modal close requested");
+    if (flowTimerRef.current) window.clearTimeout(flowTimerRef.current);
+    flowTimerRef.current = undefined;
+    setTransactionFlow(closedTransactionFlow);
   }, []);
 
-  function launchTransaction(itemMode: "single" | "multiple") {
-    transitionChooser(itemMode, itemMode === "single" ? "Single item" : "Multiple items", () => {
-      setAddSheet(null);
-      navigate(`${pendingTransactionPath}${pendingTransactionPath.includes("?") ? "&" : "?"}items=${itemMode}`);
-    });
+  const handleTransactionFlowBack = useCallback(() => {
+    if (flowTimerRef.current) window.clearTimeout(flowTimerRef.current);
+    flowTimerRef.current = undefined;
+    if (transactionFlow.stage === "choose_mode") {
+      setTransactionFlow((current) => current.transactionType === "purchased" || current.transactionType === "cost"
+        ? { ...closedTransactionFlow, stage: "choose_subtype" }
+        : { ...closedTransactionFlow, stage: "choose_type" });
+      return true;
+    }
+    if (transactionFlow.stage === "choose_subtype" || transactionFlow.stage === "error") {
+      setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" });
+      return true;
+    }
+    setTransactionFlow(closedTransactionFlow);
+    return false;
+  }, [transactionFlow.stage]);
+
+  function openTransactionFlow() {
+    traceTransactionFlow("chooser opened");
+    setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" });
+  }
+
+  function selectTransactionType(type: TransactionFlowType) {
+    traceTransactionFlow("selected transaction type", { type });
+    if (type === "purchased" || type === "cost") {
+      setTransactionFlow({ stage: "choose_subtype", transactionType: null, entryMode: null, editorPath: "" });
+      return;
+    }
+    const editorPath = type === "sold"
+      ? "/sales/transactions/new?type=sale"
+      : type === "trade"
+        ? "/sales/trades?new=trade"
+        : "/sales/trades?new=cash_trade";
+    setTransactionFlow({ stage: "choose_mode", transactionType: type, entryMode: null, editorPath });
+  }
+
+  function selectTransactionSubtype(type: "purchased" | "cost", editorPath: string) {
+    traceTransactionFlow("selected transaction subtype", { type, editorPath });
+    setTransactionFlow({ stage: "choose_mode", transactionType: type, entryMode: null, editorPath });
+  }
+
+  function editorOpeningLabel(type: TransactionFlowType, mode: TransactionEntryMode) {
+    if (type === "sold") return mode === "multiple" ? "Opening multi-item sale…" : "Opening sale editor…";
+    if (type === "purchased") return mode === "multiple" ? "Preparing purchase lot…" : "Opening purchase editor…";
+    if (type === "cost") return mode === "multiple" ? "Preparing multi-cost entry…" : "Opening cost editor…";
+    if (type === "trade") return "Preparing trade workspace…";
+    return "Preparing cash + trade…";
+  }
+
+  function launchTransactionEditor(type: TransactionFlowType, mode: TransactionEntryMode, editorPath: string) {
+    traceTransactionFlow("editor requested", { type, mode, editorPath });
+    if (!editorPath) {
+      setTransactionFlow((current) => ({ ...current, stage: "error", error: "This transaction editor is not available yet." }));
+      return;
+    }
+    const destination = `${editorPath}${editorPath.includes("?") ? "&" : "?"}items=${mode}`;
+    try {
+      traceTransactionFlow("route navigation started", { destination });
+      navigate(destination);
+      traceTransactionFlow("route navigation completed", { destination });
+    } catch (error) {
+      traceTransactionFlow("route navigation failed", { destination, error: error instanceof Error ? error.message : String(error) });
+      setTransactionFlow((current) => ({ ...current, stage: "error", error: "We could not open this transaction editor." }));
+    }
+  }
+
+  function selectEntryMode(mode: TransactionEntryMode) {
+    const { transactionType, editorPath } = transactionFlow;
+    traceTransactionFlow("selected entry mode", { type: transactionType, mode });
+    if (!transactionType || !editorPath) {
+      setTransactionFlow((current) => ({ ...current, stage: "error", entryMode: mode, error: "This transaction editor is not available yet." }));
+      return;
+    }
+    const openingLabel = editorOpeningLabel(transactionType, mode);
+    setTransactionFlow((current) => ({ ...current, stage: "opening", entryMode: mode, openingLabel, error: undefined }));
+    if (flowTimerRef.current) window.clearTimeout(flowTimerRef.current);
+    flowTimerRef.current = window.setTimeout(() => {
+      launchTransactionEditor(transactionType, mode, editorPath);
+      flowTimerRef.current = undefined;
+    }, 180);
   }
 
   function openPurchase(purchase?: InventoryPurchase) {
@@ -682,8 +769,6 @@ export function SalesControlPage() {
     setHasMoreSales(result.hasMore);
   }
 
-  const eventMap = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
-  const workerMap = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
   const eligibleSaleEventMatches = useMemo(() => getEligibleSaleEvents(events, saleForm.soldAt, workers), [events, saleForm.soldAt, workers]);
   const saleEventOptions = useMemo(() => {
     const matchingIds = new Set(eligibleSaleEventMatches.map((match) => match.event.id));
@@ -759,6 +844,7 @@ export function SalesControlPage() {
     </div>;
   }
 
+  /*
   function exportData() {
     const rows = [
       ["Type", "Date", "Item / Description", "Category", "Revenue", "Cost", "Event", "Worker"],
@@ -793,6 +879,67 @@ export function SalesControlPage() {
       setMessage("Excel workbook downloaded.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the Excel workbook."); }
     finally { setExporting(false); }
+  }
+
+  */
+
+  async function listAllSalesForExport() {
+    const records: SalesRecord[] = [];
+    const pageSize = 500;
+    for (let page = 0; page < 200; page += 1) {
+      const result = await listSalesRecordsPage(page, pageSize);
+      records.push(...result.records);
+      setExportProgress(`Loaded ${records.length.toLocaleString()} sales records...`);
+      if (!result.hasMore) return records;
+    }
+    throw new Error("Sales export exceeded the safe pagination limit.");
+  }
+
+  async function exportFinancialData() {
+    setExporting(true);
+    setExportSlow(false);
+    setExportProgress("Loading the complete financial dataset...");
+    setMessage("");
+    const slowTimer = window.setTimeout(() => setExportSlow(true), 5000);
+    try {
+      const [allSales, allPurchases, allExpenses, allTransactions, allEvents, allWorkers] = await Promise.all([
+        listAllSalesForExport(),
+        listInventoryPurchases(10000),
+        listBusinessExpenses(10000),
+        listFinancialTransactions(),
+        listPlannerEventOptions(2000),
+        listWorkers()
+      ]);
+      const data = buildFinancialExportData({
+        sales: allSales,
+        purchases: allPurchases,
+        expenses: allExpenses,
+        transactions: allTransactions,
+        events: allEvents,
+        workers: allWorkers
+      }, {
+        dateRange,
+        customStart,
+        customEnd,
+        eventId: exportEventId || undefined,
+        recordType: exportRecordType,
+        ownerId: exportOwnerId || undefined,
+        status: exportStatus,
+        query: exportQuery
+      });
+      setExportProgress(`Formatting ${data.processedRecords.toLocaleString()} records...`);
+      if (exportFormat === "xlsx") await downloadFinancialWorkbook(data);
+      else downloadCsv(data.tables[exportKind], financialExportFilename(exportKind, data.rangeLabel));
+      setExportOpen(false);
+      setMessage(`${exportFormat === "xlsx" ? "Excel workbook" : "CSV file"} downloaded.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create the financial export.");
+    } finally {
+      window.clearTimeout(slowTimer);
+      setExporting(false);
+      setExportProgress("");
+      setExportSlow(false);
+    }
   }
 
   async function saveSpreadsheetSale(sale: SalesRecord) {
@@ -875,64 +1022,52 @@ export function SalesControlPage() {
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Track sales, inventory, business costs, ownership, and trades from one fast workspace.</p>
           <p className="mt-2 text-xs font-bold text-slate-500">{lastRefreshed ? `Last refreshed ${lastRefreshed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : usingCachedData ? "Showing cached records while refreshing" : "Preparing live financial data"}</p>
         </div>
-        <AppButton onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; setAddSheet("main"); }} className="hidden shrink-0 lg:inline-flex lg:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
+        <AppButton onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; openTransactionFlow(); }} className="hidden shrink-0 lg:inline-flex lg:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
       </header>
       <ResponsiveModal
-        open={Boolean(addSheet)}
-        title={addSheet === "main" ? "What are you adding?" : addSheet === "purchase_cost" ? "Purchased / Cost" : "How many items?"}
-        description={addSheet === "main" ? "Choose a transaction type. You can add one item, multiple items, or a complete lot." : addSheet === "purchase_cost" ? "Choose an inventory source or business cost category." : "Use a single record or enter a multi-item lot."}
-        onClose={closeAddSheet}
+        open={transactionFlow.stage !== "closed"}
+        title={transactionFlow.stage === "choose_type" ? "What are you adding?" : transactionFlow.stage === "choose_subtype" ? "Purchased / Cost" : transactionFlow.stage === "error" ? "Transaction editor unavailable" : transactionFlow.stage === "opening" ? "Opening transaction" : "How many items?"}
+        description={transactionFlow.stage === "choose_type" ? "Choose a transaction type. You can add one item, multiple items, or a complete lot." : transactionFlow.stage === "choose_subtype" ? "Choose an inventory source or business cost category." : transactionFlow.stage === "opening" ? "Your selection is saved while the correct editor loads." : transactionFlow.stage === "error" ? "Your selection is still available. Retry or return to the transaction types." : "Use a single record or enter a multi-item lot."}
+        onClose={closeTransactionFlow}
+        onBack={handleTransactionFlowBack}
         restoreFocusRef={addTransactionTriggerRef}
         size="lg"
-        dismissible={!chooserSelection}
+        dismissible={transactionFlow.stage !== "opening"}
       >
-        {addSheet === "main" ? <div className={`grid gap-3 md:grid-cols-2 md:gap-4 ${chooserSelection ? "transaction-chooser-busy" : ""}`}>
+        {transactionFlow.stage === "choose_type" ? <div className="grid gap-3 md:grid-cols-2 md:gap-4">
           <ActionCard
             title="Sold"
             description="Sell one item, several inventory items, or a complete bundle."
             icon={<BadgeDollarSign size={25} />}
             accent="orange"
-            selected={chooserSelection?.key === "sold"}
-            loading={chooserSelection?.key === "sold"}
-            disabled={Boolean(chooserSelection)}
-            onClick={() => transitionChooser("sold", "Sold", () => chooseTransaction("/sales/transactions/new?type=sale"))}
+            onClick={() => selectTransactionType("sold")}
           />
           <ActionCard
             title="Purchased / Cost"
             description="Add inventory purchases, event costs, table fees, or business expenses."
             icon={<ShoppingBasket size={25} />}
             accent="blue"
-            selected={chooserSelection?.key === "purchased"}
-            loading={chooserSelection?.key === "purchased"}
-            disabled={Boolean(chooserSelection)}
-            onClick={() => transitionChooser("purchased", "Purchased / Cost", () => setAddSheet("purchase_cost"))}
+            onClick={() => selectTransactionType("purchased")}
           />
           <ActionCard
             title="Trade"
             description="Exchange one or several inventory items for cards, slabs, or sealed products."
             icon={<ArrowLeftRight size={25} />}
             accent="purple"
-            selected={chooserSelection?.key === "trade"}
-            loading={chooserSelection?.key === "trade"}
-            disabled={Boolean(chooserSelection)}
-            onClick={() => transitionChooser("trade", "Trade", () => chooseTransaction("/sales/trades?new=trade"))}
+            onClick={() => selectTransactionType("trade")}
           />
           <ActionCard
             title="Cash + Trade"
             description="Record a mixed transaction containing incoming items, outgoing items, and cash."
             icon={<WalletCards size={25} />}
             accent="green"
-            selected={chooserSelection?.key === "cash_trade"}
-            loading={chooserSelection?.key === "cash_trade"}
-            disabled={Boolean(chooserSelection)}
-            onClick={() => transitionChooser("cash_trade", "Cash + Trade", () => chooseTransaction("/sales/trades?new=cash_trade"))}
+            onClick={() => selectTransactionType("cash_trade")}
           />
         </div> : null}
-        {chooserSelection ? <p className="mt-4 flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/5 text-sm font-black text-white" role="status" aria-live="polite">
-          Opening {chooserSelection.label}…
-        </p> : null}
-        {addSheet === "purchase_cost" ? <div className="space-y-4"><AppButton variant="ghost" onClick={() => setAddSheet("main")} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton variant="secondary" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=purchase&source=${source}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton variant="ghost" key={label} onClick={() => chooseTransaction(`/sales/transactions/new?type=expense&category=${category}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
-        {addSheet === "item_mode" ? <div className="space-y-3"><AppButton variant="ghost" onClick={() => setAddSheet(pendingTransactionPath.includes("type=purchase") || pendingTransactionPath.includes("type=expense") ? "purchase_cost" : "main")} disabled={Boolean(chooserSelection)} className="min-h-9 px-3"><ArrowLeft size={16} /> Back</AppButton><div className={`grid gap-3 md:grid-cols-2 ${chooserSelection ? "transaction-chooser-busy" : ""}`}><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" selected={chooserSelection?.key === "single"} loading={chooserSelection?.key === "single"} disabled={Boolean(chooserSelection)} onClick={() => launchTransaction("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" selected={chooserSelection?.key === "multiple"} loading={chooserSelection?.key === "multiple"} disabled={Boolean(chooserSelection)} onClick={() => launchTransaction("multiple")} /></div></div> : null}
+        {transactionFlow.stage === "choose_subtype" ? <div className="space-y-4"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton type="button" variant="secondary" key={label} onClick={() => selectTransactionSubtype("purchased", `/sales/transactions/new?type=purchase&source=${source}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton type="button" variant="ghost" key={label} onClick={() => selectTransactionSubtype("cost", `/sales/transactions/new?type=expense&category=${category}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
+        {transactionFlow.stage === "choose_mode" ? <div className="space-y-3"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow((current) => current.transactionType === "purchased" || current.transactionType === "cost" ? { stage: "choose_subtype", transactionType: null, entryMode: null, editorPath: "" } : { ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div className="grid gap-3 md:grid-cols-2"><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" onClick={() => selectEntryMode("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" onClick={() => selectEntryMode("multiple")} /></div></div> : null}
+        {transactionFlow.stage === "opening" ? <div className="loading-state-card bg-white/5 text-white" role="status" aria-live="polite" aria-busy="true"><span className="loading-state-orbit"><RotateCcw size={28} /></span><p className="font-black">{transactionFlow.openingLabel}</p><p className="mt-1 text-sm text-slate-400">Your transaction type and entry mode are preserved.</p></div> : null}
+        {transactionFlow.stage === "error" ? <div className="space-y-4"><p role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-4 text-sm font-bold text-rose-100">{transactionFlow.error}</p><div className="grid gap-2 sm:grid-cols-3"><AppButton type="button" onClick={() => transactionFlow.entryMode && selectEntryMode(transactionFlow.entryMode)}>Retry</AppButton><AppButton type="button" variant="secondary" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })}>Return</AppButton><AppButton type="button" variant="ghost" onClick={closeTransactionFlow}>Close</AppButton></div></div> : null}
       </ResponsiveModal>
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
@@ -989,7 +1124,7 @@ export function SalesControlPage() {
         <section className="dashboard-panel dashboard-reveal flex flex-col gap-3 lg:col-span-12 lg:row-start-4 sm:flex-row sm:items-center sm:justify-between">
           <div><p className="eyebrow">Data tools</p><h2 className="section-title">Export and synchronization</h2><p className="meta-text mt-1">Keep pending records synced or take a portable copy of the current data.</p></div>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-            <AppButton variant="secondary" onClick={exportData}><FileSpreadsheet size={17} /> CSV</AppButton>
+            <AppButton variant="secondary" onClick={() => { setExportFormat("csv"); setExportOpen(true); }}><FileSpreadsheet size={17} /> Export</AppButton>
             <AppButton variant="secondary" onClick={() => void syncPending()}><RotateCcw size={17} /> Sync pending</AppButton>
             {hasMoreSales ? <AppButton variant="ghost" onClick={() => void loadMoreSales()} className="col-span-2">Load more sales</AppButton> : null}
           </div>
@@ -999,22 +1134,84 @@ export function SalesControlPage() {
         <Tooltip label="Quick camera sale">
           <button type="button" onClick={() => openSale(undefined, events, true)} aria-label="Quick camera sale" className="grid size-12 place-items-center rounded-2xl border border-slate-700 bg-slate-900 text-orange-300 shadow-xl active:scale-95"><Camera size={20} /></button>
         </Tooltip>
-        <FloatingActionButton label="Add transaction" onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; setAddSheet("main"); }}><Plus size={20} /> Add</FloatingActionButton>
+        <FloatingActionButton label="Add transaction" onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; openTransactionFlow(); }}><Plus size={20} /> Add</FloatingActionButton>
       </div>
 
-      {exportOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 p-0 backdrop-blur-sm sm:items-center sm:p-4">
-          <section className="w-full max-w-md space-y-4 rounded-t-3xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl dark:bg-slate-900">
-            <div className="flex items-center justify-between"><div><p className="eyebrow">Excel workbook</p><h2 className="text-xl font-black text-ink dark:text-white">Choose export scope</h2></div><button onClick={() => setExportOpen(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>
-            <select value={exportScope} onChange={(event) => setExportScope(event.target.value as ExcelExportScope)} className={compactInputClass()}>
-              <option value="all">All data</option><option value="sales">Sales only</option><option value="inventory">Inventory only</option><option value="expenses">Expenses only</option><option value="filtered">Current date filter</option><option value="date_range">Selected date range</option><option value="event">One event</option>
+      <ResponsiveModal
+        open={exportOpen}
+        title="Export financial data"
+        description="Build a filtered CSV or a complete multi-sheet Excel workbook from the canonical transaction data."
+        onClose={() => { if (!exporting) setExportOpen(false); }}
+        size="lg"
+        dismissible={!exporting}
+      >
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white/5 p-1.5">
+            <AppButton type="button" variant={exportFormat === "csv" ? "primary" : "ghost"} onClick={() => setExportFormat("csv")}>CSV</AppButton>
+            <AppButton type="button" variant={exportFormat === "xlsx" ? "primary" : "ghost"} onClick={() => setExportFormat("xlsx")}>Excel workbook</AppButton>
+          </div>
+
+          {exportFormat === "csv" ? <label className="form-label">CSV dataset
+            <select value={exportKind} onChange={(event) => setExportKind(event.target.value as FinancialExportKind)} className={compactInputClass()}>
+              <option value="transactions">Transactions</option>
+              <option value="items">Items</option>
+              <option value="inventory">Inventory</option>
+              <option value="expenses">Expenses</option>
+              <option value="trades">Trades</option>
+              <option value="daily">Daily Summary</option>
+              <option value="all">All Financial Records</option>
             </select>
-            {exportScope === "event" ? <select value={exportEventId} onChange={(event) => setExportEventId(event.target.value)} className={compactInputClass()}><option value="">Choose event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select> : null}
-            <p className="text-sm text-slate-500">Workbook sheets include Overview, Sales, Inventory, Expenses, Transactions, Individual Items, All Financial Records, Event Summary, and Monthly Summary.</p>
-            <button onClick={() => void exportExcel()} disabled={exporting || (exportScope === "event" && !exportEventId)} className="btn-primary min-h-12 w-full"><Download size={18} /> {exporting ? "Preparing workbook..." : "Download Excel"}</button>
-          </section>
+          </label> : <p className="rounded-2xl border border-sky-500/25 bg-sky-950/20 p-3 text-sm text-sky-100">Includes Transactions, Items, Inventory, Expenses, Trades, Daily Summary, and Owner Summary sheets.</p>}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="form-label">Date range
+              <select value={dateRange} onChange={(event) => setDateRange(event.target.value as FinancialDateRange)} className={compactInputClass()}>
+                <option value="this_week">This week</option><option value="last_week">Last week</option>
+                <option value="this_month">This month</option><option value="last_month">Last month</option>
+                <option value="last_3_months">Last 3 months</option><option value="this_year">This year</option>
+                <option value="all_time">All time</option><option value="custom">Custom range</option>
+              </select>
+            </label>
+            <label className="form-label">Event
+              <select value={exportEventId} onChange={(event) => setExportEventId(event.target.value)} className={compactInputClass()}>
+                <option value="">All events</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
+              </select>
+            </label>
+            {dateRange === "custom" ? <>
+              <label className="form-label">Start date<input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} className={compactInputClass()} /></label>
+              <label className="form-label">End date<input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} className={compactInputClass()} /></label>
+            </> : null}
+            <label className="form-label">Record type
+              <select value={exportRecordType} onChange={(event) => setExportRecordType(event.target.value as NonNullable<FinancialExportFilters["recordType"]>)} className={compactInputClass()}>
+                <option value="all">All types</option><option value="sale">Sold</option><option value="purchase">Purchased</option>
+                <option value="expense">Cost</option><option value="trade">Trade</option><option value="cash_trade">Cash + Trade</option><option value="inventory">Inventory</option>
+              </select>
+            </label>
+            <label className="form-label">Owner
+              <select value={exportOwnerId} onChange={(event) => setExportOwnerId(event.target.value)} className={compactInputClass()}>
+                <option value="">All owners</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+              </select>
+            </label>
+            <label className="form-label">Status
+              <select value={exportStatus} onChange={(event) => setExportStatus(event.target.value)} className={compactInputClass()}>
+                <option value="all">All statuses</option><option value="draft">Draft</option><option value="completed">Completed</option>
+                <option value="in_stock">In stock</option><option value="partially_sold">Partially sold</option><option value="sold">Sold</option><option value="reversed">Reversed</option>
+              </select>
+            </label>
+            <label className="form-label">Search
+              <input value={exportQuery} onChange={(event) => setExportQuery(event.target.value)} placeholder="Item, person, ID, notes..." className={compactInputClass()} />
+            </label>
+          </div>
+
+          {exporting ? <div className="rounded-2xl border border-orange-400/25 bg-orange-950/20 p-3" role="status" aria-live="polite">
+            <p className="font-black text-orange-100">{exportProgress || "Preparing export..."}</p>
+            {exportSlow ? <p className="mt-1 text-xs text-orange-200/70">Large datasets can take a little longer. The export is still running.</p> : null}
+          </div> : null}
+          <AppButton type="button" onClick={() => void exportFinancialData()} disabled={exporting} className="min-h-12 w-full">
+            <Download size={18} /> {exporting ? "Preparing..." : `Download ${exportFormat === "xlsx" ? "Excel workbook" : "CSV"}`}
+          </AppButton>
         </div>
-      ) : null}
+      </ResponsiveModal>
 
       {batchOpen ? <BatchInventoryImporter events={events} workers={workers} onClose={() => setBatchOpen(false)} onImport={async (input, file) => {
         const saved = await saveInventoryPurchase(input, file);

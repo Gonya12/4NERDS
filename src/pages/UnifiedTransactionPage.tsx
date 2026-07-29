@@ -1,7 +1,9 @@
-import { ArrowLeft, ArrowRight, Check, Copy, PackagePlus, Save, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Copy, PackagePlus, Save, ScanLine, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
+import { CardScanPanel } from "../components/sales/CardScanPanel";
+import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, Toast, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
@@ -49,6 +51,8 @@ export function UnifiedTransactionPage() {
   const [step, setStep] = useState(0);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<TradeItem>();
+  const [manualSearch, setManualSearch] = useState(false);
+  const [scanFile, setScanFile] = useState<File>();
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(true);
@@ -63,6 +67,9 @@ export function UnifiedTransactionPage() {
   const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
+  const workflowTitle = transaction.itemMode === "multiple"
+    ? transaction.transactionType === "sale" ? "Multi-Item Sale" : transaction.transactionType === "purchase" ? "Inventory Lot Purchase" : "Multi-Cost Transaction"
+    : typeLabel;
   const hasUnsavedDraft = Boolean(transaction.items.length || transaction.tradePartner || transaction.notes || transaction.generalImageUrl || transaction.eventId);
   const saveStageIndex = saveStage === "transaction" ? 0 : saveStage === "items" ? 1 : saveStage === "inventory" || saveStage === "ownership" ? 2 : 3;
   const transactionImages = transaction.images || [];
@@ -78,6 +85,10 @@ export function UnifiedTransactionPage() {
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (import.meta.env.DEV) console.info("[transaction-flow] editor mounted", { type: requestedType, mode: requestedMode });
+  }, [requestedMode, requestedType]);
 
   async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string) {
     const persisted = await saveTrade(transaction, { syncImages: false });
@@ -190,6 +201,20 @@ export function UnifiedTransactionPage() {
     const item = { ...blankTradeItem(transaction.id, transaction.transactionType === "expense" ? "expense" : "incoming"), ownershipShares: [] };
     setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] })); setEditing(item);
   };
+  const addManualCard = () => {
+    const direction = transaction.transactionType === "sale" ? "outgoing" : transaction.transactionType === "expense" ? "expense" : "incoming";
+    const item = { ...blankTradeItem(transaction.id, direction), ownershipShares: [] };
+    setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] }));
+    setEditing(item);
+    setManualSearch(true);
+  };
+  const addScannedCard = (file: File) => {
+    const direction = transaction.transactionType === "sale" ? "outgoing" : "incoming";
+    const item = { ...blankTradeItem(transaction.id, direction), ownershipShares: [] };
+    setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] }));
+    setEditing(item);
+    setScanFile(file);
+  };
   const allocate = () => {
     const field = transaction.transactionType === "sale" ? "soldPrice" : "boughtPrice";
     setTransaction((row) => ({ ...row, items: allocateTransactionTotal(row.items, Number(row.bundleTotal || 0), allocation, field) }));
@@ -251,7 +276,7 @@ export function UnifiedTransactionPage() {
   </div>;
 
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
-    <header className="flex items-start justify-between gap-3"><div><Link to="/sales" onClick={(event) => { if (hasUnsavedDraft) { event.preventDefault(); setConfirmMode("exit"); } }} className="inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow mt-2">Unified transaction · {transaction.itemMode === "multiple" ? "Multiple Items / Lot" : "Single Item"}</p><h1 className="text-2xl font-black">{typeLabel}</h1></div><button onClick={requestExit} aria-label="Close transaction" className="rounded-full bg-slate-100 p-2"><X size={18} /></button></header>
+    <header className="flex items-start justify-between gap-3"><div><Link to="/sales" onClick={(event) => { if (hasUnsavedDraft) { event.preventDefault(); setConfirmMode("exit"); } }} className="inline-flex items-center gap-1 text-sm font-black text-violet-600"><ArrowLeft size={16} /> Sales Control</Link><p className="eyebrow mt-2">Unified transaction · {transaction.itemMode === "multiple" ? "Multiple Items / Lot" : "Single Item"}</p><h1 className="text-2xl font-black">{workflowTitle}</h1></div><button type="button" onClick={requestExit} aria-label="Close transaction" className="rounded-full bg-slate-100 p-2"><X size={18} /></button></header>
     {draftAvailable && savedLocalDraft ? <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
       <p className="font-black text-amber-900 dark:text-amber-100">An unfinished {typeLabel.toLowerCase()} draft is available</p>
       <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(savedLocalDraft.savedAt).toLocaleString()}.</p>
@@ -296,9 +321,19 @@ export function UnifiedTransactionPage() {
     </section> : null}
 
     {step === 1 ? <section className="space-y-3">
-      {transaction.transactionType === "sale" ? <div className="surface-card p-4"><h2 className="font-black">Search Existing Inventory</h2><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, collector number, set, inventory ID…" className={`${input} mt-2`} /><div className="mt-2 max-h-64 space-y-2 overflow-y-auto">{available.map((row) => <button key={row.id} onClick={() => addSaleItem(row)} className="flex w-full items-center gap-2 rounded-xl border p-2 text-left">{row.imageUrl ? <img src={row.imageUrl} className="size-12 rounded-lg object-contain" /> : <div className="size-12 rounded-lg bg-slate-100" />}<span className="min-w-0 flex-1"><b className="block truncate">{row.itemName}</b><small>{formatMoney(row.totalCost)} basis · {formatMoney(row.marketValue || 0)} market</small></span><PackagePlus size={17} /></button>)}</div></div> : <button onClick={addIncoming} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-sky-600 font-black text-white"><PackagePlus size={18} /> {transaction.transactionType === "expense" ? "Add Expense Details" : "Add Purchased Item"}</button>}
-      {transaction.transactionType !== "expense" && transaction.itemMode === "multiple" ? <div className="surface-card grid gap-2 p-4 sm:grid-cols-[1fr_1fr_auto]"><select value={transaction.pricingMode} onChange={(event) => setTransaction({ ...transaction, pricingMode: event.target.value as TradeTransaction["pricingMode"] })} className={input}><option value="individual">Individual Prices</option><option value="bundle_total">Bundle Total</option></select>{transaction.pricingMode === "bundle_total" ? <>{moneyInput(transaction.bundleTotal, (bundleTotal) => setTransaction({ ...transaction, bundleTotal }))}<select value={allocation} onChange={(event) => setAllocation(event.target.value as AllocationMethod)} className={input}><option value="market">Market Value</option><option value="equal">Equal Split</option><option value="cost">Cost Basis</option><option value="custom">Custom</option></select><button onClick={allocate} className="rounded-xl bg-violet-600 px-3 font-black text-white sm:col-span-3 min-h-11">Allocate {formatMoney(transaction.bundleTotal || 0)}</button></> : null}</div> : null}
-      <div className="space-y-2">{transaction.items.map((item) => <article key={item.id} className="surface-card flex items-center gap-3 p-3">{item.imageUrl || transaction.generalImageUrl ? <img src={item.imageUrl || transaction.generalImageUrl} alt="" className="size-14 rounded-lg object-contain" /> : <div className="size-14 rounded-lg bg-slate-100" />}<div className="min-w-0 flex-1"><b className="block truncate">{item.itemName || "Details pending"}</b><p className="text-xs text-slate-500">{transaction.transactionType === "sale" ? `${formatMoney(item.soldPrice || 0)} sold · ${formatMoney(item.historicalCostBasis)} basis` : `${formatMoney(item.boughtPrice || 0)} cost · ${formatMoney(item.marketValue)} market`} · {item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name} ${share.ownershipPercentage}%`).join(", ") || "Unassigned"}</p></div><button onClick={() => setEditing(item)} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-700">Edit</button><button onClick={() => { const duplicateId = crypto.randomUUID(); const duplicate = { ...item, id: duplicateId, inventoryPurchaseId: undefined, images: item.images?.map((image) => ({ ...image, id: crypto.randomUUID(), transactionItemId: duplicateId })) }; setTransaction({ ...transaction, items: [...transaction.items, duplicate] }); }} aria-label={`Duplicate ${item.itemName || "item"}`} className="rounded-lg bg-slate-100 p-2"><Copy size={15} /></button><button onClick={() => setTransaction({ ...transaction, items: transaction.items.filter((row) => row.id !== item.id) })} aria-label={`Remove ${item.itemName || "item"}`} className="rounded-lg bg-rose-50 p-2 text-rose-600"><Trash2 size={15} /></button></article>)}</div>
+      {transaction.transactionType === "sale" ? <div className="surface-card p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-black">Search Existing Inventory</h2><p className="text-xs text-slate-500">Selected inventory cannot be added twice.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-black text-violet-700">{transaction.items.length} selected</span></div><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, collector number, set, inventory ID…" className={`${input} mt-3`} /><div className="mt-2 max-h-64 space-y-2 overflow-y-auto">{available.map((row) => <button type="button" key={row.id} disabled={transaction.items.some((item) => item.inventoryPurchaseId === row.id)} onClick={() => addSaleItem(row)} className="flex w-full items-center gap-2 rounded-xl border p-2 text-left disabled:opacity-40">{row.imageUrl ? <img src={row.imageUrl} className="size-12 rounded-lg object-contain" /> : <div className="size-12 rounded-lg bg-slate-100" />}<span className="min-w-0 flex-1"><b className="block truncate">{row.itemName}</b><small>{formatMoney(row.totalCost)} basis · {formatMoney(row.marketValue || 0)} market</small></span><PackagePlus size={17} /></button>)}</div></div> : null}
+      <div className="surface-card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-black">Items</h2><p className="text-xs text-slate-500">Add any number of items and edit each item independently.</p></div><span className="text-sm font-black">{transaction.items.length} item{transaction.items.length === 1 ? "" : "s"}</span></div><div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {transaction.transactionType !== "sale" ? <button type="button" onClick={addIncoming} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 font-black text-white"><PackagePlus size={17} /> {transaction.transactionType === "expense" ? "Add Cost" : "Add Item"}</button> : null}
+        {transaction.transactionType !== "expense" ? <button type="button" onClick={addManualCard} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-100 px-3 font-black text-violet-800"><Search size={17} /> Search Pokémon</button> : null}
+        {transaction.transactionType !== "expense" ? <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 font-black text-slate-800"><ScanLine size={17} /> Scan Card<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) addScannedCard(file); event.currentTarget.value = ""; }} /></label> : null}
+        {transaction.transactionType === "sale" ? <button type="button" onClick={() => { const item = { ...blankTradeItem(transaction.id, "outgoing"), ownershipShares: [] }; setTransaction((row) => ({ ...row, items: [...row.items, item] })); setEditing(item); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 font-black text-slate-800"><PackagePlus size={17} /> Enter Manually</button> : null}
+      </div></div>
+      {transaction.transactionType !== "expense" && transaction.itemMode === "multiple" ? <div className="surface-card grid gap-2 p-4 sm:grid-cols-[1fr_1fr_auto]"><select value={transaction.pricingMode} onChange={(event) => setTransaction({ ...transaction, pricingMode: event.target.value as TradeTransaction["pricingMode"] })} className={input}><option value="individual">Individual Prices</option><option value="bundle_total">Bundle Total</option></select>{transaction.pricingMode === "bundle_total" ? <>{moneyInput(transaction.bundleTotal, (bundleTotal) => setTransaction({ ...transaction, bundleTotal }))}<select value={allocation} onChange={(event) => setAllocation(event.target.value as AllocationMethod)} className={input}><option value="market">Market Value</option><option value="equal">Equal Split</option><option value="cost">Cost Basis</option><option value="custom">Custom</option></select><button type="button" onClick={allocate} className="min-h-11 rounded-xl bg-violet-600 px-3 font-black text-white sm:col-span-3">Allocate {formatMoney(transaction.bundleTotal || 0)}</button></> : null}{transaction.transactionType === "purchase" ? <label className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-3 text-sm font-black sm:col-span-3"><input type="checkbox" checked={Boolean(transaction.keepAsBundle)} onChange={(event) => setTransaction({ ...transaction, keepAsBundle: event.target.checked })} className="size-4" /> Keep this lot as one bundled inventory record</label> : null}</div> : null}
+      <div className="space-y-2">{transaction.items.map((item) => <article key={item.id} className="surface-card grid gap-3 p-3 sm:grid-cols-[4rem_1fr_auto] sm:items-center">
+        {item.imageUrl || transaction.generalImageUrl ? <img src={item.imageUrl || transaction.generalImageUrl} alt="" className="size-16 rounded-xl object-contain" /> : <div className="grid size-16 place-items-center rounded-xl bg-slate-100 text-slate-400"><PackagePlus size={20} /></div>}
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><b className="truncate">{item.itemName || "Details pending"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${item.direction === "outgoing" ? "bg-orange-100 text-orange-700" : item.direction === "incoming" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>{item.direction}</span></div><div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 sm:grid-cols-4"><span>Qty <b className="text-slate-700">{item.quantity}</b></span><span>Market <b className="text-slate-700">{formatMoney(item.marketValue)}</b></span><span>Basis <b className="text-slate-700">{formatMoney(item.historicalCostBasis || item.allocatedCostBasis)}</b></span><span>{transaction.transactionType === "sale" ? "Sold" : "Cost"} <b className="text-slate-700">{formatMoney(transaction.transactionType === "sale" ? item.soldPrice || 0 : item.boughtPrice || 0)}</b></span></div><p className="mt-1 truncate text-xs text-slate-500">{item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
+        <div className="flex items-center justify-end gap-1"><button type="button" onClick={() => setEditing(item)} className="min-h-10 rounded-lg bg-violet-100 px-3 text-xs font-black text-violet-700">Edit</button><button type="button" onClick={() => { const duplicateId = crypto.randomUUID(); const duplicate = { ...item, id: duplicateId, inventoryPurchaseId: undefined, images: item.images?.map((image) => ({ ...image, id: crypto.randomUUID(), transactionItemId: duplicateId })) }; setTransaction({ ...transaction, items: [...transaction.items, duplicate] }); }} aria-label={`Duplicate ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-slate-100"><Copy size={15} /></button><button type="button" onClick={() => setTransaction({ ...transaction, items: transaction.items.filter((row) => row.id !== item.id) })} aria-label={`Remove ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-rose-50 text-rose-600"><Trash2 size={15} /></button></div>
+      </article>)}</div>
     </section> : null}
 
     {step === 2 ? <section className="space-y-3"><div className="surface-card p-4"><p className="eyebrow">Transaction Review</p><h2 className="text-xl font-black">{typeLabel} · {transaction.items.length} item{transaction.items.length === 1 ? "" : "s"}</h2><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Cash received", transaction.transactionType === "sale" ? review.sold : 0],["Cash paid", transaction.transactionType === "purchase" ? review.bought : transaction.transactionType === "expense" ? Number(transaction.bundleTotal || 0) : 0],["Cost basis", review.basis],["Gross profit", review.grossProfit]].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">{label}</small><b>{formatMoney(Number(value))}</b></div>)}</div>{transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009 ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Bundle allocation is off by {formatMoney(review.bundleDifference)}.</p> : null}{transaction.items.some((item) => transaction.transactionType !== "expense" && !ownershipIsValid(item)) ? <p className="mt-2 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">One or more item ownership splits do not total 100%.</p> : null}{transaction.items.some((item) => !item.historicalCostBasis && transaction.transactionType === "sale") ? <p className="mt-2 rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-700">One or more sold items has a missing cost basis.</p> : null}</div><div className="surface-card p-4"><h3 className="font-black">Owner profit shares</h3>{Array.from(review.ownerProfit.entries()).map(([workerId, amount]) => <p key={workerId} className="mt-1 text-sm">{workers.find((row) => row.id === workerId)?.name || "Owner"}: <b>{formatMoney(amount)}</b></p>)}{!review.ownerProfit.size ? <p className="text-sm text-slate-500">Calculated from each item’s ownership after items are assigned.</p> : null}</div></section> : null}
@@ -307,7 +342,7 @@ export function UnifiedTransactionPage() {
       open={Boolean(editing)}
       title="Transaction Item"
       description="Add item details, ownership, and optional front and back photos."
-      onClose={() => setEditing(undefined)}
+      onClose={() => { setEditing(undefined); setManualSearch(false); setScanFile(undefined); }}
       size="md"
       dismissible={!imageUploading}
     >
@@ -321,6 +356,25 @@ export function UnifiedTransactionPage() {
           }} className={input} />
         </label>
         {transaction.transactionType !== "expense" ? <>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setManualSearch(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-100 px-3 text-sm font-black text-violet-800"><Search size={16} /> Search Pokémon</button>
+            <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-slate-800"><ScanLine size={16} /> Scan Card<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { setScanFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+          </div>
+          {scanFile ? <div className="rounded-2xl border border-violet-200 p-3"><CardScanPanel imageFile={scanFile} category={editing.itemType} inventory={inventory} onRetakePhoto={() => setScanFile(undefined)} onApply={(suggestion) => {
+            const item = {
+              ...editing,
+              itemName: suggestion.cardName || editing.itemName,
+              collectorNumber: suggestion.collectorNumber || undefined,
+              cardSet: suggestion.cardSet || undefined,
+              cardCondition: suggestion.condition || undefined,
+              gradingCompany: suggestion.gradingCompany || undefined,
+              grade: suggestion.grade || undefined,
+              certificateNumber: suggestion.certificateNumber || undefined
+            };
+            setEditing(item);
+            updateItem(item);
+            setScanFile(undefined);
+          }} /></div> : null}
           <div className="grid grid-cols-2 gap-2">
             <label><span className="text-xs font-black">Item type</span><select value={editing.itemType} onChange={(event) => {
               const item = { ...editing, itemType: event.target.value as PokemonProductCategory };
@@ -339,6 +393,21 @@ export function UnifiedTransactionPage() {
             })}</label>
             <label><span className="text-xs font-black">Collector number</span><input value={editing.collectorNumber || ""} onChange={(event) => {
               const item = { ...editing, collectorNumber: event.target.value };
+              setEditing(item);
+              updateItem(item);
+            }} className={input} /></label>
+            <label><span className="text-xs font-black">Quantity</span><input type="number" min="1" step="1" value={editing.quantity} onChange={(event) => {
+              const item = { ...editing, quantity: Math.max(1, Number(event.target.value || 1)) };
+              setEditing(item);
+              updateItem(item);
+            }} className={input} /></label>
+            <label><span className="text-xs font-black">Set</span><input value={editing.cardSet || ""} onChange={(event) => {
+              const item = { ...editing, cardSet: event.target.value };
+              setEditing(item);
+              updateItem(item);
+            }} className={input} /></label>
+            <label><span className="text-xs font-black">Condition</span><input value={editing.cardCondition || ""} onChange={(event) => {
+              const item = { ...editing, cardCondition: event.target.value };
               setEditing(item);
               updateItem(item);
             }} className={input} /></label>
@@ -378,6 +447,29 @@ export function UnifiedTransactionPage() {
         <button type="button" disabled={imageUploading} onClick={() => setEditing(undefined)} className="btn-primary w-full disabled:opacity-50"><Check size={17} /> Done</button>
       </div> : null}
     </ResponsiveModal>
+    {manualSearch && editing ? <ManualCardSearch
+      open
+      category={editing.itemType}
+      initialName={editing.itemName}
+      initialCollectorNumber={editing.collectorNumber}
+      initialSet={editing.cardSet}
+      onClose={() => setManualSearch(false)}
+      onApply={(suggestion) => {
+        const item = {
+          ...editing,
+          itemName: suggestion.cardName || editing.itemName,
+          collectorNumber: suggestion.collectorNumber || undefined,
+          cardSet: suggestion.cardSet || undefined,
+          cardCondition: suggestion.condition || undefined,
+          gradingCompany: suggestion.gradingCompany || undefined,
+          grade: suggestion.grade || undefined,
+          certificateNumber: suggestion.certificateNumber || undefined
+        };
+        setEditing(item);
+        updateItem(item);
+        setManualSearch(false);
+      }}
+    /> : null}
 
     {saveStage ? <div className="fixed inset-x-3 bottom-24 z-[70] mx-auto max-w-2xl"><ProgressSteps steps={saveSteps} activeStep={saveStageIndex} complete={saveComplete} /></div> : null}
     <Toast open={Boolean(toast)} message={toast?.message || ""} tone={toast?.tone} onDismiss={() => setToast(undefined)} />

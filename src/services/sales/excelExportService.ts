@@ -1,141 +1,81 @@
 import type { Cell, Sheet } from "write-excel-file/browser";
-import type { BusinessExpense, Event, InventoryPurchase, SalesRecord, TradeTransaction, Worker } from "../../types/models";
-import { tradeSummary } from "../../utils/tradeMath";
-import { expenseCategoryLabels, financialOverview, inventoryQuantitySummary, pokemonCategoryLabels, selectedEventCost } from "../../utils/salesControl";
+import type {
+  ExportColumnKind, ExportValue, FinancialExportData, FinancialExportTable
+} from "./financialExportService";
 
-export type ExcelExportScope = "all" | "sales" | "inventory" | "expenses" | "filtered" | "date_range" | "event";
-
-type ExportData = {
-  sales: SalesRecord[];
-  purchases: InventoryPurchase[];
-  expenses: BusinessExpense[];
-  events: Event[];
-  workers: Worker[];
-  trades?: TradeTransaction[];
-  scopeLabel: string;
+const requiredSheets = ["transactions", "items", "inventory", "expenses", "trades", "daily", "owners"] as const;
+const headerStyle = {
+  fontWeight: "bold" as const,
+  textColor: "#FFFFFF",
+  backgroundColor: "#F45D13",
+  alignVertical: "center" as const,
+  height: 30,
+  wrap: true
 };
 
-const headerStyle = { fontWeight: "bold" as const, textColor: "#FFFFFF", backgroundColor: "#F45D13", alignVertical: "center" as const, height: 28 };
-const money = (value: number): Cell => ({ value, type: Number, format: "$#,##0.00" });
-const percent = (value: number): Cell => ({ value: value / 100, type: Number, format: "0.0%" });
-const date = (value?: string): Cell => value ? { value: new Date(value), type: Date, format: "mmm d, yyyy h:mm AM/PM" } : null;
-const text = (value?: string | number): Cell => value === undefined || value === null ? "" : String(value);
-const header = (labels: string[]): Cell[] => labels.map((value) => ({ value, type: String, ...headerStyle }));
-
-function workerName(workers: Worker[], id?: string) {
-  return workers.find((worker) => worker.id === id)?.name || "";
+function dateValue(value: ExportValue) {
+  if (value instanceof Date) return value;
+  if (!value) return undefined;
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
-function tradeTransactionsSheet(data: ExportData) {
-  return sheet("Transactions", [
-    header(["Date", "Type", "Trade Partner", "Items Given", "Items Received", "Value Given", "Value Received", "Cash Paid", "Cash Received", "Estimated Gain/Loss", "Event", "Status"]),
-    ...(data.trades || []).map((trade) => {
-      const summary = tradeSummary(trade);
-      return [date(trade.tradeDate), text(trade.transactionType), text(trade.tradePartner), summary.outgoing.map((item) => item.itemName).join("; "), summary.incoming.map((item) => item.itemName).join("; "), money(summary.outgoingAgreed || summary.outgoing.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0)), money(summary.incomingAgreed || summary.incoming.reduce((sum, item) => sum + Number(item.boughtPrice || 0), 0)), money(trade.cashPaid), money(trade.cashReceived), money(summary.estimatedGainLoss), text(eventName(data.events, trade.eventId)), text(trade.status)];
-    })
-  ], [20, 12, 24, 40, 40, 16, 16, 14, 16, 20, 28, 14]);
+function toCell(value: ExportValue, kind: ExportColumnKind): Cell {
+  if (value === null || value === undefined || value === "") return null;
+  if (kind === "date") {
+    const parsed = dateValue(value);
+    return parsed
+      ? { value: parsed, type: Date, format: String(value).includes("T") ? "mmm d, yyyy h:mm AM/PM" : "mmm d, yyyy" }
+      : { value: String(value), type: String };
+  }
+  if (kind === "currency") {
+    return { value: Number(value || 0), type: Number, format: "$#,##0.00;[Red]-$#,##0.00" };
+  }
+  if (kind === "percentage") {
+    return { value: Number(value || 0) / 100, type: Number, format: "0.0%" };
+  }
+  if (kind === "number") return { value: Number(value || 0), type: Number, format: "#,##0.##" };
+  if (typeof value === "boolean") return { value, type: Boolean };
+  return { value: String(value), type: String, wrap: true };
 }
 
-function tradeItemsSheet(data: ExportData) {
-  return sheet("Individual Items", [
-    header(["Direction", "Item Name", "Collector Number", "Inventory Record", "Ownership", "Market Value", "Agreed Value", "Cost Basis", "Transaction", "Status"]),
-    ...(data.trades || []).flatMap((trade) => trade.items.map((item) => [
-      text(item.direction), text(item.itemName), text(item.collectorNumber), text(item.inventoryPurchaseId || item.createdInventoryPurchaseId),
-      text(item.ownershipShares.map((share) => `${workerName(data.workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; ")),
-      money(item.marketValue), money(item.agreedTradeValue), money(item.direction === "outgoing" ? item.historicalCostBasis : item.allocatedCostBasis),
-      text(trade.id), text(trade.status)
-    ]))
-  ], [14, 30, 18, 38, 32, 15, 15, 15, 38, 14]);
+function columnWidth(table: FinancialExportTable, index: number) {
+  const header = table.headers[index] || "";
+  const kind = table.kinds[index];
+  if (kind === "date") return 19;
+  if (kind === "currency" || kind === "percentage" || kind === "number") return 16;
+  if (/ID|URL/.test(header)) return 32;
+  if (/Notes|Description|Items|Ownership/.test(header)) return 38;
+  const longest = Math.max(header.length, ...table.rows.slice(0, 200).map((row) => String(row[index] ?? "").length));
+  return Math.min(34, Math.max(12, longest + 2));
 }
 
-function allFinancialRecordsSheet(data: ExportData) {
-  const rows: Cell[][] = [
-    ...data.sales.map((row) => [date(row.soldAt), "Cash Sale", text(row.itemName), money(Number(row.soldPrice || 0)), money(Number(row.boughtPrice || 0)), text(row.id)]),
-    ...data.purchases.filter((row) => row.purchaseSource !== "trade").map((row) => [date(row.purchaseDate), "Cash Purchase", text(row.itemName), money(0), money(row.totalCost), text(row.id)]),
-    ...data.expenses.map((row) => [date(row.expenseDate), "Business Expense", text(row.description), money(0), money(row.amount), text(row.id)]),
-    ...(data.trades || []).map((row) => [date(row.tradeDate), text(row.transactionType), text(row.tradePartner || row.items.map((item) => item.itemName).join(" / ")), money(row.cashReceived), money(row.cashPaid), text(row.id)])
-  ].sort((a, b) => Number((b[0] as { value?: Date })?.value || 0) - Number((a[0] as { value?: Date })?.value || 0));
-  return sheet("All Financial Records", [header(["Date", "Type", "Description", "Cash In", "Cash Out", "Record ID"]), ...rows], [20, 20, 42, 15, 15, 38]);
+function toSheet(table: FinancialExportTable): Sheet<Blob> {
+  const header: Cell[] = table.headers.map((value) => ({ value, type: String, ...headerStyle }));
+  const data: Cell[][] = [
+    header,
+    ...table.rows.map((row) => table.headers.map((_, index) => toCell(row[index], table.kinds[index])))
+  ];
+  const profitColumns = table.headers
+    .map((value, index) => /Profit|Gain\/Loss|Result/.test(value) ? index + 1 : 0)
+    .filter(Boolean);
+  return {
+    sheet: table.name,
+    data,
+    columns: table.headers.map((_, index) => ({ width: columnWidth(table, index) })),
+    stickyRowsCount: 1,
+    showGridLines: true,
+    zoomScale: table.headers.length > 20 ? 75 : 90,
+    conditionalFormatting: profitColumns.flatMap((column) => table.rows.length ? [{
+      cellRange: { from: { row: 2, column }, to: { row: table.rows.length + 1, column } },
+      condition: { operator: "<" as const, value: 0 },
+      style: { textColor: "#B91C1C", backgroundColor: "#FEF2F2" }
+    }] : [])
+  };
 }
 
-function eventName(events: Event[], id?: string) {
-  return events.find((event) => event.id === id)?.name || "";
-}
-
-function sheet(sheetName: string, data: Cell[][], widths: number[]): Sheet<Blob> {
-  return { sheet: sheetName, data, columns: widths.map((width) => ({ width })), stickyRowsCount: 1, showGridLines: true };
-}
-
-function salesSheet(data: ExportData) {
-  return sheet("Sales", [
-    header(["Date Sold", "Item", "Category", "Quantity", "Sold Price", "Cost Basis", "Gross Profit", "Margin", "Market Value", "Raw Card", "Payment Method", "Sold By", "Event", "Purchase Source", "Notes"]),
-    ...data.sales.map((sale) => {
-      const grossProfit = Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0);
-      const margin = Number(sale.soldPrice || 0) > 0 ? grossProfit / Number(sale.soldPrice) * 100 : 0;
-      return [date(sale.soldAt), text(sale.itemName || "Details pending"), text(pokemonCategoryLabels[sale.category || "other_pokemon_product"]), Number(sale.quantity || 1), money(Number(sale.soldPrice || 0)), money(Number(sale.boughtPrice || 0)), money(grossProfit), percent(margin), money(Number(sale.marketValue || 0)), sale.isRawCard, text(sale.paymentMethod), text(workerName(data.workers, sale.soldByWorkerId)), text(eventName(data.events, sale.eventId)), text(sale.purchaseSource), text(sale.notes)];
-    })
-  ], [20, 30, 22, 10, 15, 15, 15, 12, 15, 11, 16, 16, 28, 18, 36]);
-}
-
-function inventorySheet(data: ExportData) {
-  return sheet("Inventory", [
-    header(["Purchase Date", "Item", "Category", "Original Qty", "Qty Sold", "Qty Remaining", "Status", "Total Cost", "Cost Per Unit", "Realized Revenue", "Realized Cost", "Realized Profit", "Market Value", "Potential Profit", "Purchased By", "Event Purchased At", "Seller", "Notes"]),
-    ...data.purchases.map((purchase) => {
-      const summary = inventoryQuantitySummary(purchase, data.sales);
-      return [date(purchase.purchaseDate), text(purchase.itemName), text(pokemonCategoryLabels[purchase.category]), purchase.quantity, summary.quantitySold, summary.quantityRemaining, text(purchase.status), money(purchase.totalCost), money(summary.costPerUnit), money(summary.realizedRevenue), money(summary.realizedCost), money(summary.realizedProfit), money(Number(purchase.marketValue || 0)), money(summary.potentialProfit), text(workerName(data.workers, purchase.purchasedByWorkerId)), text(eventName(data.events, purchase.eventId)), text(purchase.seller), text(purchase.notes)];
-    })
-  ], [20, 30, 22, 12, 10, 14, 18, 15, 15, 18, 16, 17, 15, 17, 16, 28, 22, 36]);
-}
-
-function expenseSheet(data: ExportData) {
-  return sheet("Expenses", [
-    header(["Date", "Category", "Description", "Amount", "Event", "Paid By", "Vendor", "Notes"]),
-    ...data.expenses.map((expense) => [date(expense.expenseDate), text(expenseCategoryLabels[expense.category]), text(expense.description), money(expense.amount), text(eventName(data.events, expense.eventId)), text(workerName(data.workers, expense.paidByWorkerId)), text(expense.vendor), text(expense.notes)])
-  ], [20, 24, 34, 15, 28, 16, 22, 36]);
-}
-
-function eventSummarySheet(data: ExportData) {
-  const rows = data.events.map((event) => {
-    const sales = data.sales.filter((sale) => sale.eventId === event.id);
-    const expenses = data.expenses.filter((expense) => expense.eventId === event.id && expense.category !== "event_table_fee");
-    const revenue = sales.reduce((sum, sale) => sum + Number(sale.soldPrice || 0), 0);
-    const cogs = sales.reduce((sum, sale) => sum + Number(sale.boughtPrice || 0), 0);
-    const operating = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-    const tableCost = selectedEventCost(event);
-    return [text(event.name), date(event.startDate), money(revenue), money(cogs), money(revenue - cogs), money(tableCost), money(operating), money(revenue - cogs - tableCost - operating)];
-  }).filter((row) => Number((row[2] as { value?: number })?.value || 0) || Number((row[5] as { value?: number })?.value || 0));
-  return sheet("Event Summary", [header(["Event", "Date", "Revenue", "COGS", "Gross Profit", "Table Cost", "Other Expenses", "Net Profit"]), ...rows], [32, 20, 15, 15, 17, 15, 18, 16]);
-}
-
-function monthlySummarySheet(data: ExportData) {
-  const months = new Map<string, { revenue: number; cogs: number; expenses: number; inventory: number }>();
-  const get = (key: string) => months.get(key) || { revenue: 0, cogs: 0, expenses: 0, inventory: 0 };
-  data.sales.forEach((sale) => { const key = sale.soldAt.slice(0, 7); const row = get(key); row.revenue += Number(sale.soldPrice || 0); row.cogs += Number(sale.boughtPrice || 0); months.set(key, row); });
-  data.expenses.forEach((expense) => { const key = expense.expenseDate.slice(0, 7); const row = get(key); row.expenses += Number(expense.amount || 0); months.set(key, row); });
-  data.purchases.forEach((purchase) => { const key = purchase.purchaseDate.slice(0, 7); const row = get(key); row.inventory += Number(purchase.totalCost || 0); months.set(key, row); });
-  return sheet("Monthly Summary", [
-    header(["Month", "Revenue", "COGS", "Gross Profit", "Operating Expenses", "Inventory Purchased", "Net Before Table Costs"]),
-    ...Array.from(months.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => [text(new Date(`${key}-01T12:00:00`).toLocaleDateString([], { month: "long", year: "numeric" })), money(row.revenue), money(row.cogs), money(row.revenue - row.cogs), money(row.expenses), money(row.inventory), money(row.revenue - row.cogs - row.expenses)])
-  ], [22, 15, 15, 17, 20, 20, 22]);
-}
-
-export async function downloadFinancialWorkbook(data: ExportData) {
+export async function downloadFinancialWorkbook(data: FinancialExportData) {
   const { default: writeXlsxFile } = await import("write-excel-file/browser");
-  const overview = financialOverview(data.sales, data.purchases, data.expenses, data.events);
-  const overviewSheet = sheet("Overview", [
-    [{ value: "4 Nerds Sales & Finance", type: String, fontWeight: "bold", fontSize: 18, textColor: "#F45D13", columnSpan: 2 }],
-    ["Export scope", data.scopeLabel],
-    ["Generated", { value: new Date(), type: Date, format: "mmm d, yyyy h:mm AM/PM" }],
-    ["Total revenue", money(overview.revenue)],
-    ["Cost of goods sold", money(overview.costOfGoodsSold)],
-    ["Gross profit", money(overview.grossProfit)],
-    ["Operating expenses", money(overview.operatingExpenses + overview.eventTableCosts)],
-    ["Net profit", money(overview.netProfit)],
-    ["Inventory purchased", money(overview.inventoryInvestment)],
-    ["Unsold inventory cost", money(overview.unsoldInventoryCost)],
-    ["Items sold", overview.itemsSold],
-    ["Items in stock", overview.itemsInStock]
-  ], [28, 24]);
-  const sheets: Sheet<Blob>[] = [overviewSheet, salesSheet(data), inventorySheet(data), expenseSheet(data), tradeTransactionsSheet(data), tradeItemsSheet(data), allFinancialRecordsSheet(data), eventSummarySheet(data), monthlySummarySheet(data)];
-  await writeXlsxFile(sheets).toFile(`4-nerds-finances-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const sheets: Sheet<Blob>[] = requiredSheets.map((key) => toSheet(data.tables[key]));
+  await writeXlsxFile(sheets).toFile(`4Nerds_Financial_Workbook_${data.rangeLabel}.xlsx`);
 }

@@ -77,6 +77,10 @@ export function TradePage() {
   const [recoverableDraft, setRecoverableDraft] = useState<LocalTradeDraft | undefined>(() => readLocalTradeDraft());
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
 
+  useEffect(() => {
+    if (searchParams.get("new") && import.meta.env.DEV) console.info("[transaction-flow] editor mounted", { type: searchParams.get("new"), mode: searchParams.get("items") || "multiple" });
+  }, [searchParams]);
+
   async function load() {
     setLoading(true); setError("");
     const results = await Promise.allSettled([
@@ -265,6 +269,9 @@ function TradeEditor(props: EditorProps) {
   const generalImages = transactionImages.filter((image) => image.imageType === "general");
   const proofImages = transactionImages.filter((image) => image.imageType === "proof" || image.imageType === "receipt");
   const sharedImage = generalImages[0];
+  const workflowTitle = trade.transactionType === "cash_trade"
+    ? trade.itemMode === "multiple" ? "Cash + Trade Lot" : "Cash + Trade"
+    : trade.itemMode === "multiple" ? "Multi-Item Trade" : "Single-Item Trade";
   const imageUploading = busyImageFields.size > 0;
   const onImageBusyChange = useCallback((fieldId: string, active: boolean) => {
     setBusyImageFields((current) => {
@@ -353,7 +360,7 @@ function TradeEditor(props: EditorProps) {
     update({ items: trade.items.map((item) => allocated.find((row) => row.id === item.id) || item) });
   };
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
-    <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">Trade editor · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button onClick={props.onClose} disabled={imageUploading} aria-label="Close trade editor" className="rounded-full bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><X size={19} /></button></header>
+    <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">{workflowTitle} · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button type="button" onClick={props.onClose} disabled={imageUploading} aria-label="Close trade editor" className="rounded-full bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><X size={19} /></button></header>
     <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} disabled={imageUploading} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full disabled:opacity-50 ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
     {props.message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{props.message}</p> : null}
 
