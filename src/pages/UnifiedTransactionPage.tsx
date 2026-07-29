@@ -12,7 +12,7 @@ import { completeFinancialTransaction, blankTrade, blankTradeItem, saveTrade, ty
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
-import type { BusinessExpenseCategory, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
+import type { BusinessExpenseCategory, CardCondition, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
 import { allocateTransactionTotal, transactionReview, type AllocationMethod } from "../utils/transactionMath";
@@ -391,6 +391,11 @@ export function UnifiedTransactionPage() {
               setEditing(item);
               updateItem(item);
             })}</label>
+            {transaction.transactionType === "sale" ? <label><span className="text-xs font-black">Original cost basis</span>{moneyInput(editing.historicalCostBasis, (historicalCostBasis) => {
+              const item = { ...editing, historicalCostBasis };
+              setEditing(item);
+              updateItem(item);
+            })}</label> : null}
             <label><span className="text-xs font-black">Collector number</span><input value={editing.collectorNumber || ""} onChange={(event) => {
               const item = { ...editing, collectorNumber: event.target.value };
               setEditing(item);
@@ -407,7 +412,7 @@ export function UnifiedTransactionPage() {
               updateItem(item);
             }} className={input} /></label>
             <label><span className="text-xs font-black">Condition</span><input value={editing.cardCondition || ""} onChange={(event) => {
-              const item = { ...editing, cardCondition: event.target.value };
+              const item = { ...editing, cardCondition: (event.target.value || undefined) as CardCondition | undefined };
               setEditing(item);
               updateItem(item);
             }} className={input} /></label>
@@ -417,7 +422,14 @@ export function UnifiedTransactionPage() {
             setEditing(item);
             updateItem(item);
           }} />
-        </> : <label><span className="text-xs font-black">Amount</span>{moneyInput(transaction.bundleTotal, (bundleTotal) => setTransaction({ ...transaction, bundleTotal }))}</label>}
+        </> : <label><span className="text-xs font-black">Amount</span>{moneyInput(editing.boughtPrice, (boughtPrice) => {
+          const item = { ...editing, boughtPrice, allocatedCostBasis: boughtPrice };
+          setEditing(item);
+          setTransaction((current) => {
+            const items = current.items.map((value) => value.id === item.id ? item : value);
+            return { ...current, items, bundleTotal: items.reduce((sum, value) => sum + Number(value.boughtPrice || 0), 0) };
+          });
+        })}</label>}
         <ImageAttachmentField
           label="Item front / detail photos"
           description="Use an individual photo, a crop, or link the transaction group photo."

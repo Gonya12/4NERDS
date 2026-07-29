@@ -74,8 +74,43 @@ function toSheet(table: FinancialExportTable): Sheet<Blob> {
   };
 }
 
+function excelColumnName(index: number) {
+  let value = index;
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + value % 26) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+}
+
+async function addSheetFilters(blob: Blob, tables: FinancialExportTable[]) {
+  const { strFromU8, strToU8, unzipSync, zipSync } = await import("fflate");
+  const files = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+  tables.forEach((table, index) => {
+    const path = `xl/worksheets/sheet${index + 1}.xml`;
+    const source = files[path];
+    if (!source) return;
+    const xml = strFromU8(source);
+    const reference = `A1:${excelColumnName(table.headers.length)}${Math.max(1, table.rows.length + 1)}`;
+    files[path] = strToU8(xml.replace("</sheetData>", `</sheetData><autoFilter ref="${reference}"/>`));
+  });
+  return new Blob([zipSync(files, { level: 6 }) as Uint8Array<ArrayBuffer>], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  });
+}
+
 export async function downloadFinancialWorkbook(data: FinancialExportData) {
   const { default: writeXlsxFile } = await import("write-excel-file/browser");
-  const sheets: Sheet<Blob>[] = requiredSheets.map((key) => toSheet(data.tables[key]));
-  await writeXlsxFile(sheets).toFile(`4Nerds_Financial_Workbook_${data.rangeLabel}.xlsx`);
+  const tables = requiredSheets.map((key) => data.tables[key]);
+  const sheets: Sheet<Blob>[] = tables.map(toSheet);
+  const workbook = await writeXlsxFile(sheets).toBlob();
+  const filteredWorkbook = await addSheetFilters(workbook, tables);
+  const url = URL.createObjectURL(filteredWorkbook);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `4Nerds_Financial_Workbook_${data.rangeLabel}.xlsx`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }

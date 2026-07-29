@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createCsv, financialExportFilename, type CsvTable } from "../src/services/sales/financialCsvService.ts";
+
+const table: CsvTable = {
+  headers: ["Name", "Notes", "Amount"],
+  kinds: ["text", "text", "currency"],
+  rows: [["Pikachu", "Line one\nLine two", 12.5], ["=2+2", "A \"quoted\" value", -4]]
+};
+
+test("CSV uses BOM, CRLF, quoting, and formula-injection protection", () => {
+  const csv = createCsv(table);
+  assert.ok(csv.startsWith("\uFEFF"));
+  assert.ok(csv.includes("\r\n"));
+  assert.ok(csv.includes("\"Line one\nLine two\""));
+  assert.ok(csv.includes("\"A \"\"quoted\"\" value\""));
+  assert.ok(csv.includes("\"'=2+2\""));
+  assert.ok(csv.endsWith("\r\n"));
+});
+
+test("CSV filenames are descriptive and range-specific", () => {
+  assert.equal(financialExportFilename("daily", "2026-07-01_to_2026-07-29"), "4Nerds_Daily_Summary_2026-07-01_to_2026-07-29.csv");
+});

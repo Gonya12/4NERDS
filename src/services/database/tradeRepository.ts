@@ -6,6 +6,7 @@ import { saveInventoryOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
 import { transactionReview } from "../../utils/transactionMath";
+import { roundMoney } from "../../utils/paymentMath";
 
 const localKey = "4nerds_financial_transactions_local_v1";
 const cacheKey = "4nerds_financial_transactions_cache_v1";
@@ -353,28 +354,57 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     onProgress?.("inventory");
     for (const item of items) {
       const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
-      if (!source || source.status !== "in_stock") throw new Error(`${item.itemName} is no longer available.`);
+      if (item.inventoryPurchaseId && (!source || source.status !== "in_stock")) throw new Error(`${item.itemName} is no longer available.`);
       const result = await createSaleRecord({
         eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
         imagePath: item.imagePath || transaction.generalImagePath, itemName: item.itemName, category: item.itemType, quantity: item.quantity,
         soldPrice: item.soldPrice || 0, boughtPrice: item.historicalCostBasis, marketValue: item.marketValue,
         paymentMethod: transaction.paymentMethod || "cash", soldByWorkerId: transaction.enteredByWorkerId,
-        inventoryPurchaseId: source.id, notes: item.notes || transaction.notes, soldAt: transaction.tradeDate,
+        inventoryPurchaseId: source?.id, notes: item.notes || transaction.notes, soldAt: transaction.tradeDate,
         financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
       item.createdSalesRecordId = result.sale.id;
-      await saveInventoryPurchase({
-        ...source, status: "sold", quantitySold: source.quantity, soldPrice: item.soldPrice || 0,
-        soldDate: transaction.tradeDate, soldByWorkerId: transaction.enteredByWorkerId, soldEventId: transaction.eventId,
-        soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id, financialTransactionItemId: item.id
-      });
+      if (source) {
+        await saveInventoryPurchase({
+          ...source, status: "sold", quantitySold: source.quantity, soldPrice: item.soldPrice || 0,
+          soldDate: transaction.tradeDate, soldByWorkerId: transaction.enteredByWorkerId, soldEventId: transaction.eventId,
+          soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id, financialTransactionItemId: item.id
+        });
+      }
     }
     transaction.cashReceived = transaction.items.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0);
   } else if (transaction.transactionType === "purchase") {
     const items = transaction.items.filter((item) => item.direction === "incoming");
     if (!items.length) throw new Error("Add at least one purchased item.");
     onProgress?.("inventory");
-    for (const item of items) {
+    if (transaction.keepAsBundle && items.length > 1) {
+      const totalCost = items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0);
+      const totalMarketValue = items.reduce((sum, item) => sum + Number(item.marketValue || 0), 0);
+      const ownership = new Map<string, number>();
+      items.forEach((item) => {
+        const weight = totalCost > 0 ? Number(item.boughtPrice || item.allocatedCostBasis || 0) / totalCost : 1 / items.length;
+        item.ownershipShares.forEach((share) => ownership.set(share.workerId, (ownership.get(share.workerId) || 0) + share.ownershipPercentage * weight));
+      });
+      const ownershipShares = Array.from(ownership, ([workerId, ownershipPercentage]) => ({
+        id: id("ownership"), workerId, ownershipPercentage: roundMoney(ownershipPercentage)
+      }));
+      const saved = await saveInventoryPurchase({
+        itemName: transaction.tradePartner ? `Lot from ${transaction.tradePartner}` : items.map((item) => item.itemName).filter(Boolean).slice(0, 3).join(" + ") || "Inventory lot",
+        category: items.every((item) => item.itemType === items[0].itemType) ? items[0].itemType : "other_pokemon_product",
+        quantity: items.reduce((sum, item) => sum + Number(item.quantity || 1), 0), quantitySold: 0, purchaseDate: transaction.tradeDate,
+        totalCost, marketValue: totalMarketValue, isRawCard: items.every((item) => item.itemType === "raw_card"),
+        purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
+        purchasedByWorkerId: transaction.paidByWorkerId, notes: transaction.notes, status: "in_stock",
+        imageUrl: transaction.generalImageUrl || items.find((item) => item.imageUrl)?.imageUrl,
+        imagePath: transaction.generalImagePath || items.find((item) => item.imagePath)?.imagePath,
+        acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: items[0].id
+      });
+      items.forEach((item) => { item.createdInventoryPurchaseId = saved.id; });
+      if (ownershipShares.length) {
+        onProgress?.("ownership");
+        await saveInventoryOwnership(saved.id, ownershipShares);
+      }
+    } else for (const item of items) {
       const saved = await saveInventoryPurchase({
         itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
         totalCost: item.boughtPrice || item.allocatedCostBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
@@ -396,9 +426,9 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     const amount = transaction.bundleTotal ?? transaction.cashPaid;
     const expense = await saveBusinessExpense({
       expenseDate: transaction.tradeDate, amount, category: transaction.expenseCategory || "other",
-      description: transaction.items[0]?.itemName || transaction.notes || "Business expense", eventId: transaction.eventId,
-      paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner, receiptImageUrl: transaction.generalImageUrl,
-      receiptImagePath: transaction.generalImagePath, notes: transaction.notes, financialTransactionId: transaction.id,
+      description: transaction.items.map((item) => item.itemName).filter(Boolean).join("; ") || transaction.notes || "Business expense", eventId: transaction.eventId,
+      paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner, receiptImageUrl: transaction.proofImageUrl || transaction.generalImageUrl,
+      receiptImagePath: transaction.proofImagePath || transaction.generalImagePath, notes: transaction.notes, financialTransactionId: transaction.id,
       financialTransactionItemId: transaction.items[0]?.id
     });
     if (transaction.items[0]) transaction.items[0].createdBusinessExpenseId = expense.id;

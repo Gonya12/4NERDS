@@ -27,6 +27,10 @@ import {
   buildFinancialExportData, downloadCsv, financialExportFilename,
   type FinancialExportFilters, type FinancialExportKind
 } from "../services/sales/financialExportService";
+import {
+  transactionEditorBasePath, transactionEditorDestination,
+  type TransactionEntryMode, type TransactionFlowType
+} from "../services/sales/transactionFlowRoutes";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 import type {
   BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
@@ -47,8 +51,6 @@ const CardScanPanel = lazy(() => import("../components/sales/CardScanPanel").the
 const BatchInventoryImporter = lazy(() => import("../components/sales/BatchInventoryImporter").then((module) => ({ default: module.BatchInventoryImporter })));
 
 type Editor = "sale" | "purchase" | "expense" | null;
-type TransactionFlowType = "sold" | "purchased" | "cost" | "trade" | "cash_trade";
-type TransactionEntryMode = "single" | "multiple";
 type TransactionFlowStage = "closed" | "choose_type" | "choose_subtype" | "choose_mode" | "opening" | "editing" | "error";
 type TransactionFlowState = {
   stage: TransactionFlowStage;
@@ -337,7 +339,7 @@ export function SalesControlPage() {
     flowTimerRef.current = undefined;
     if (transactionFlow.stage === "choose_mode") {
       setTransactionFlow((current) => current.transactionType === "purchased" || current.transactionType === "cost"
-        ? { ...closedTransactionFlow, stage: "choose_subtype" }
+        ? { ...closedTransactionFlow, stage: "choose_subtype", transactionType: current.transactionType }
         : { ...closedTransactionFlow, stage: "choose_type" });
       return true;
     }
@@ -357,14 +359,10 @@ export function SalesControlPage() {
   function selectTransactionType(type: TransactionFlowType) {
     traceTransactionFlow("selected transaction type", { type });
     if (type === "purchased" || type === "cost") {
-      setTransactionFlow({ stage: "choose_subtype", transactionType: null, entryMode: null, editorPath: "" });
+      setTransactionFlow({ stage: "choose_subtype", transactionType: type, entryMode: null, editorPath: "" });
       return;
     }
-    const editorPath = type === "sold"
-      ? "/sales/transactions/new?type=sale"
-      : type === "trade"
-        ? "/sales/trades?new=trade"
-        : "/sales/trades?new=cash_trade";
+    const editorPath = transactionEditorBasePath(type);
     setTransactionFlow({ stage: "choose_mode", transactionType: type, entryMode: null, editorPath });
   }
 
@@ -387,10 +385,11 @@ export function SalesControlPage() {
       setTransactionFlow((current) => ({ ...current, stage: "error", error: "This transaction editor is not available yet." }));
       return;
     }
-    const destination = `${editorPath}${editorPath.includes("?") ? "&" : "?"}items=${mode}`;
+    const destination = transactionEditorDestination(editorPath, mode);
     try {
+      setTransactionFlow((current) => ({ ...current, stage: "editing", entryMode: mode }));
       traceTransactionFlow("route navigation started", { destination });
-      navigate(destination);
+      navigate(destination, { replace: true });
       traceTransactionFlow("route navigation completed", { destination });
     } catch (error) {
       traceTransactionFlow("route navigation failed", { destination, error: error instanceof Error ? error.message : String(error) });
@@ -844,45 +843,6 @@ export function SalesControlPage() {
     </div>;
   }
 
-  /*
-  function exportData() {
-    const rows = [
-      ["Type", "Date", "Item / Description", "Category", "Revenue", "Cost", "Event", "Worker"],
-      ...sales.map((sale) => ["Sale", sale.soldAt, sale.itemName || "", pokemonCategoryLabels[sale.category || "other_pokemon_product"], sale.soldPrice || 0, sale.boughtPrice || 0, eventMap.get(sale.eventId || "")?.name || "", workerMap.get(sale.soldByWorkerId || "")?.name || ""]),
-      ...purchases.map((purchase) => ["Inventory Purchase", purchase.purchaseDate, purchase.itemName, pokemonCategoryLabels[purchase.category], "", purchase.totalCost, eventMap.get(purchase.eventId || "")?.name || "", workerMap.get(purchase.purchasedByWorkerId || "")?.name || ""]),
-      ...expenses.map((expense) => ["Expense", expense.expenseDate, expense.description, expenseCategoryLabels[expense.category], "", expense.amount, eventMap.get(expense.eventId || "")?.name || "", workerMap.get(expense.paidByWorkerId || "")?.name || ""]),
-      ...trades.map((trade) => ["Trade", trade.tradeDate, `${trade.items.filter((item) => item.direction === "outgoing").map((item) => item.itemName).join(" + ")} → ${trade.items.filter((item) => item.direction === "incoming").map((item) => item.itemName).join(" + ")}`, "Trade", trade.cashReceived, trade.cashPaid, eventMap.get(trade.eventId || "")?.name || "", workerMap.get(trade.enteredByWorkerId || "")?.name || ""])
-    ];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const link = document.createElement("a"); link.href = url; link.download = `4-nerds-finances-${isoDay(new Date().toISOString())}.csv`; link.click(); URL.revokeObjectURL(url);
-  }
-
-  async function exportExcel() {
-    setExporting(true);
-    setMessage("");
-    try {
-      const dateFiltered = filterFinancialRecords(sales, purchases, expenses, events, dateRange, customStart, customEnd);
-      const data = exportScope === "filtered" || exportScope === "date_range" ? dateFiltered : { sales, purchases, expenses, events };
-      const scoped = exportScope === "sales" ? { ...data, purchases: [], expenses: [] }
-        : exportScope === "inventory" ? { ...data, sales: [], expenses: [] }
-        : exportScope === "expenses" ? { ...data, sales: [], purchases: [] }
-        : exportScope === "event" ? {
-          sales: sales.filter((row) => row.eventId === exportEventId),
-          purchases: purchases.filter((row) => row.eventId === exportEventId || row.soldEventId === exportEventId),
-          expenses: expenses.filter((row) => row.eventId === exportEventId),
-          events: events.filter((row) => row.id === exportEventId)
-        } : data;
-      const scopedTrades = exportScope === "event" ? trades.filter((row) => row.eventId === exportEventId) : trades;
-      await downloadFinancialWorkbook({ ...scoped, trades: scopedTrades, workers, scopeLabel: exportScope === "event" ? eventMap.get(exportEventId)?.name || "Selected event" : exportScope.replace(/_/g, " ") });
-      setExportOpen(false);
-      setMessage("Excel workbook downloaded.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the Excel workbook."); }
-    finally { setExporting(false); }
-  }
-
-  */
-
   async function listAllSalesForExport() {
     const records: SalesRecord[] = [];
     const pageSize = 500;
@@ -1064,8 +1024,8 @@ export function SalesControlPage() {
             onClick={() => selectTransactionType("cash_trade")}
           />
         </div> : null}
-        {transactionFlow.stage === "choose_subtype" ? <div className="space-y-4"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton type="button" variant="secondary" key={label} onClick={() => selectTransactionSubtype("purchased", `/sales/transactions/new?type=purchase&source=${source}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton type="button" variant="ghost" key={label} onClick={() => selectTransactionSubtype("cost", `/sales/transactions/new?type=expense&category=${category}`)} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
-        {transactionFlow.stage === "choose_mode" ? <div className="space-y-3"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow((current) => current.transactionType === "purchased" || current.transactionType === "cost" ? { stage: "choose_subtype", transactionType: null, entryMode: null, editorPath: "" } : { ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div className="grid gap-3 md:grid-cols-2"><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" onClick={() => selectEntryMode("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" onClick={() => selectEntryMode("multiple")} /></div></div> : null}
+        {transactionFlow.stage === "choose_subtype" ? <div className="space-y-4"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-sky-300">Inventory purchase</p><div className="grid grid-cols-2 gap-2">{[["Card Show","card_show"],["Online","online"],["Private Seller / Local","local"],["Collection or Lot","other"],["Other Inventory Source","other"]].map(([label,source]) => <AppButton type="button" variant="secondary" key={label} onClick={() => selectTransactionSubtype("purchased", transactionEditorBasePath("purchased", { source }))} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div><div><p className="mb-2 text-xs font-black uppercase tracking-wider text-amber-300">Business cost</p><div className="grid grid-cols-2 gap-2">{[["General Expense","other"],["Event Table Fee","event_table_fee"],["Gas / Tolls / Parking","gas"],["Food","food"],["Supplies","supplies"],["Other Business Cost","other"]].map(([label,category]) => <AppButton type="button" variant="ghost" key={label} onClick={() => selectTransactionSubtype("cost", transactionEditorBasePath("cost", { category }))} className="h-auto min-h-12 px-3 text-left">{label}</AppButton>)}</div></div></div> : null}
+        {transactionFlow.stage === "choose_mode" ? <div className="space-y-3"><AppButton type="button" variant="ghost" onClick={() => setTransactionFlow((current) => current.transactionType === "purchased" || current.transactionType === "cost" ? { stage: "choose_subtype", transactionType: current.transactionType, entryMode: null, editorPath: "" } : { ...closedTransactionFlow, stage: "choose_type" })} className="min-h-11 px-3"><ArrowLeft size={16} /> Back</AppButton><div className="grid gap-3 md:grid-cols-2"><ActionCard title="Single item" description="Fast entry for one card, product, or cost." icon={<Receipt size={24} />} accent="orange" onClick={() => selectEntryMode("single")} /><ActionCard title="Multiple items / lot" description="Enter several items in one unified transaction." icon={<PackagePlus size={24} />} accent="purple" onClick={() => selectEntryMode("multiple")} /></div></div> : null}
         {transactionFlow.stage === "opening" ? <div className="loading-state-card bg-white/5 text-white" role="status" aria-live="polite" aria-busy="true"><span className="loading-state-orbit"><RotateCcw size={28} /></span><p className="font-black">{transactionFlow.openingLabel}</p><p className="mt-1 text-sm text-slate-400">Your transaction type and entry mode are preserved.</p></div> : null}
         {transactionFlow.stage === "error" ? <div className="space-y-4"><p role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-4 text-sm font-bold text-rose-100">{transactionFlow.error}</p><div className="grid gap-2 sm:grid-cols-3"><AppButton type="button" onClick={() => transactionFlow.entryMode && selectEntryMode(transactionFlow.entryMode)}>Retry</AppButton><AppButton type="button" variant="secondary" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })}>Return</AppButton><AppButton type="button" variant="ghost" onClick={closeTransactionFlow}>Close</AppButton></div></div> : null}
       </ResponsiveModal>

@@ -7,6 +7,7 @@ import { roundMoney } from "../../utils/paymentMath";
 import { expenseCategoryLabels, inventoryQuantitySummary, pokemonCategoryLabels } from "../../utils/salesControl";
 import { dailyFinancialSummary, transactionReview } from "../../utils/transactionMath";
 import { tradeSummary } from "../../utils/tradeMath";
+export { createCsv, downloadCsv, financialExportFilename } from "./financialCsvService";
 
 export type FinancialExportKind = "transactions" | "items" | "inventory" | "expenses" | "trades" | "daily" | "all";
 export type ExportValue = string | number | boolean | Date | null | undefined;
@@ -321,32 +322,4 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     processedRecords: transactions.length + legacySales.length + legacyPurchases.length + legacyExpenses.length,
     rangeLabel
   };
-}
-
-function safeCsvText(value: ExportValue) {
-  if (value === null || value === undefined) return "";
-  const string = value instanceof Date ? value.toISOString() : String(value);
-  const protectedValue = /^[=+\-@]/.test(string.trimStart()) ? `'${string}` : string;
-  return `"${protectedValue.replace(/"/g, '""')}"`;
-}
-
-export function createCsv(table: FinancialExportTable) {
-  return `\uFEFF${[table.headers, ...table.rows].map((row) => row.map(safeCsvText).join(",")).join("\r\n")}\r\n`;
-}
-
-export function financialExportFilename(kind: FinancialExportKind, rangeLabel: string) {
-  const labels: Record<FinancialExportKind, string> = {
-    transactions: "Transactions", items: "Items", inventory: "Inventory", expenses: "Expenses",
-    trades: "Trades", daily: "Daily_Summary", all: "All_Financial_Records"
-  };
-  return `4Nerds_${labels[kind]}_${rangeLabel}.csv`;
-}
-
-export function downloadCsv(table: FinancialExportTable, filename: string) {
-  const url = URL.createObjectURL(new Blob([createCsv(table)], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
