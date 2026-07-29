@@ -1,14 +1,14 @@
 import {
-  ArrowLeft, ArrowRight, Camera, Check, ChevronDown, ChevronUp, Copy, ImagePlus, Link2,
-  PackagePlus, RefreshCcw, Save, Search, ShieldAlert, Trash2, Upload, X
+  ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, Copy, Link2,
+  PackagePlus, RefreshCcw, Save, Search, Trash2, Upload, X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
-import { ImageLightbox } from "../components/sales/ImageLightbox";
+import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
-import { ConfirmDialog, LoadingOverlay, ProgressSteps, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
+import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import {
   blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade, saveTrade, type TransactionSaveStage
@@ -17,7 +17,7 @@ import { getCachedInventoryPurchases, listInventoryPurchases } from "../services
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
-import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, Worker } from "../types/models";
+import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { pokemonCategoryLabels } from "../utils/salesControl";
 import { allocateBasis, ownershipIsValid, tradeSummary } from "../utils/tradeMath";
@@ -29,12 +29,6 @@ const tradeSaveSteps: ProgressStep[] = [
   { id: "inventory", label: "Updating outgoing inventory" },
   { id: "ownership", label: "Creating incoming inventory" },
   { id: "finalizing", label: "Saving lineage & final status" }
-];
-const tradeImageSteps: ProgressStep[] = [
-  { id: "preparing", label: "Preparing" },
-  { id: "compressing", label: "Compressing" },
-  { id: "uploading", label: "Uploading" },
-  { id: "saving", label: "Saving reference" }
 ];
 const localTradeDraftKey = "4nerds:transaction-draft:trade";
 type LocalTradeDraft = { trade: TradeTransaction; step: number; savedAt: string };
@@ -263,19 +257,71 @@ function TradeEditor(props: EditorProps) {
   const [inventorySearch, setInventorySearch] = useState("");
   const [editingItem, setEditingItem] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
-  const [preview, setPreview] = useState<{ url: string; title: string }>();
-  const [uploadStage, setUploadStage] = useState<ImageUploadStage | undefined>(undefined);
-  const fileToDataUrl = async (file: File) => {
-    await saveTrade(trade);
-    const result = await saveTransactionImage(file, trade.id, editingItem?.id, editingItem ? "item" : "transaction", setUploadStage);
-    window.setTimeout(() => setUploadStage(undefined), 650);
-    return result.imageUrl;
-  };
-  const uploadStageIndex = uploadStage === "preparing" ? 0 : uploadStage === "compressing" ? 1 : uploadStage === "uploading" ? 2 : 3;
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
   const update = (patch: Partial<TradeTransaction>) => onChange({ ...trade, ...patch });
   const updateItem = (item: TradeItem) => update({ items: trade.items.map((row) => row.id === item.id ? item : row) });
   const removeItem = (id: string) => update({ items: trade.items.filter((row) => row.id !== id) });
+  const transactionImages = trade.images || [];
+  const generalImages = transactionImages.filter((image) => image.imageType === "general");
+  const proofImages = transactionImages.filter((image) => image.imageType === "proof" || image.imageType === "receipt");
+  const sharedImage = generalImages[0];
+  const imageUploading = busyImageFields.size > 0;
+  const onImageBusyChange = useCallback((fieldId: string, active: boolean) => {
+    setBusyImageFields((current) => {
+      const next = new Set(current);
+      if (active) next.add(fieldId);
+      else next.delete(fieldId);
+      return next;
+    });
+  }, []);
+
+  async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string) {
+    const persisted = await saveTrade(trade, { syncImages: false });
+    const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress);
+    return {
+      id: crypto.randomUUID(),
+      transactionId: persisted.id,
+      transactionItemId: itemId,
+      imageType,
+      imageUrl: result.imageUrl,
+      imagePath: result.imagePath,
+      sortOrder: 0
+    } satisfies TransactionImageAttachment;
+  }
+
+  async function changeTransactionImages(types: TransactionImageType[], next: TransactionImageAttachment[]) {
+    const images = [...(trade.images || []).filter((image) => !types.includes(image.imageType)), ...next];
+    const general = images.find((image) => image.imageType === "general");
+    const proof = images.find((image) => image.imageType === "proof" || image.imageType === "receipt");
+    const updated = {
+      ...trade,
+      images,
+      generalImageUrl: general?.imageUrl,
+      generalImagePath: general?.imagePath,
+      proofImageUrl: proof?.imageUrl,
+      proofImagePath: proof?.imagePath
+    };
+    onChange(updated);
+    await saveTrade(updated);
+  }
+
+  async function changeItemImages(item: TradeItem, types: TransactionImageType[], next: TransactionImageAttachment[]) {
+    const images = [...(item.images || []).filter((image) => !types.includes(image.imageType)), ...next];
+    const front = images.find((image) => image.imageType !== "back");
+    const back = images.find((image) => image.imageType === "back");
+    const changed = {
+      ...item,
+      images,
+      imageUrl: front?.imageUrl,
+      imagePath: front?.imagePath,
+      backImageUrl: back?.imageUrl,
+      backImagePath: back?.imagePath
+    };
+    setEditingItem(changed);
+    const updated = { ...trade, items: trade.items.map((row) => row.id === item.id ? changed : row) };
+    onChange(updated);
+    await saveTrade(updated);
+  }
   const available = props.inventory.filter((row) => row.status === "in_stock" && row.quantity > row.quantitySold).filter((row) => {
     const term = inventorySearch.toLowerCase();
     return !term || `${row.itemName} ${row.cardName || ""} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.certificateNumber || ""} ${row.pokemonTcgCardId || ""} ${row.id}`.toLowerCase().includes(term);
@@ -306,34 +352,10 @@ function TradeEditor(props: EditorProps) {
     const allocated = allocateBasis(Math.max(0, basis), summary.incoming, method);
     update({ items: trade.items.map((item) => allocated.find((row) => row.id === item.id) || item) });
   };
-  async function pasteImage() {
-    try {
-      const clipboardItems = await navigator.clipboard?.read?.();
-      const clipboardItem = clipboardItems?.find((item) => item.types.some((type) => type.startsWith("image/")));
-      const imageType = clipboardItem?.types.find((type) => type.startsWith("image/"));
-      if (!clipboardItem || !imageType || !editingItem) return;
-      const blob = await clipboardItem.getType(imageType);
-      const file = new File([blob], "pasted-trade-image.png", { type: imageType });
-      const url = await fileToDataUrl(file); const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
-    } catch {
-      setUploadStage(undefined);
-    }
-  }
-  async function chooseImage(file?: File) {
-    if (!file || !editingItem) return;
-    try {
-      const url = await fileToDataUrl(file);
-      const item = { ...editingItem, imageUrl: url }; setEditingItem(item); updateItem(item);
-    } catch {
-      setUploadStage(undefined);
-    }
-  }
-
   return <div className="page-shell min-w-0 overflow-x-hidden pb-28">
-    <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">Trade editor · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button onClick={props.onClose} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={19} /></button></header>
-    <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
+    <header className="flex items-start justify-between gap-3"><div><p className="eyebrow">Trade editor · Draft</p><h1 className="text-2xl font-black">{steps[props.step]}</h1></div><button onClick={props.onClose} disabled={imageUploading} aria-label="Close trade editor" className="rounded-full bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><X size={19} /></button></header>
+    <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} disabled={imageUploading} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full disabled:opacity-50 ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
     {props.message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{props.message}</p> : null}
-    {uploadStage ? <ProgressSteps steps={tradeImageSteps} activeStep={uploadStageIndex} complete={uploadStage === "complete"} title="Uploading image" /> : null}
 
     {props.step === 0 ? <section className="surface-card grid gap-3 p-4 sm:grid-cols-2">
       <label><span className="mb-1 block text-xs font-black">Trade date and time</span><input type="datetime-local" value={localInput(trade.tradeDate)} onChange={(event) => update({ tradeDate: new Date(event.target.value).toISOString() })} className={inputClass} /></label>
@@ -341,7 +363,30 @@ function TradeEditor(props: EditorProps) {
       <label><span className="mb-1 block text-xs font-black">Trade partner/customer</span><input value={trade.tradePartner || ""} onChange={(event) => update({ tradePartner: event.target.value })} className={inputClass} /></label>
       <label><span className="mb-1 block text-xs font-black">Entered by worker</span><select value={trade.enteredByWorkerId || ""} onChange={(event) => update({ enteredByWorkerId: event.target.value || undefined })} className={inputClass}><option value="">Unassigned</option>{props.workers.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
       <label className="sm:col-span-2"><span className="mb-1 block text-xs font-black">Notes</span><textarea value={trade.notes || ""} onChange={(event) => update({ notes: event.target.value })} rows={3} className={inputClass} /></label>
-      <label className="sm:col-span-2"><span className="mb-1 block text-xs font-black">General trade photo / proof screenshot</span><input type="file" accept="image/*" capture="environment" onChange={async (event) => { const file = event.target.files?.[0]; if (file) update({ generalImageUrl: await fileToDataUrl(file) }); }} className={inputClass} />{trade.generalImageUrl ? <button onClick={() => setPreview({ url: trade.generalImageUrl!, title: "Trade photo" })} className="mt-2 text-sm font-black text-violet-600">View large image</button> : null}</label>
+      <ImageAttachmentField
+        label="General trade photos"
+        description="Add one group photo for the trade and reuse it on individual items without duplicate uploads."
+        attachments={generalImages}
+        imageType="general"
+        transactionId={trade.id}
+        multiple
+        maxImages={5}
+        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress)}
+        onChange={(images) => changeTransactionImages(["general"], images)}
+        onBusyChange={onImageBusyChange}
+      />
+      <ImageAttachmentField
+        label="Trade proof or payment screenshots"
+        description="Optional proof of the full trade, receipt, or payment screenshot."
+        attachments={proofImages}
+        imageType="proof"
+        transactionId={trade.id}
+        multiple
+        maxImages={3}
+        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress)}
+        onChange={(images) => changeTransactionImages(["proof", "receipt"], images)}
+        onBusyChange={onImageBusyChange}
+      />
     </section> : null}
 
     {props.step === 1 ? <section className="space-y-3"><div className="surface-card p-4"><h2 className="text-lg font-black text-orange-600">WE GAVE</h2><p className="text-sm text-slate-500">Only available inventory can be selected.</p><label className="relative mt-3 block"><Search size={17} className="absolute left-3 top-3.5 text-slate-400" /><input value={inventorySearch} onChange={(event) => setInventorySearch(event.target.value)} placeholder="Name, API ID, collector #, set, certificate, inventory ID…" className={`${inputClass} pl-10`} /></label><div className="mt-3 max-h-80 space-y-2 overflow-y-auto">{available.map((purchase) => <button key={purchase.id} onClick={() => addOutgoing(purchase)} className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-2 text-left dark:border-slate-800">{purchase.imageUrl ? <img src={purchase.imageUrl} className="size-14 rounded-lg object-contain" /> : <div className="size-14 rounded-lg bg-slate-100" />}<span className="min-w-0 flex-1"><b className="block truncate">{purchase.itemName}</b><small className="block truncate text-slate-500">#{purchase.collectorNumber || "—"} · {purchase.cardSet || "No set"} · {formatMoney(purchase.marketValue || 0)} market · {formatMoney(purchase.totalCost)} basis</small></span><PackagePlus size={18} className="text-violet-600" /></button>)}</div></div><ItemList title="Selected outgoing items" items={summary.outgoing} workers={props.workers} onEdit={setEditingItem} onRemove={removeItem} /></section> : null}
@@ -354,19 +399,52 @@ function TradeEditor(props: EditorProps) {
 
     {props.step === 5 ? <section className="space-y-3"><TradeSummaryCard trade={trade} /><div className="surface-card p-4"><h2 className="font-black">Completion checks</h2><ul className="mt-2 space-y-2 text-sm font-bold"><li className={summary.outgoing.length ? "text-emerald-600" : "text-rose-600"}>{summary.outgoing.length ? "✓" : "○"} At least one outgoing item</li><li className={summary.incoming.length ? "text-emerald-600" : "text-rose-600"}>{summary.incoming.length ? "✓" : "○"} At least one incoming item</li><li className={summary.incoming.every(ownershipIsValid) ? "text-emerald-600" : "text-rose-600"}>{summary.incoming.every(ownershipIsValid) ? "✓" : "○"} Incoming ownership totals 100%</li><li className="text-violet-600">Trade values will not be counted as normal sales revenue.</li></ul></div></section> : null}
 
-    {editingItem ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/65 sm:items-center sm:p-4"><section className="max-h-[94dvh] w-full max-w-2xl space-y-3 overflow-y-auto rounded-t-3xl bg-white p-4 pb-8 dark:bg-slate-900 sm:rounded-3xl">
-      <div className="flex items-center justify-between"><h2 className="text-xl font-black">{editingItem.direction === "incoming" ? "Incoming item" : "Outgoing item"}</h2><button onClick={() => setEditingItem(undefined)} className="rounded-full bg-slate-100 p-2"><X size={18} /></button></div>
+    <ResponsiveModal
+      open={Boolean(editingItem)}
+      title={editingItem?.direction === "incoming" ? "Incoming item" : "Outgoing item"}
+      description="Edit item details, ownership, and image attachments."
+      onClose={() => setEditingItem(undefined)}
+      size="md"
+      dismissible={!imageUploading}
+    >
+      {editingItem ? <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Item name</span><input value={editingItem.itemName} onChange={(event) => { const item = { ...editingItem, itemName: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Item type</span><select value={editingItem.itemType} onChange={(event) => { const item = { ...editingItem, itemType: event.target.value as PokemonProductCategory }; setEditingItem(item); updateItem(item); }} className={inputClass}>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Quantity</span><input type="number" min="1" value={editingItem.quantity} onChange={(event) => { const item = { ...editingItem, quantity: Math.max(1, Number(event.target.value)) }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Collector number</span><input value={editingItem.collectorNumber || ""} onChange={(event) => { const item = { ...editingItem, collectorNumber: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Set</span><input value={editingItem.cardSet || ""} onChange={(event) => { const item = { ...editingItem, cardSet: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Market value</span>{money(editingItem.marketValue, (marketValue) => { const item = { ...editingItem, marketValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Agreed trade value</span>{money(editingItem.agreedTradeValue, (agreedTradeValue) => { const item = { ...editingItem, agreedTradeValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "outgoing" ? "Historical cost basis" : "Allocated cost basis"}</span>{money(editingItem.direction === "outgoing" ? editingItem.historicalCostBasis : editingItem.allocatedCostBasis, (value) => { const item = editingItem.direction === "outgoing" ? { ...editingItem, historicalCostBasis: value } : { ...editingItem, allocatedCostBasis: value }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Grading company</span><input value={editingItem.gradingCompany || ""} onChange={(event) => { const item = { ...editingItem, gradingCompany: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Grade / certificate</span><input value={[editingItem.grade, editingItem.certificateNumber].filter(Boolean).join(" / ")} onChange={(event) => { const [grade, certificateNumber] = event.target.value.split("/").map((value) => value.trim()); const item = { ...editingItem, grade, certificateNumber }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label></div>
-      {editingItem.direction === "incoming" ? <><div className="grid grid-cols-3 gap-2"><button onClick={() => fileRef.current?.click()} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><Upload size={16} className="mx-auto mb-1" /> Upload / Take Photo</button><button onClick={() => void pasteImage()} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><ImagePlus size={16} className="mx-auto mb-1" /> Paste Image</button><button onClick={() => setManualSearch(true)} className="rounded-xl bg-slate-100 p-2 text-xs font-black"><Search size={16} className="mx-auto mb-1" /> Search Card</button></div><input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void chooseImage(event.target.files?.[0])} />{editingItem.imageUrl ? <button onClick={() => setPreview({ url: editingItem.imageUrl!, title: editingItem.itemName })}><img src={editingItem.imageUrl} className="h-40 w-full rounded-xl object-contain" /></button> : null}</> : null}
+      <ImageAttachmentField
+        label="Item front / detail photos"
+        description="Add an individual image or link the shared trade photo. Available for incoming and outgoing items."
+        attachments={(editingItem.images || []).filter((image) => image.imageType === "front" || image.imageType === "item" || image.imageType === "crop")}
+        imageType="front"
+        transactionId={trade.id}
+        transactionItemId={editingItem.id}
+        multiple
+        maxImages={3}
+        reusableAttachment={sharedImage}
+        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress, editingItem.id)}
+        onChange={(images) => changeItemImages(editingItem, ["front", "item", "crop"], images)}
+        onBusyChange={onImageBusyChange}
+      />
+      <ImageAttachmentField
+        label="Slab back photo"
+        description="Optional back or certification-label photo."
+        attachments={(editingItem.images || []).filter((image) => image.imageType === "back")}
+        imageType="back"
+        transactionId={trade.id}
+        transactionItemId={editingItem.id}
+        maxImages={1}
+        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress, editingItem.id)}
+        onChange={(images) => changeItemImages(editingItem, ["back"], images)}
+        onBusyChange={onImageBusyChange}
+      />
+      {editingItem.direction === "incoming" ? <button type="button" onClick={() => setManualSearch(true)} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 p-2 text-xs font-black dark:bg-slate-800"><Search size={16} /> Search Pokémon card manually</button> : null}
       {editingItem.direction === "incoming" ? <label><span className="text-xs font-black">Trade percentage</span><input type="number" min="0" max="100" step=".1" value={editingItem.tradePercentage ?? 100} onChange={(event) => { const tradePercentage = Number(event.target.value || 0); const item = { ...editingItem, tradePercentage, agreedTradeValue: Math.round(editingItem.marketValue * tradePercentage) / 100 }; setEditingItem(item); updateItem(item); }} className={inputClass} /><small className="block text-slate-500">Accepted value: {formatMoney(editingItem.marketValue * (editingItem.tradePercentage ?? 100) / 100)}</small></label> : null}
       <OwnershipEditor workers={props.workers} shares={editingItem.ownershipShares} totalCost={editingItem.direction === "incoming" ? editingItem.allocatedCostBasis : editingItem.historicalCostBasis} label={`${editingItem.direction === "incoming" ? "Incoming" : "Outgoing"} item ownership`} onChange={(ownershipShares) => { const item = { ...editingItem, ownershipShares }; setEditingItem(item); updateItem(item); }} />
       <label><span className="text-xs font-black">Notes</span><textarea value={editingItem.notes || ""} onChange={(event) => { const item = { ...editingItem, notes: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label>
-      <button onClick={() => setEditingItem(undefined)} className="btn-primary w-full"><Check size={17} /> Done</button>
-    </section></div> : null}
+      <button type="button" disabled={imageUploading} onClick={() => setEditingItem(undefined)} className="btn-primary w-full disabled:opacity-50"><Check size={17} /> Done</button>
+    </div> : null}
+    </ResponsiveModal>
     {manualSearch && editingItem ? <ManualCardSearch open category={editingItem.itemType} initialName={editingItem.itemName} initialCollectorNumber={editingItem.collectorNumber} initialSet={editingItem.cardSet} onClose={() => setManualSearch(false)} onApply={(suggestion) => { const item = { ...editingItem, itemName: suggestion.cardName || editingItem.itemName, collectorNumber: suggestion.collectorNumber || undefined, cardSet: suggestion.cardSet || undefined, cardCondition: suggestion.condition || undefined, gradingCompany: suggestion.gradingCompany || undefined, grade: suggestion.grade || undefined, certificateNumber: suggestion.certificateNumber || undefined }; setEditingItem(item); updateItem(item); setManualSearch(false); }} /> : null}
-    {preview ? <ImageLightbox imageUrl={preview.url} title={preview.title} onClose={() => setPreview(undefined)} /> : null}
 
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:left-64"><div className="mx-auto flex max-w-5xl items-center gap-2"><button onClick={() => props.onStep(Math.max(0, props.step - 1))} disabled={props.step === 0} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-slate-100 px-3 font-black disabled:opacity-40 dark:bg-slate-800"><ArrowLeft size={17} /> Back</button><div className="min-w-0 flex-1 text-center text-xs font-black"><span className="block truncate">Given {formatMoney(summary.outgoingAgreed + trade.cashPaid)} · Received {formatMoney(summary.incomingAgreed + trade.cashReceived)}</span><span className={summary.agreedDifference >= 0 ? "text-emerald-600" : "text-rose-600"}>Difference {formatMoney(summary.agreedDifference)}</span></div><button onClick={props.onSave} disabled={props.saving} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-amber-100 px-3 font-black text-amber-800"><Save size={17} /><span className="hidden sm:inline">Save Draft</span></button>{props.step < 5 ? <button onClick={() => props.onStep(props.step + 1)} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-violet-600 px-3 font-black text-white">Next <ArrowRight size={17} /></button> : <button onClick={props.onComplete} disabled={props.saving} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-emerald-600 px-3 font-black text-white"><Check size={17} /> Complete</button>}</div></div>
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:left-64"><div className="mx-auto flex max-w-5xl items-center gap-2"><button onClick={() => props.onStep(Math.max(0, props.step - 1))} disabled={props.step === 0 || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-slate-100 px-3 font-black disabled:opacity-40 dark:bg-slate-800"><ArrowLeft size={17} /> Back</button><div className="min-w-0 flex-1 text-center text-xs font-black"><span className="block truncate">Given {formatMoney(summary.outgoingAgreed + trade.cashPaid)} · Received {formatMoney(summary.incomingAgreed + trade.cashReceived)}</span><span className={summary.agreedDifference >= 0 ? "text-emerald-600" : "text-rose-600"}>Difference {formatMoney(summary.agreedDifference)}</span></div><button onClick={props.onSave} disabled={props.saving || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-amber-100 px-3 font-black text-amber-800 disabled:opacity-50"><Save size={17} /><span className="hidden sm:inline">Save Draft</span></button>{props.step < 5 ? <button onClick={() => props.onStep(props.step + 1)} disabled={imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-violet-600 px-3 font-black text-white disabled:opacity-50">Next <ArrowRight size={17} /></button> : <button onClick={props.onComplete} disabled={props.saving || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-emerald-600 px-3 font-black text-white disabled:opacity-50"><Check size={17} /> Complete</button>}</div></div>
   </div>;
 }
 

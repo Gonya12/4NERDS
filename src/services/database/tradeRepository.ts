@@ -1,4 +1,4 @@
-import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction } from "../../types/models";
+import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction, TransactionImageAttachment, TransactionImageType } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
@@ -37,7 +37,17 @@ type ItemRow = {
 };
 type ShareRow = { id?: string; transaction_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
 type PaymentRow = { id: string; transaction_id: string; direction: "received" | "paid"; payment_method: string; amount: number };
-type ImageRow = { id: string; transaction_id: string; transaction_item_id?: string | null; image_type: string; image_url: string; image_path: string };
+type ImageRow = { id: string; transaction_id: string; transaction_item_id?: string | null; image_type: string; image_url: string; image_path: string; sort_order?: number | null };
+
+const imageAttachment = (row: ImageRow): TransactionImageAttachment => ({
+  id: row.id,
+  transactionId: row.transaction_id,
+  transactionItemId: row.transaction_item_id || undefined,
+  imageType: (row.image_type === "transaction" ? "general" : row.image_type) as TransactionImageType,
+  imageUrl: row.image_url,
+  imagePath: row.image_path,
+  sortOrder: Number(row.sort_order || 0)
+});
 
 function transactionImagePath(url?: string) {
   if (!url) return undefined;
@@ -126,9 +136,19 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
   const itemMap = new Map<string, TradeItem[]>();
   const imageRows = images.data as ImageRow[] || [];
   (items.data as ItemRow[] || []).forEach((row) => {
-    const image = imageRows.find((value) => value.transaction_item_id === row.id && value.image_type !== "back");
-    const back = imageRows.find((value) => value.transaction_item_id === row.id && value.image_type === "back");
-    const value = { ...fromItem(row, shareMap.get(row.id) || []), imageUrl: image?.image_url || row.image_url || undefined, imagePath: image?.image_path || row.image_path || undefined, backImageUrl: back?.image_url || row.back_image_url || undefined, backImagePath: back?.image_path || row.back_image_path || undefined };
+    const itemImages = imageRows
+      .filter((value) => value.transaction_item_id === row.id)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    const image = itemImages.find((value) => value.image_type !== "back");
+    const back = itemImages.find((value) => value.image_type === "back");
+    const value = {
+      ...fromItem(row, shareMap.get(row.id) || []),
+      images: itemImages.map(imageAttachment),
+      imageUrl: image?.image_url || row.image_url || undefined,
+      imagePath: image?.image_path || row.image_path || undefined,
+      backImageUrl: back?.image_url || row.back_image_url || undefined,
+      backImagePath: back?.image_path || row.back_image_path || undefined
+    };
     itemMap.set(row.transaction_id, [...(itemMap.get(row.transaction_id) || []), value]);
   });
   const paymentMap = new Map<string, { received: number; paid: number }>();
@@ -138,12 +158,16 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     paymentMap.set(row.transaction_id, current);
   });
   const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => ({
+    images: imageRows
+      .filter((value) => value.transaction_id === row.id && !value.transaction_item_id)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+      .map(imageAttachment),
     id: row.id, tradeDate: row.transaction_date, eventId: row.event_id || undefined, eventDayId: row.event_day_id || undefined,
     tradePartner: row.customer_or_seller || undefined, cashReceived: Number(row.cash_received ?? paymentMap.get(row.id)?.received ?? 0), cashPaid: Number(row.cash_paid ?? paymentMap.get(row.id)?.paid ?? 0),
-    notes: row.notes || undefined, generalImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && value.image_type === "transaction")?.image_url,
-    generalImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && value.image_type === "transaction")?.image_path,
-    proofImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && value.image_type === "proof")?.image_url,
-    proofImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && value.image_type === "proof")?.image_path, status: row.status,
+    notes: row.notes || undefined, generalImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_url,
+    generalImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "general" || value.image_type === "transaction" || value.image_type === "receipt"))?.image_path,
+    proofImageUrl: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "proof" || value.image_type === "receipt"))?.image_url,
+    proofImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "proof" || value.image_type === "receipt"))?.image_path, status: row.status,
     enteredByWorkerId: row.entered_by_worker_id || undefined, completedAt: row.completed_at || undefined, reversedAt: row.reversed_at || undefined,
     reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at, updatedAt: row.updated_at, items: itemMap.get(row.id) || []
     , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.pricing_mode || "individual",
@@ -160,7 +184,7 @@ export function listTrades() {
   return listFinancialTransactions(["trade", "cash_trade"]);
 }
 
-export async function saveTrade(input: TradeTransaction) {
+export async function saveTrade(input: TradeTransaction, options?: { syncImages?: boolean }) {
   const trade = { ...input, updatedAt: nowIso(), items: input.items.map((item) => ({ ...item, tradeTransactionId: input.id, updatedAt: nowIso() })) };
   if (!isSupabaseConfigured || !supabase) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
@@ -187,17 +211,6 @@ export async function saveTrade(input: TradeTransaction) {
   if (persistedTrade.items.length) {
     const itemResult = await supabase.from("financial_transaction_items").upsert(persistedTrade.items.map(itemRow));
     if (itemResult.error) throw new Error(itemResult.error.message);
-    for (const item of persistedTrade.items) {
-      const deletion = await supabase.from("transaction_item_ownership_shares").delete().eq("transaction_item_id", item.id);
-      if (deletion.error) throw new Error(deletion.error.message);
-      if (item.ownershipShares.length) {
-        const result = await supabase.from("transaction_item_ownership_shares").insert(item.ownershipShares.map((share) => ({
-          transaction_item_id: item.id, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
-          allocated_cost_basis: share.allocatedCostBasis ?? null, allocated_trade_value: share.allocatedTradeValue ?? null
-        })));
-        if (result.error) throw new Error(result.error.message);
-      }
-    }
   }
   const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("transaction_id", transactionId);
   if (existingPayments.error) throw new Error(existingPayments.error.message);
@@ -211,20 +224,65 @@ export async function saveTrade(input: TradeTransaction) {
   }));
   const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows);
   if (paymentResult.error) throw new Error(paymentResult.error.message);
-  const imageRows = [
-    persistedTrade.generalImageUrl && (persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)) ? { transaction_id: transactionId, transaction_item_id: null, image_type: "transaction", image_url: persistedTrade.generalImageUrl, image_path: persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)! } : null,
-    persistedTrade.proofImageUrl && (persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)) ? { transaction_id: transactionId, transaction_item_id: null, image_type: "proof", image_url: persistedTrade.proofImageUrl, image_path: persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)! } : null,
-    ...persistedTrade.items.flatMap((item) => [
-      item.imageUrl && (item.imagePath || transactionImagePath(item.imageUrl)) ? { transaction_id: transactionId, transaction_item_id: item.id, image_type: "item", image_url: item.imageUrl, image_path: item.imagePath || transactionImagePath(item.imageUrl)! } : null,
-      item.backImageUrl && (item.backImagePath || transactionImagePath(item.backImageUrl)) ? { transaction_id: transactionId, transaction_item_id: item.id, image_type: "back", image_url: item.backImageUrl, image_path: item.backImagePath || transactionImagePath(item.backImageUrl)! } : null
-    ])
-  ].filter(Boolean);
-  if (imageRows.length) {
-    const currentImages = await supabase.from("transaction_images").select("id,transaction_item_id,image_type").eq("transaction_id", transactionId);
-    if (currentImages.error) throw new Error(currentImages.error.message);
-    const withIds = imageRows.map((row) => ({ ...row!, id: currentImages.data?.find((value) => value.transaction_item_id === row!.transaction_item_id && value.image_type === row!.image_type)?.id || id("transaction-image"), updated_at: persistedTrade.updatedAt }));
-    const imageResult = await supabase.from("transaction_images").upsert(withIds);
+  if (options?.syncImages !== false) {
+  const transactionImages = persistedTrade.images?.length
+    ? persistedTrade.images
+    : [
+      persistedTrade.generalImageUrl && (persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)) ? {
+        id: id("transaction-image"), transactionId, imageType: "general" as const, imageUrl: persistedTrade.generalImageUrl,
+        imagePath: persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)!, sortOrder: 0
+      } : undefined,
+      persistedTrade.proofImageUrl && (persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)) ? {
+        id: id("transaction-image"), transactionId, imageType: "proof" as const, imageUrl: persistedTrade.proofImageUrl,
+        imagePath: persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)!, sortOrder: 1
+      } : undefined
+    ].filter(Boolean) as TransactionImageAttachment[];
+  const itemImages = persistedTrade.items.flatMap((item) => item.images?.length
+    ? item.images
+    : [
+      item.imageUrl && (item.imagePath || transactionImagePath(item.imageUrl)) ? {
+        id: id("transaction-image"), transactionId, transactionItemId: item.id, imageType: "front" as const,
+        imageUrl: item.imageUrl, imagePath: item.imagePath || transactionImagePath(item.imageUrl)!, sortOrder: 0
+      } : undefined,
+      item.backImageUrl && (item.backImagePath || transactionImagePath(item.backImageUrl)) ? {
+        id: id("transaction-image"), transactionId, transactionItemId: item.id, imageType: "back" as const,
+        imageUrl: item.backImageUrl, imagePath: item.backImagePath || transactionImagePath(item.backImageUrl)!, sortOrder: 1
+      } : undefined
+    ].filter(Boolean) as TransactionImageAttachment[]);
+  const desiredImages = [...transactionImages, ...itemImages].filter((image) => image.imagePath);
+  const currentImages = await supabase.from("transaction_images").select("id,transaction_item_id,image_type,image_path,sort_order").eq("transaction_id", transactionId);
+  if (currentImages.error) throw new Error(currentImages.error.message);
+  const desiredRows = desiredImages.map((image) => ({
+    id: image.id || currentImages.data?.find((value) => value.image_path === image.imagePath)?.id || id("transaction-image"),
+    transaction_id: transactionId,
+    transaction_item_id: image.transactionItemId || null,
+    image_type: image.imageType,
+    image_url: image.imageUrl,
+    image_path: image.imagePath!,
+    sort_order: image.sortOrder,
+    updated_at: persistedTrade.updatedAt
+  }));
+  if (desiredRows.length) {
+    const imageResult = await supabase.from("transaction_images").upsert(desiredRows);
     if (imageResult.error) throw new Error(imageResult.error.message);
+  }
+  const desiredIds = new Set(desiredRows.map((row) => row.id));
+  const removedImageIds = (currentImages.data || []).map((row) => row.id).filter((imageId) => !desiredIds.has(imageId));
+  if (removedImageIds.length) {
+    const removed = await supabase.from("transaction_images").delete().in("id", removedImageIds);
+    if (removed.error) throw new Error(removed.error.message);
+  }
+  }
+  for (const item of persistedTrade.items) {
+    const deletion = await supabase.from("transaction_item_ownership_shares").delete().eq("transaction_item_id", item.id);
+    if (deletion.error) throw new Error(deletion.error.message);
+    if (item.ownershipShares.length) {
+      const result = await supabase.from("transaction_item_ownership_shares").insert(item.ownershipShares.map((share) => ({
+        transaction_item_id: item.id, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
+        allocated_cost_basis: share.allocatedCostBasis ?? null, allocated_trade_value: share.allocatedTradeValue ?? null
+      })));
+      if (result.error) throw new Error(result.error.message);
+    }
   }
   return persistedTrade;
 }

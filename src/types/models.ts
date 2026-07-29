@@ -250,6 +250,17 @@ export type TradeDirection = "outgoing" | "incoming" | "expense";
 export type FinancialTransactionType = "sale" | "purchase" | "expense" | "trade" | "cash_trade";
 export type TransactionItemMode = "single" | "multiple";
 export type TransactionPricingMode = "individual" | "bundle_total";
+export type TransactionImageType = "general" | "receipt" | "proof" | "item" | "front" | "back" | "crop";
+
+export interface TransactionImageAttachment {
+  id: string;
+  transactionId: string;
+  transactionItemId?: string;
+  imageType: TransactionImageType;
+  imageUrl: string;
+  imagePath?: string;
+  sortOrder: number;
+}
 
 export interface TradeItemOwnershipShare extends OwnershipShare {
   allocatedCostBasis?: number;
@@ -280,6 +291,7 @@ export interface TradeItem {
   imagePath?: string;
   backImageUrl?: string;
   backImagePath?: string;
+  images?: TransactionImageAttachment[];
   collectorNumber?: string;
   cardSet?: string;
   pokemonTcgCardId?: string;
@@ -316,6 +328,7 @@ export interface TradeTransaction {
   generalImagePath?: string;
   proofImageUrl?: string;
   proofImagePath?: string;
+  images?: TransactionImageAttachment[];
   status: TradeStatus;
   enteredByWorkerId?: string;
   completedAt?: string;

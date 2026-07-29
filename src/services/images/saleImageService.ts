@@ -1,10 +1,12 @@
 import { isSupabaseConfigured, supabase } from "../../utils/supabase";
 
 const bucketName = "sale-images";
-const supportedTypes = ["image/png", "image/jpeg", "image/webp"];
+const supportedTypes = ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"];
 
 export function isSupportedSaleImage(file: File) {
-  return supportedTypes.includes(file.type);
+  return supportedTypes.includes(file.type.toLowerCase())
+    || file.type.toLowerCase().startsWith("image/")
+    || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
 }
 
 export function imageFromClipboard(event: React.ClipboardEvent | ClipboardEvent) {
@@ -29,29 +31,50 @@ export function fileToDataUrl(file: File) {
 }
 
 export async function compressSaleImage(file: File) {
-  if (!isSupportedSaleImage(file)) throw new Error("Please use a PNG, JPG, JPEG, or WebP image.");
+  if (!isSupportedSaleImage(file)) throw new Error("Please use a JPG, JPEG, PNG, WebP, HEIC, or HEIF image.");
   if (file.name.startsWith("compressed-")) return file;
   const imageUrl = URL.createObjectURL(file);
+  let bitmap: ImageBitmap | undefined;
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("Could not load image."));
-      img.src = imageUrl;
-    });
+    let source: CanvasImageSource;
+    let sourceWidth: number;
+    let sourceHeight: number;
+    if ("createImageBitmap" in window) {
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch {
+        bitmap = undefined;
+      }
+    }
+    if (bitmap) {
+      source = bitmap;
+      sourceWidth = bitmap.width;
+      sourceHeight = bitmap.height;
+    } else {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("This browser could not decode the image. Try exporting it as JPG or PNG."));
+        img.src = imageUrl;
+      });
+      source = image;
+      sourceWidth = image.naturalWidth || image.width;
+      sourceHeight = image.naturalHeight || image.height;
+    }
     const maxLongEdge = 1800;
-    const scale = Math.min(1, maxLongEdge / Math.max(image.width, image.height));
+    const scale = Math.min(1, maxLongEdge / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(image.width * scale);
-    canvas.height = Math.round(image.height * scale);
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Could not prepare image.");
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", 0.8);
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", 0.84);
     });
     return new File([blob], `compressed-${file.name || "financial-image"}.jpg`, { type: "image/jpeg" });
   } finally {
+    bitmap?.close();
     URL.revokeObjectURL(imageUrl);
   }
 }

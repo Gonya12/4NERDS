@@ -2,9 +2,10 @@ import {
   AlertTriangle, ArrowRight, Check, CheckCircle2, Circle, Info, LoaderCircle, RotateCcw, TriangleAlert, X, XCircle
 } from "lucide-react";
 import {
-  forwardRef, useEffect, useId, useRef, useState,
+  forwardRef, useCallback, useEffect, useId, useRef, useState,
   type ButtonHTMLAttributes, type ReactNode, type RefObject
 } from "react";
+import { createPortal } from "react-dom";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "success" | "warning" | "destructive" | "icon" | "floating";
 
@@ -239,6 +240,35 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
   const descriptionId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const touchStartY = useRef<number | undefined>(undefined);
+  const onCloseRef = useRef(onClose);
+  const historyEntryRef = useRef(false);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  const requestClose = useCallback(() => {
+    if (historyEntryRef.current) {
+      historyEntryRef.current = false;
+      window.history.back();
+    }
+    onCloseRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    window.history.pushState({ ...window.history.state, salesControlModal: titleId }, "");
+    historyEntryRef.current = true;
+    const onPopState = (event: PopStateEvent) => {
+      if (!historyEntryRef.current || event.state?.salesControlModal === titleId) return;
+      historyEntryRef.current = false;
+      onCloseRef.current();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      if (historyEntryRef.current) {
+        historyEntryRef.current = false;
+        window.history.back();
+      }
+    };
+  }, [open, titleId]);
 
   useEffect(() => {
     if (!open) return;
@@ -250,7 +280,7 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
       first?.focus();
     });
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && dismissible) { event.preventDefault(); onClose(); return; }
+      if (event.key === "Escape" && dismissible) { event.preventDefault(); requestClose(); return; }
       if (event.key !== "Tab" || !panel) return;
       const focusable = Array.from(panel.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
       if (!focusable.length) return;
@@ -265,10 +295,10 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
       document.body.style.overflow = previousOverflow;
       window.requestAnimationFrame(() => restoreFocusRef?.current?.focus());
     };
-  }, [dismissible, open, onClose, restoreFocusRef]);
+  }, [dismissible, open, requestClose, restoreFocusRef]);
 
   if (!open) return null;
-  return <div className="responsive-modal-backdrop" onMouseDown={(event) => { if (dismissible && event.target === event.currentTarget) onClose(); }}>
+  const dialog = <div className="responsive-modal-backdrop" onMouseDown={(event) => { if (dismissible && event.target === event.currentTarget) requestClose(); }}>
     <section
       ref={panelRef}
       role="dialog"
@@ -279,7 +309,7 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
       onTouchStart={(event) => { touchStartY.current = event.touches[0]?.clientY; }}
       onTouchEnd={(event) => {
         const end = event.changedTouches[0]?.clientY;
-        if (dismissible && touchStartY.current !== undefined && end !== undefined && end - touchStartY.current > 72) onClose();
+        if (dismissible && touchStartY.current !== undefined && end !== undefined && end - touchStartY.current > 72) requestClose();
         touchStartY.current = undefined;
       }}
     >
@@ -290,11 +320,12 @@ export function ResponsiveModal({ open, title, description, onClose, restoreFocu
           <h2 id={titleId} className="mt-1 text-2xl font-black text-white">{title}</h2>
           {description ? <p id={descriptionId} className="mt-1 max-w-lg text-sm leading-6 text-slate-400">{description}</p> : null}
         </div>
-        {dismissible ? <AppButton type="button" variant="icon" onClick={onClose} aria-label="Close dialog"><X size={19} /></AppButton> : null}
+        {dismissible ? <AppButton type="button" variant="icon" onClick={requestClose} aria-label="Close dialog"><X size={19} /></AppButton> : null}
       </div>
       <div className="mt-5">{children}</div>
     </section>
   </div>;
+  return createPortal(dialog, document.body);
 }
 
 export function ConfirmDialog({ open, title, description, confirmLabel = "Confirm", cancelLabel = "Cancel", tone = "danger", busy = false, onConfirm, onCancel }: {
