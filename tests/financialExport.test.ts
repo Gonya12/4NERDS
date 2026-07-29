@@ -28,3 +28,20 @@ test("CSV and XLSX shared transaction export schema uses Item Mode", () => {
   assert.ok(source.includes('"Item Mode"'));
   assert.ok(!source.includes('"Entry Mode"'));
 });
+
+test("CSV and XLSX shared item schemas include provider-neutral card metadata", () => {
+  const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
+  for (const header of [
+    "Card Game",
+    "Card Language",
+    "Data Provider",
+    "Provider Card ID",
+    "Card Code",
+    "Collector Number",
+    "Set",
+    "Market Price Source",
+    "Market Price Currency",
+  ]) {
+    assert.ok(source.includes(`"${header}"`), `${header} column is required`);
+  }
+});

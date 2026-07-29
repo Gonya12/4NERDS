@@ -1,8 +1,13 @@
 import type { BusinessExpenseCategory, TradeStatus, TradeTransaction } from "../../types/models";
+import {
+  mapTransactionTypeToApplicationValue,
+  mapTransactionTypeToDatabaseValue,
+  type DatabaseFinancialTransactionType,
+} from "./financialTransactionType.ts";
 
 export type FinancialTransactionPayload = {
   id: string;
-  transaction_type: TradeTransaction["transactionType"];
+  transaction_type: DatabaseFinancialTransactionType;
   transaction_subtype?: string;
   transaction_date: string;
   event_id?: string;
@@ -20,6 +25,10 @@ export type FinancialTransactionPayload = {
   general_image_url?: string;
   general_image_path?: string;
   expense_category?: BusinessExpenseCategory;
+  completed_at?: string;
+  reversed_at?: string;
+  created_at: string;
+  updated_at: string;
 };
 
 function optionalText(value?: string) {
@@ -34,14 +43,16 @@ export function removeUndefinedFields<T extends Record<string, unknown>>(value: 
 }
 
 export function buildFinancialTransactionPayload(transaction: TradeTransaction): FinancialTransactionPayload {
-  const transactionSubtype = transaction.transactionType === "purchase"
+  const applicationType = mapTransactionTypeToApplicationValue(transaction.transactionType);
+  const databaseType = mapTransactionTypeToDatabaseValue(transaction.transactionType);
+  const transactionSubtype = applicationType === "purchase"
     ? transaction.purchaseSource
-    : transaction.transactionType === "expense"
+    : applicationType === "expense"
       ? transaction.expenseCategory
       : undefined;
   const common: FinancialTransactionPayload = {
     id: transaction.id,
-    transaction_type: transaction.transactionType,
+    transaction_type: databaseType,
     transaction_subtype: optionalText(transactionSubtype),
     transaction_date: transaction.tradeDate,
     event_id: optionalText(transaction.eventId),
@@ -57,9 +68,13 @@ export function buildFinancialTransactionPayload(transaction: TradeTransaction):
     status: transaction.status,
     item_mode: transaction.itemMode,
     general_image_url: optionalText(transaction.generalImageUrl),
-    general_image_path: optionalText(transaction.generalImagePath)
+    general_image_path: optionalText(transaction.generalImagePath),
+    completed_at: optionalText(transaction.completedAt),
+    reversed_at: optionalText(transaction.reversedAt),
+    created_at: transaction.createdAt,
+    updated_at: transaction.updatedAt
   };
-  if (transaction.transactionType === "expense" && transaction.expenseCategory) {
+  if (applicationType === "expense" && transaction.expenseCategory) {
     common.expense_category = transaction.expenseCategory;
   }
   return removeUndefinedFields(common) as FinancialTransactionPayload;

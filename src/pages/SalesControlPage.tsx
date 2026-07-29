@@ -33,7 +33,7 @@ import {
 } from "../services/sales/transactionFlowRoutes";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
 import type {
-  BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
+  BusinessExpense, BusinessExpenseCategory, CardGame, CardLanguage, Event, InventoryPurchase, InventoryStatus, OwnershipShare,
   PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord, TradeTransaction, Worker
 } from "../types/models";
 import { safeDateFromLocalInput } from "../utils/browserCompat";
@@ -166,6 +166,9 @@ export function SalesControlPage() {
   const [exportOwnerId, setExportOwnerId] = useState("");
   const [exportStatus, setExportStatus] = useState("all");
   const [exportQuery, setExportQuery] = useState("");
+  const [exportCardGame, setExportCardGame] = useState<NonNullable<FinancialExportFilters["cardGame"]>>("all");
+  const [exportCardLanguage, setExportCardLanguage] = useState<NonNullable<FinancialExportFilters["cardLanguage"]>>("all");
+  const [exportDataProvider, setExportDataProvider] = useState<NonNullable<FinancialExportFilters["dataProvider"]>>("all");
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState("");
   const [exportSlow, setExportSlow] = useState(false);
@@ -183,6 +186,7 @@ export function SalesControlPage() {
     eventId: "", eventDayId: "", itemName: "", category: "raw_card" as PokemonProductCategory,
     quantity: "1", soldPrice: "", boughtPrice: "", marketValue: "", boughtFrom: "",
     marketPriceSource: "", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "", tcgplayerUrl: "",
+    cardGame: "pokemon", dataProvider: "manual", providerCardId: "", cardCode: "", marketPriceCurrency: "USD",
     cardName: "", collectorNumber: "", cardSet: "", cardSetId: "", cardSetCode: "", cardRarity: "", cardLanguage: "", cardCondition: "", stickerPrice: "",
     pokemonTcgCardId: "", officialCardImageUrl: "",
     purchaseSource: "" as PurchaseSource | "", paymentMethod: "cash" as SalePaymentMethod,
@@ -192,6 +196,7 @@ export function SalesControlPage() {
   const blankPurchase = () => ({
     itemName: "", category: "raw_card" as PokemonProductCategory, quantity: "1", purchaseDate: localDateTime(),
     totalCost: "", marketValue: "", marketPriceSource: "", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "", isRawCard: true, buyPercentage: String(defaultBuyPercentage),
+    cardGame: "pokemon", dataProvider: "manual", providerCardId: "", cardCode: "", marketPriceCurrency: "USD",
     purchaseSource: "" as PurchaseSource | "", seller: "", eventId: "", purchasedByWorkerId: "",
     notes: "", status: "in_stock" as InventoryStatus, quantitySold: "0", soldPrice: "", soldDate: "",
     soldByWorkerId: "", soldEventId: "", soldPaymentMethod: "cash" as SalePaymentMethod, buyerNote: "",
@@ -310,6 +315,8 @@ export function SalesControlPage() {
       boughtPrice: sale.boughtPrice === undefined ? "" : String(sale.boughtPrice), marketValue: sale.marketValue === undefined ? "" : String(sale.marketValue),
       marketPriceSource: sale.marketPriceSource || "", marketPriceVariant: sale.marketPriceVariant || "",
       marketPriceUpdatedAt: sale.marketPriceUpdatedAt || "", marketPriceCheckedAt: sale.marketPriceCheckedAt || "", tcgplayerUrl: sale.tcgplayerUrl || "",
+      cardGame: sale.cardGame || "pokemon", dataProvider: sale.dataProvider || (sale.pokemonTcgCardId ? "pokemontcg" : ""),
+      providerCardId: sale.providerCardId || sale.pokemonTcgCardId || "", cardCode: sale.cardCode || "", marketPriceCurrency: sale.marketPriceCurrency || "USD",
       cardName: sale.cardName || "", collectorNumber: sale.collectorNumber || "", cardSet: sale.cardSet || "",
       cardSetId: sale.cardSetId || "", cardSetCode: sale.cardSetCode || "", cardRarity: sale.cardRarity || "", cardLanguage: sale.cardLanguage || "",
       cardCondition: sale.cardCondition || "", stickerPrice: sale.stickerPrice === undefined ? "" : String(sale.stickerPrice),
@@ -419,6 +426,8 @@ export function SalesControlPage() {
     setPurchaseForm(purchase ? {
       itemName: purchase.itemName, category: purchase.category, quantity: String(purchase.quantity), purchaseDate: purchase.purchaseDate.slice(0, 16),
       totalCost: String(purchase.totalCost), marketValue: purchase.marketValue === undefined ? "" : String(purchase.marketValue), marketPriceSource: purchase.marketPriceSource || "", marketPriceVariant: purchase.marketPriceVariant || "", marketPriceUpdatedAt: purchase.marketPriceUpdatedAt || "", marketPriceCheckedAt: purchase.marketPriceCheckedAt || "", isRawCard: purchase.isRawCard,
+      cardGame: purchase.cardGame || "pokemon", dataProvider: purchase.dataProvider || (purchase.pokemonTcgCardId ? "pokemontcg" : ""),
+      providerCardId: purchase.providerCardId || purchase.pokemonTcgCardId || "", cardCode: purchase.cardCode || "", marketPriceCurrency: purchase.marketPriceCurrency || "USD",
       buyPercentage: String(purchase.buyPercentage || defaultBuyPercentage), purchaseSource: purchase.purchaseSource || "", seller: purchase.seller || "",
       eventId: purchase.eventId || "", purchasedByWorkerId: purchase.purchasedByWorkerId || "", notes: purchase.notes || "", status: purchase.status,
       quantitySold: String(purchase.quantitySold || 0), soldPrice: purchase.soldPrice === undefined ? "" : String(purchase.soldPrice),
@@ -607,6 +616,10 @@ export function SalesControlPage() {
         collectorNumber: saleForm.collectorNumber || undefined, cardSet: saleForm.cardSet || undefined,
         cardSetId: saleForm.cardSetId || undefined, cardSetCode: saleForm.cardSetCode || undefined,
         cardRarity: saleForm.cardRarity || undefined, cardLanguage: saleForm.cardLanguage || undefined,
+        cardGame: saleForm.cardGame as SalesRecord["cardGame"] || undefined,
+        dataProvider: saleForm.dataProvider as SalesRecord["dataProvider"] || undefined,
+        providerCardId: saleForm.providerCardId || undefined, cardCode: saleForm.cardCode || undefined,
+        marketPriceCurrency: saleForm.marketPriceCurrency || undefined,
         cardCondition: saleForm.cardCondition as SalesRecord["cardCondition"] || undefined,
         stickerPrice: saleForm.stickerPrice === "" ? undefined : Number(saleForm.stickerPrice),
         pokemonTcgCardId: saleForm.pokemonTcgCardId || undefined, officialCardImageUrl: saleForm.officialCardImageUrl || undefined,
@@ -683,6 +696,10 @@ export function SalesControlPage() {
         , cardName: purchaseForm.cardName || undefined, collectorNumber: purchaseForm.collectorNumber || undefined,
         cardSet: purchaseForm.cardSet || undefined, cardLanguage: purchaseForm.cardLanguage || undefined,
         cardSetId: purchaseForm.cardSetId || undefined, cardSetCode: purchaseForm.cardSetCode || undefined,
+        cardGame: purchaseForm.cardGame as InventoryPurchase["cardGame"] || undefined,
+        dataProvider: purchaseForm.dataProvider as InventoryPurchase["dataProvider"] || undefined,
+        providerCardId: purchaseForm.providerCardId || undefined, cardCode: purchaseForm.cardCode || undefined,
+        marketPriceCurrency: purchaseForm.marketPriceCurrency || undefined,
         cardRarity: purchaseForm.cardRarity || undefined, pokemonTcgCardId: purchaseForm.pokemonTcgCardId || undefined,
         officialCardImageUrl: purchaseForm.officialCardImageUrl || undefined, tcgplayerUrl: purchaseForm.tcgplayerUrl || undefined,
         cardCondition: purchaseForm.cardCondition as InventoryPurchase["cardCondition"] || undefined,
@@ -699,10 +716,29 @@ export function SalesControlPage() {
         const sale = (await createSaleRecord({
           itemName: saved.itemName,
           category: saved.category,
+          cardGame: saved.cardGame,
+          cardLanguage: saved.cardLanguage,
+          dataProvider: saved.dataProvider,
+          providerCardId: saved.providerCardId,
+          cardCode: saved.cardCode,
+          cardName: saved.cardName,
+          collectorNumber: saved.collectorNumber,
+          cardSet: saved.cardSet,
+          cardSetId: saved.cardSetId,
+          cardSetCode: saved.cardSetCode,
+          cardRarity: saved.cardRarity,
+          pokemonTcgCardId: saved.pokemonTcgCardId,
+          officialCardImageUrl: saved.officialCardImageUrl,
+          tcgplayerUrl: saved.tcgplayerUrl,
+          marketValue: saved.marketValue,
+          marketPriceSource: saved.marketPriceSource,
+          marketPriceVariant: saved.marketPriceVariant,
+          marketPriceUpdatedAt: saved.marketPriceUpdatedAt,
+          marketPriceCheckedAt: saved.marketPriceCheckedAt,
+          marketPriceCurrency: saved.marketPriceCurrency,
           quantity: quantitySold,
           soldPrice: Number(purchaseForm.soldPrice),
           boughtPrice: roundMoney(saved.totalCost / saved.quantity * quantitySold),
-          marketValue: saved.marketValue,
           paymentMethod: purchaseForm.soldPaymentMethod,
           soldByWorkerId: purchaseForm.soldByWorkerId || undefined,
           eventId: purchaseForm.soldEventId || undefined,
@@ -718,6 +754,26 @@ export function SalesControlPage() {
           ...currentSale,
           itemName: saved.itemName,
           category: saved.category,
+          cardGame: saved.cardGame,
+          cardLanguage: saved.cardLanguage,
+          dataProvider: saved.dataProvider,
+          providerCardId: saved.providerCardId,
+          cardCode: saved.cardCode,
+          cardName: saved.cardName,
+          collectorNumber: saved.collectorNumber,
+          cardSet: saved.cardSet,
+          cardSetId: saved.cardSetId,
+          cardSetCode: saved.cardSetCode,
+          cardRarity: saved.cardRarity,
+          pokemonTcgCardId: saved.pokemonTcgCardId,
+          officialCardImageUrl: saved.officialCardImageUrl,
+          tcgplayerUrl: saved.tcgplayerUrl,
+          marketValue: saved.marketValue,
+          marketPriceSource: saved.marketPriceSource,
+          marketPriceVariant: saved.marketPriceVariant,
+          marketPriceUpdatedAt: saved.marketPriceUpdatedAt,
+          marketPriceCheckedAt: saved.marketPriceCheckedAt,
+          marketPriceCurrency: saved.marketPriceCurrency,
           quantity: quantitySold,
           soldPrice: Number(purchaseForm.soldPrice || currentSale.soldPrice || 0),
           boughtPrice: roundMoney(saved.totalCost / saved.quantity * quantitySold),
@@ -885,7 +941,10 @@ export function SalesControlPage() {
         recordType: exportRecordType,
         ownerId: exportOwnerId || undefined,
         status: exportStatus,
-        query: exportQuery
+        query: exportQuery,
+        cardGame: exportCardGame,
+        cardLanguage: exportCardLanguage,
+        dataProvider: exportDataProvider
       });
       setExportProgress(`Formatting ${data.processedRecords.toLocaleString()} records...`);
       if (exportFormat === "xlsx") await downloadFinancialWorkbook(data);
@@ -1161,6 +1220,21 @@ export function SalesControlPage() {
             <label className="form-label">Search
               <input value={exportQuery} onChange={(event) => setExportQuery(event.target.value)} placeholder="Item, person, ID, notes..." className={compactInputClass()} />
             </label>
+            <label className="form-label">Card game
+              <select value={exportCardGame} onChange={(event) => setExportCardGame(event.target.value as NonNullable<FinancialExportFilters["cardGame"]>)} className={compactInputClass()}>
+                <option value="all">All games</option><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option>
+              </select>
+            </label>
+            <label className="form-label">Card language
+              <select value={exportCardLanguage} onChange={(event) => setExportCardLanguage(event.target.value as NonNullable<FinancialExportFilters["cardLanguage"]>)} className={compactInputClass()}>
+                <option value="all">All languages</option><option value="en">English</option><option value="ja">Japanese</option><option value="unknown">Unknown</option>
+              </select>
+            </label>
+            <label className="form-label">Data provider
+              <select value={exportDataProvider} onChange={(event) => setExportDataProvider(event.target.value as NonNullable<FinancialExportFilters["dataProvider"]>)} className={compactInputClass()}>
+                <option value="all">All providers</option><option value="pokemontcg">Pokémon TCG API</option><option value="tcgdex">TCGdex</option><option value="optcgapi">OPTCG API</option><option value="manual">Manual</option>
+              </select>
+            </label>
           </div>
 
           {exporting ? <div className="rounded-2xl border border-orange-400/25 bg-orange-950/20 p-3" role="status" aria-live="polite">
@@ -1186,7 +1260,7 @@ export function SalesControlPage() {
 
             {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} onApply={(scan, _hash, processed) => {
+              <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} initialGame={saleForm.cardGame as CardGame} initialLanguage={(saleForm.cardLanguage === "ja" ? "ja" : saleForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan, _hash, processed) => {
                 useProcessedScanFile(processed);
                 setSaleForm((current) => {
                   const nextCategory = scan.suggestedType || current.category;
@@ -1200,39 +1274,49 @@ export function SalesControlPage() {
                     cardSetId: scan.cardSetId || current.cardSetId,
                     cardSetCode: scan.cardSetCode || current.cardSetCode,
                     cardRarity: scan.cardRarity || current.cardRarity,
-                    cardLanguage: scan.language || current.cardLanguage,
+                    cardGame: scan.cardGame || current.cardGame,
+                    cardLanguage: scan.cardLanguage || scan.language || current.cardLanguage,
+                    dataProvider: scan.dataProvider || current.dataProvider,
+                    providerCardId: scan.dataProvider === "manual" ? "" : scan.providerCardId || scan.pokemonTcgCardId || current.providerCardId,
+                    cardCode: scan.cardCode || current.cardCode,
+                    marketPriceCurrency: scan.marketPriceCurrency || scan.tcgplayerPricing?.currency || current.marketPriceCurrency,
                     cardCondition: scan.condition || current.cardCondition,
                     stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
-                    pokemonTcgCardId: scan.pokemonTcgCardId || current.pokemonTcgCardId,
-                    officialCardImageUrl: scan.officialImageUrl || current.officialCardImageUrl,
+                    pokemonTcgCardId: scan.dataProvider === "pokemontcg"
+                      ? scan.pokemonTcgCardId || scan.providerCardId || current.pokemonTcgCardId
+                      : scan.dataProvider ? "" : current.pokemonTcgCardId,
+                    officialCardImageUrl: scan.dataProvider === "manual" ? "" : scan.officialImageUrl || current.officialCardImageUrl,
                     category: nextCategory,
                     isRawCard: nextCategory === "raw_card",
                     marketValue: nextCategory === "raw_card" && selectedPrice?.market != null ? String(selectedPrice.market) : current.marketValue,
-                    marketPriceSource: scan.tcgplayerPricing ? "TCGplayer" : current.marketPriceSource,
-                    marketPriceVariant: scan.tcgplayerPricing?.selectedVariant || current.marketPriceVariant,
-                    marketPriceUpdatedAt: scan.tcgplayerPricing?.updatedAt || current.marketPriceUpdatedAt,
-                    marketPriceCheckedAt: scan.tcgplayerPricing?.checkedAt || current.marketPriceCheckedAt,
-                    tcgplayerUrl: scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl
+                    marketPriceSource: scan.dataProvider === "manual" ? "Manual" : scan.tcgplayerPricing?.source || current.marketPriceSource,
+                    marketPriceVariant: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.selectedVariant || current.marketPriceVariant,
+                    marketPriceUpdatedAt: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.updatedAt || current.marketPriceUpdatedAt,
+                    marketPriceCheckedAt: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.checkedAt || current.marketPriceCheckedAt,
+                    tcgplayerUrl: scan.dataProvider === "manual" ? "" : scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl
                   };
                 });
               }} onRetakePhoto={() => { setFacingMode("environment"); enterCameraMode(); }} />
               <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-2 dark:border-slate-700">
-                <input value={saleForm.cardName} onChange={(event) => setSaleForm({ ...saleForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
+                <select aria-label="Sale card game" value={saleForm.cardGame} onChange={(event) => { const cardGame = event.target.value as CardGame; setSaleForm({ ...saleForm, cardGame, cardLanguage: cardGame === "pokemon" ? "en" : cardGame === "one_piece" ? "en" : "unknown", dataProvider: "manual", providerCardId: "", pokemonTcgCardId: "", cardCode: "", officialCardImageUrl: "", tcgplayerUrl: "", marketPriceSource: "Manual", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "" }); }} className={compactInputClass()}><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select>
+                {saleForm.cardGame === "pokemon" ? <select aria-label="Sale card printing language" value={saleForm.cardLanguage === "ja" ? "ja" : "en"} onChange={(event) => { const cardLanguage = event.target.value as Extract<CardLanguage, "en" | "ja">; setSaleForm({ ...saleForm, cardLanguage, dataProvider: "manual", providerCardId: "", pokemonTcgCardId: "", officialCardImageUrl: "", tcgplayerUrl: "", marketPriceSource: "Manual", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "" }); }} className={compactInputClass()}><option value="en">English</option><option value="ja">Japanese / 日本語</option></select> : <div className="rounded-xl bg-slate-100 p-3 text-xs font-bold dark:bg-slate-800">{saleForm.cardGame === "one_piece" ? "English · search with OPTCG API" : "Manual metadata"}</div>}
+                <input value={saleForm.cardName} onChange={(event) => setSaleForm({ ...saleForm, cardName: event.target.value })} placeholder="Card name" className={compactInputClass()} />
                 <input value={saleForm.collectorNumber} onChange={(event) => setSaleForm({ ...saleForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
                 <input value={saleForm.cardSet} onChange={(event) => setSaleForm({ ...saleForm, cardSet: event.target.value })} placeholder="Set name" className={compactInputClass()} />
                 <input value={saleForm.cardLanguage} onChange={(event) => setSaleForm({ ...saleForm, cardLanguage: event.target.value })} placeholder="Language" className={compactInputClass()} />
                 <select value={saleForm.cardCondition} onChange={(event) => setSaleForm({ ...saleForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
                 {moneyInput(saleForm.stickerPrice, (value) => setSaleForm({ ...saleForm, stickerPrice: value }), "Sticker / asking price")}
-                {saleForm.pokemonTcgCardId || saleForm.marketPriceSource ? <p className="sm:col-span-2 text-xs text-slate-500">
+                {saleForm.providerCardId || saleForm.pokemonTcgCardId || saleForm.marketPriceSource ? <p className="sm:col-span-2 text-xs text-slate-500">
                   {saleForm.cardRarity ? `${saleForm.cardRarity} · ` : ""}{saleForm.cardSetCode ? `Set ${saleForm.cardSetCode} · ` : ""}
-                  {saleForm.pokemonTcgCardId ? `API ID ${saleForm.pokemonTcgCardId} · ` : ""}
+                  {saleForm.cardGame ? `${saleForm.cardGame === "one_piece" ? "One Piece" : saleForm.cardGame === "pokemon" ? "Pokémon" : "Other"} · ` : ""}
+                  {saleForm.providerCardId || saleForm.pokemonTcgCardId ? `Provider ID ${saleForm.providerCardId || saleForm.pokemonTcgCardId} · ` : ""}
                   {saleForm.marketPriceSource ? `${saleForm.marketPriceSource}${saleForm.marketPriceVariant ? ` (${saleForm.marketPriceVariant})` : ""}` : ""}
-                  {saleForm.tcgplayerUrl ? <> · <a href={saleForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">TCGplayer product</a></> : null}
+                  {saleForm.tcgplayerUrl ? <> · <a href={saleForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">Price source</a></> : null}
                 </p> : null}
               </section>
               {eventLinkNotice ? <p className={`rounded-xl p-3 text-sm font-black ${selectedSaleEvent ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"}`}>{eventLinkNotice}</p> : null}
               <div className="grid gap-3 sm:grid-cols-2"><input value={saleForm.itemName} onChange={(event) => setSaleForm({ ...saleForm, itemName: event.target.value })} placeholder="Item name or description" className={compactInputClass()} /><select value={saleForm.category} onChange={(event) => setSaleForm({ ...saleForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : saleForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={saleForm.quantity} onChange={(event) => setSaleForm({ ...saleForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={saleForm.soldAt} onChange={(event) => changeSaleDate(event.target.value)} className={compactInputClass()} />{moneyInput(saleForm.soldPrice, (value) => setSaleForm({ ...saleForm, soldPrice: value }), "Sold price *")}{moneyInput(saleForm.boughtPrice, (value) => setSaleForm({ ...saleForm, boughtPrice: value }), "Actual bought price / cost basis")}</div>
-              <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
+              <label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Card<input type="checkbox" checked={saleForm.isRawCard} onChange={(event) => setSaleForm({ ...saleForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>
               {saleForm.isRawCard ? <RawCardCalculator marketValue={saleForm.marketValue} buyPercentage={saleForm.buyPercentage} actualCost={saleForm.boughtPrice} onMarketValue={(value) => setSaleForm({ ...saleForm, marketValue: value })} onPercentage={(value) => setSaleForm({ ...saleForm, buyPercentage: value })} onActualCost={(value) => setSaleForm({ ...saleForm, boughtPrice: value })} /> : <>{moneyInput(saleForm.marketValue, (value) => setSaleForm({ ...saleForm, marketValue: value }), "Market value, optional")}</>}
               <div className="grid gap-3 sm:grid-cols-2"><select value={saleForm.eventId} onChange={(event) => changeSaleEvent(event.target.value)} className={compactInputClass()}>{saleEventOptions.map((event) => <option key={event.id} value={event.id}>{eligibleSaleEventMatches.some((match) => match.event.id === event.id) ? "Matching · " : ""}{event.name} · {shortScheduleSummary(event)}</option>)}<option value="">{eligibleSaleEventMatches.length > 1 ? "Choose matching event / No Event" : "No Event"}</option></select><select value={saleForm.eventDayId} disabled={!selectedSaleEvent} onChange={(event) => { setEventLinkManuallyChanged(true); setSaleForm({ ...saleForm, eventDayId: event.target.value }); }} className={compactInputClass()}><option value="">No event day selected</option>{selectedSaleEvent ? eventDays(selectedSaleEvent).map((day) => <option key={day.id} value={day.id}>{day.date.slice(0, 10)}</option>) : null}</select><select value={saleForm.inventoryPurchaseId} onChange={(event) => { const linked = purchases.find((row) => row.id === event.target.value); const suggested = linked ? roundMoney(linked.totalCost / Math.max(1, linked.quantity) * Math.max(1, Number(saleForm.quantity || 1))) : undefined; setSaleForm({ ...saleForm, inventoryPurchaseId: event.target.value, boughtPrice: linked && saleForm.boughtPrice === "" ? String(suggested) : saleForm.boughtPrice }); }} className={compactInputClass()}><option value="">No linked inventory purchase</option>{purchases.map((purchase) => <option key={purchase.id} value={purchase.id}>{purchase.itemName} · {formatMoney(purchase.totalCost)}</option>)}</select><select value={saleForm.soldByWorkerId} onChange={(event) => setSaleForm({ ...saleForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={saleForm.purchaseSource} onChange={(event) => setSaleForm({ ...saleForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source, optional</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={saleForm.paymentMethod} onChange={(event) => setSaleForm({ ...saleForm, paymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={saleForm.boughtFrom} onChange={(event) => setSaleForm({ ...saleForm, boughtFrom: event.target.value })} placeholder="Bought from / seller" className={compactInputClass()} /></div>
               {selectedLinkedPurchase ? <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-700 dark:bg-sky-950/30 dark:text-sky-200">Linked to {selectedLinkedPurchase.itemName}. Its purchase is not counted as an operating expense.</p> : null}<textarea value={saleForm.notes} onChange={(event) => setSaleForm({ ...saleForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} />
@@ -1240,7 +1324,7 @@ export function SalesControlPage() {
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
-            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} onApply={(scan, hash, processed) => {
+            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} initialGame={purchaseForm.cardGame as CardGame} initialLanguage={(purchaseForm.cardLanguage === "ja" ? "ja" : purchaseForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan, hash, processed) => {
               useProcessedScanFile(processed);
               setPurchaseForm((current) => {
               const nextCategory = scan.suggestedType || current.category;
@@ -1251,41 +1335,53 @@ export function SalesControlPage() {
               itemName: scan.cardName || current.itemName, cardName: scan.cardName || current.cardName,
               collectorNumber: scan.collectorNumber || current.collectorNumber, cardSet: scan.cardSet || current.cardSet,
               cardSetId: scan.cardSetId || current.cardSetId, cardSetCode: scan.cardSetCode || current.cardSetCode,
-              cardRarity: scan.cardRarity || current.cardRarity, pokemonTcgCardId: scan.pokemonTcgCardId || current.pokemonTcgCardId,
-              officialCardImageUrl: scan.officialImageUrl || current.officialCardImageUrl,
-              tcgplayerUrl: scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl,
-              cardLanguage: scan.language || current.cardLanguage, cardCondition: scan.condition || current.cardCondition,
+              cardRarity: scan.cardRarity || current.cardRarity,
+              cardGame: scan.cardGame || current.cardGame,
+              cardLanguage: scan.cardLanguage || scan.language || current.cardLanguage,
+              dataProvider: scan.dataProvider || current.dataProvider,
+              providerCardId: scan.dataProvider === "manual" ? "" : scan.providerCardId || scan.pokemonTcgCardId || current.providerCardId,
+              cardCode: scan.cardCode || current.cardCode,
+              marketPriceCurrency: scan.marketPriceCurrency || scan.tcgplayerPricing?.currency || current.marketPriceCurrency,
+              pokemonTcgCardId: scan.dataProvider === "pokemontcg"
+                ? scan.pokemonTcgCardId || scan.providerCardId || current.pokemonTcgCardId
+                : scan.dataProvider ? "" : current.pokemonTcgCardId,
+              officialCardImageUrl: scan.dataProvider === "manual" ? "" : scan.officialImageUrl || current.officialCardImageUrl,
+              tcgplayerUrl: scan.dataProvider === "manual" ? "" : scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl,
+              cardCondition: scan.condition || current.cardCondition,
               stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
               gradingCompany: scan.gradingCompany || current.gradingCompany, grade: scan.grade || current.grade,
               certificateNumber: scan.certificateNumber || current.certificateNumber, scanConfidence: scan.overallConfidence,
               marketValue: useRawMarket ? String(selectedPrice.market) : current.marketValue,
-              marketPriceSource: useRawMarket ? "TCGplayer" : current.marketPriceSource,
-              marketPriceVariant: useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
-              marketPriceUpdatedAt: useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
-              marketPriceCheckedAt: useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
+              marketPriceSource: scan.dataProvider === "manual" ? "Manual" : useRawMarket ? scan.tcgplayerPricing?.source || current.marketPriceSource : current.marketPriceSource,
+              marketPriceVariant: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
+              marketPriceUpdatedAt: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
+              marketPriceCheckedAt: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
               scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
             };});
             }} onRetakePhoto={() => { setFacingMode("environment"); enterCameraMode(); }} /> : null}
             {editor === "purchase" ? <section className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-3 dark:border-slate-700">
-              <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Pokémon / card name" className={compactInputClass()} />
+              <select aria-label="Purchase card game" value={purchaseForm.cardGame} onChange={(event) => { const cardGame = event.target.value as CardGame; setPurchaseForm({ ...purchaseForm, cardGame, cardLanguage: cardGame === "pokemon" ? "en" : cardGame === "one_piece" ? "en" : "unknown", dataProvider: "manual", providerCardId: "", pokemonTcgCardId: "", cardCode: "", officialCardImageUrl: "", tcgplayerUrl: "", marketPriceSource: "Manual", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "" }); }} className={compactInputClass()}><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select>
+              {purchaseForm.cardGame === "pokemon" ? <select aria-label="Purchase card printing language" value={purchaseForm.cardLanguage === "ja" ? "ja" : "en"} onChange={(event) => { const cardLanguage = event.target.value as Extract<CardLanguage, "en" | "ja">; setPurchaseForm({ ...purchaseForm, cardLanguage, dataProvider: "manual", providerCardId: "", pokemonTcgCardId: "", officialCardImageUrl: "", tcgplayerUrl: "", marketPriceSource: "Manual", marketPriceVariant: "", marketPriceUpdatedAt: "", marketPriceCheckedAt: "" }); }} className={compactInputClass()}><option value="en">English</option><option value="ja">Japanese / 日本語</option></select> : <div className="rounded-xl bg-slate-100 p-3 text-xs font-bold dark:bg-slate-800">{purchaseForm.cardGame === "one_piece" ? "English · search with OPTCG API" : "Manual metadata"}</div>}
+              <input value={purchaseForm.cardName} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardName: event.target.value })} placeholder="Card name" className={compactInputClass()} />
               <input value={purchaseForm.collectorNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, collectorNumber: event.target.value })} placeholder="Collector number" className={compactInputClass()} />
               <input value={purchaseForm.cardSet} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardSet: event.target.value })} placeholder="Set / code" className={compactInputClass()} />
               <input value={purchaseForm.cardLanguage} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardLanguage: event.target.value })} placeholder="Language" className={compactInputClass()} />
               <select value={purchaseForm.cardCondition} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
               {moneyInput(purchaseForm.stickerPrice, (value) => setPurchaseForm({ ...purchaseForm, stickerPrice: value }), "Sticker / asking price")}
               {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl); setBackImageFile(file); setBackPreviewUrl(URL.createObjectURL(file)); }} /></label></> : null}
-              {purchaseForm.pokemonTcgCardId || purchaseForm.marketPriceSource ? <p className="sm:col-span-3 text-xs text-slate-500">
+              {purchaseForm.providerCardId || purchaseForm.pokemonTcgCardId || purchaseForm.marketPriceSource ? <p className="sm:col-span-3 text-xs text-slate-500">
                 {purchaseForm.cardRarity ? `${purchaseForm.cardRarity} · ` : ""}{purchaseForm.cardSetCode ? `Set ${purchaseForm.cardSetCode} · ` : ""}
-                {purchaseForm.pokemonTcgCardId ? `API ID ${purchaseForm.pokemonTcgCardId} · ` : ""}
+                {purchaseForm.cardGame ? `${purchaseForm.cardGame === "one_piece" ? "One Piece" : purchaseForm.cardGame === "pokemon" ? "Pokémon" : "Other"} · ` : ""}
+                {purchaseForm.providerCardId || purchaseForm.pokemonTcgCardId ? `Provider ID ${purchaseForm.providerCardId || purchaseForm.pokemonTcgCardId} · ` : ""}
                 {purchaseForm.marketPriceSource ? `${purchaseForm.marketPriceSource}${purchaseForm.marketPriceVariant ? ` (${purchaseForm.marketPriceVariant})` : ""}` : ""}
-                {purchaseForm.tcgplayerUrl ? <> · <a href={purchaseForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">TCGplayer product</a></> : null}
+                {purchaseForm.tcgplayerUrl ? <> · <a href={purchaseForm.tcgplayerUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700 underline">Price source</a></> : null}
               </p> : null}
               <p className="sm:col-span-3 text-xs text-slate-500">Actual bought price remains the separate “Actual total cost” field below. Scan status: {purchaseForm.scanStatus.replace(/_/g, " ")}{purchaseForm.scanConfidence ? ` · ${purchaseForm.scanConfidence} confidence` : ""}</p>
             </section> : null}
             {editor === "purchase" ? <OwnershipEditor workers={workers} shares={purchaseForm.ownershipShares} totalCost={Number(purchaseForm.totalCost || 0)} paidByWorkerId={purchaseForm.purchasedByWorkerId} onChange={(ownershipShares) => setPurchaseForm({ ...purchaseForm, ownershipShares })} /> : null}
 
 
-            {editor === "purchase" ? <div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Purchase preview" className="mx-auto max-h-64 object-contain" /> : <PackagePlus className="mx-auto text-sky-500" size={38} />}<button onClick={() => inputRef.current?.click()} className="mt-3 min-h-10 rounded-xl bg-ink px-4 text-sm font-bold text-white dark:bg-coral"><Upload className="inline" size={16} /> Choose optional photo</button></div><div className="grid gap-3 sm:grid-cols-2"><input value={purchaseForm.itemName} onChange={(event) => setPurchaseForm({ ...purchaseForm, itemName: event.target.value })} placeholder="Item name *" className={compactInputClass()} /><select value={purchaseForm.category} onChange={(event) => setPurchaseForm({ ...purchaseForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : purchaseForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={purchaseForm.purchaseDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseDate: event.target.value })} className={compactInputClass()} />{moneyInput(purchaseForm.totalCost, (value) => setPurchaseForm({ ...purchaseForm, totalCost: value }), "Actual total cost *")}</div><label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Pokémon Card<input type="checkbox" checked={purchaseForm.isRawCard} onChange={(event) => setPurchaseForm({ ...purchaseForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>{purchaseForm.isRawCard ? <RawCardCalculator marketValue={purchaseForm.marketValue} buyPercentage={purchaseForm.buyPercentage} actualCost={purchaseForm.totalCost} onMarketValue={(value) => setPurchaseForm({ ...purchaseForm, marketValue: value })} onPercentage={(value) => setPurchaseForm({ ...purchaseForm, buyPercentage: value })} onActualCost={(value) => setPurchaseForm({ ...purchaseForm, totalCost: value })} /> : moneyInput(purchaseForm.marketValue, (value) => setPurchaseForm({ ...purchaseForm, marketValue: value }), "Market value, optional")}<div className="grid gap-3 sm:grid-cols-2"><select value={purchaseForm.purchaseSource} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={purchaseForm.seller} onChange={(event) => setPurchaseForm({ ...purchaseForm, seller: event.target.value })} placeholder="Website / store / seller" className={compactInputClass()} /><select value={purchaseForm.eventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.purchasedByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchasedByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Purchased by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.status} onChange={(event) => setPurchaseForm({ ...purchaseForm, status: event.target.value as InventoryStatus })} className={compactInputClass()}>{inventoryStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.notes} onChange={(event) => setPurchaseForm({ ...purchaseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /></div> : null}
+            {editor === "purchase" ? <div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-950">{previewUrl ? <img src={previewUrl} alt="Purchase preview" className="mx-auto max-h-64 object-contain" /> : <PackagePlus className="mx-auto text-sky-500" size={38} />}<button onClick={() => inputRef.current?.click()} className="mt-3 min-h-10 rounded-xl bg-ink px-4 text-sm font-bold text-white dark:bg-coral"><Upload className="inline" size={16} /> Choose optional photo</button></div><div className="grid gap-3 sm:grid-cols-2"><input value={purchaseForm.itemName} onChange={(event) => setPurchaseForm({ ...purchaseForm, itemName: event.target.value })} placeholder="Item name *" className={compactInputClass()} /><select value={purchaseForm.category} onChange={(event) => setPurchaseForm({ ...purchaseForm, category: event.target.value as PokemonProductCategory, isRawCard: event.target.value === "raw_card" ? true : purchaseForm.isRawCard })} className={compactInputClass()}>{categoryOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantity: event.target.value })} placeholder="Quantity" className={compactInputClass()} /><input type="datetime-local" value={purchaseForm.purchaseDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseDate: event.target.value })} className={compactInputClass()} />{moneyInput(purchaseForm.totalCost, (value) => setPurchaseForm({ ...purchaseForm, totalCost: value }), "Actual total cost *")}</div><label className="flex min-h-12 items-center justify-between rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Raw Card<input type="checkbox" checked={purchaseForm.isRawCard} onChange={(event) => setPurchaseForm({ ...purchaseForm, isRawCard: event.target.checked })} className="size-5 accent-coral" /></label>{purchaseForm.isRawCard ? <RawCardCalculator marketValue={purchaseForm.marketValue} buyPercentage={purchaseForm.buyPercentage} actualCost={purchaseForm.totalCost} onMarketValue={(value) => setPurchaseForm({ ...purchaseForm, marketValue: value })} onPercentage={(value) => setPurchaseForm({ ...purchaseForm, buyPercentage: value })} onActualCost={(value) => setPurchaseForm({ ...purchaseForm, totalCost: value })} /> : moneyInput(purchaseForm.marketValue, (value) => setPurchaseForm({ ...purchaseForm, marketValue: value }), "Market value, optional")}<div className="grid gap-3 sm:grid-cols-2"><select value={purchaseForm.purchaseSource} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchaseSource: event.target.value as PurchaseSource | "" })} className={compactInputClass()}><option value="">Purchase source</option>{sourceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={purchaseForm.seller} onChange={(event) => setPurchaseForm({ ...purchaseForm, seller: event.target.value })} placeholder="Website / store / seller" className={compactInputClass()} /><select value={purchaseForm.eventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.purchasedByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, purchasedByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Purchased by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.status} onChange={(event) => setPurchaseForm({ ...purchaseForm, status: event.target.value as InventoryStatus })} className={compactInputClass()}>{inventoryStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.notes} onChange={(event) => setPurchaseForm({ ...purchaseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /></div> : null}
 
             {editor === "expense" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2"><input type="datetime-local" value={expenseForm.expenseDate} onChange={(event) => setExpenseForm({ ...expenseForm, expenseDate: event.target.value })} className={compactInputClass()} />{moneyInput(expenseForm.amount, (value) => setExpenseForm({ ...expenseForm, amount: value }), "Amount *")}<select value={expenseForm.category} onChange={(event) => setExpenseForm({ ...expenseForm, category: event.target.value as BusinessExpenseCategory })} className={compactInputClass()}>{expenseOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input value={expenseForm.description} onChange={(event) => setExpenseForm({ ...expenseForm, description: event.target.value })} placeholder="Description" className={compactInputClass()} /><select value={expenseForm.eventId} onChange={(event) => setExpenseForm({ ...expenseForm, eventId: event.target.value })} className={compactInputClass()}><option value="">No event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={expenseForm.paidByWorkerId} onChange={(event) => setExpenseForm({ ...expenseForm, paidByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Paid by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><input value={expenseForm.vendor} onChange={(event) => setExpenseForm({ ...expenseForm, vendor: event.target.value })} placeholder="Vendor / store" className={compactInputClass()} /></div>{duplicateExpenseWarning ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">This event already has a {formatMoney(selectedEventCost(selectedExpenseEvent))} table cost. Reports will use that event cost and exclude this manual table-fee row to prevent double-counting.</p> : null}<div className="rounded-2xl border-2 border-dashed border-slate-300 p-3 text-center dark:border-slate-700">{previewUrl ? <img src={previewUrl} alt="Receipt preview" className="mx-auto max-h-48 object-contain" /> : <Receipt className="mx-auto text-slate-400" size={30} />}<button onClick={() => inputRef.current?.click()} className="mt-2 min-h-10 rounded-xl bg-slate-100 px-4 text-sm font-bold dark:bg-slate-800"><Upload className="inline" size={16} /> Optional receipt</button></div><textarea value={expenseForm.notes} onChange={(event) => setExpenseForm({ ...expenseForm, notes: event.target.value })} placeholder="Notes" className={`${compactInputClass()} min-h-24`} /><button onClick={() => void saveExpense()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Expense"}</button></div> : null}
             {editor === "purchase" ? <section className="mt-3 space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/20"><div><p className="font-black text-emerald-800 dark:text-emerald-200">Sold inventory details</p><p className="text-xs text-emerald-700/80 dark:text-emerald-300/70">Set quantity sold to zero for in stock. A linked sale is created automatically when needed.</p></div><div className="grid gap-3 sm:grid-cols-2"><input type="number" min="0" max={purchaseForm.quantity} value={purchaseForm.quantitySold} onChange={(event) => setPurchaseForm({ ...purchaseForm, quantitySold: event.target.value, status: inventoryStatusForQuantity(Number(purchaseForm.quantity || 1), Number(event.target.value || 0)) })} placeholder="Quantity sold" className={compactInputClass()} />{moneyInput(purchaseForm.soldPrice, (value) => setPurchaseForm({ ...purchaseForm, soldPrice: value }), "Total sold price")}<input type="datetime-local" value={purchaseForm.soldDate} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldDate: event.target.value })} className={compactInputClass()} /><select value={purchaseForm.soldByWorkerId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldByWorkerId: event.target.value })} className={compactInputClass()}><option value="">Sold by, optional</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select><select value={purchaseForm.soldEventId} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldEventId: event.target.value })} className={compactInputClass()}><option value="">No sale event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select><select value={purchaseForm.soldPaymentMethod} onChange={(event) => setPurchaseForm({ ...purchaseForm, soldPaymentMethod: event.target.value as SalePaymentMethod })} className={compactInputClass()}>{paymentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><textarea value={purchaseForm.buyerNote} onChange={(event) => setPurchaseForm({ ...purchaseForm, buyerNote: event.target.value })} placeholder="Buyer / sale note" className={`${compactInputClass()} min-h-20`} /></section> : null}

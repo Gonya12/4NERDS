@@ -1,11 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
+import type { Database } from "../types/database.types";
 
 export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 export const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
 
 export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl!, supabasePublishableKey!, {
+  ? createClient<Database>(supabaseUrl!, supabasePublishableKey!, {
       realtime: { params: { eventsPerSecond: 5 } }
     })
   : undefined;

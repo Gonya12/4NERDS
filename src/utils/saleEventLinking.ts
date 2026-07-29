@@ -15,7 +15,10 @@ export function isEventFullyPaid(event: Event, workers: Worker[] = []) {
 }
 
 export function matchingSaleEventDay(event: Event, saleDate: string) {
-  const day = saleDate.slice(0, 10);
+  const parsed = new Date(saleDate);
+  const day = Number.isNaN(parsed.getTime()) || !saleDate.includes("T")
+    ? saleDate.slice(0, 10)
+    : `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
   return eventDays(event).find((eventDay) => eventDay.date.slice(0, 10) === day);
 }
 

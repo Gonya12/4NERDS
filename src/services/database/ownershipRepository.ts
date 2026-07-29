@@ -40,26 +40,40 @@ export async function listOwnershipShares(inventoryPurchaseIds: string[] = [], s
 
 export async function saveInventoryOwnership(inventoryPurchaseId: string, shares: OwnershipShare[]) {
   if (!isSupabaseConfigured || !supabase) return;
-  const { error: deleteError } = await supabase.from("inventory_ownership_shares").delete().eq("inventory_purchase_id", inventoryPurchaseId);
-  if (deleteError) throw new Error(deleteError.message);
-  if (!shares.length) return;
   const timestamp = new Date().toISOString();
-  const { error } = await supabase.from("inventory_ownership_shares").insert(shares.map((share) => ({
-    inventory_purchase_id: inventoryPurchaseId, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
-    contribution_amount: share.contributionAmount ?? null, created_at: timestamp, updated_at: timestamp
-  })));
-  if (error) throw new Error(error.message);
+  if (shares.length) {
+    const { error } = await supabase.from("inventory_ownership_shares").upsert(shares.map((share) => ({
+      inventory_purchase_id: inventoryPurchaseId, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
+      contribution_amount: share.contributionAmount ?? null, updated_at: timestamp
+    })), { onConflict: "inventory_purchase_id,worker_id" });
+    if (error) throw new Error(error.message);
+  }
+  const existing = await supabase.from("inventory_ownership_shares").select("id,worker_id").eq("inventory_purchase_id", inventoryPurchaseId);
+  if (existing.error) throw new Error(existing.error.message);
+  const desiredWorkers = new Set(shares.map((share) => share.workerId));
+  const staleIds = (existing.data || []).filter((row) => !desiredWorkers.has(row.worker_id)).map((row) => row.id);
+  if (staleIds.length) {
+    const deletion = await supabase.from("inventory_ownership_shares").delete().in("id", staleIds);
+    if (deletion.error) throw new Error(deletion.error.message);
+  }
 }
 
 export async function saveSaleOwnership(salesRecordId: string, shares: OwnershipShare[]) {
   if (!isSupabaseConfigured || !supabase) return;
-  const { error: deleteError } = await supabase.from("sale_profit_shares").delete().eq("sales_record_id", salesRecordId);
-  if (deleteError) throw new Error(deleteError.message);
-  if (!shares.length) return;
   const timestamp = new Date().toISOString();
-  const { error } = await supabase.from("sale_profit_shares").insert(shares.map((share) => ({
-    sales_record_id: salesRecordId, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
-    created_at: timestamp, updated_at: timestamp
-  })));
-  if (error) throw new Error(error.message);
+  if (shares.length) {
+    const { error } = await supabase.from("sale_profit_shares").upsert(shares.map((share) => ({
+      sales_record_id: salesRecordId, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
+      updated_at: timestamp
+    })), { onConflict: "sales_record_id,worker_id" });
+    if (error) throw new Error(error.message);
+  }
+  const existing = await supabase.from("sale_profit_shares").select("id,worker_id").eq("sales_record_id", salesRecordId);
+  if (existing.error) throw new Error(existing.error.message);
+  const desiredWorkers = new Set(shares.map((share) => share.workerId));
+  const staleIds = (existing.data || []).filter((row) => !desiredWorkers.has(row.worker_id)).map((row) => row.id);
+  if (staleIds.length) {
+    const deletion = await supabase.from("sale_profit_shares").delete().in("id", staleIds);
+    if (deletion.error) throw new Error(deletion.error.message);
+  }
 }

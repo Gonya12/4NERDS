@@ -42,7 +42,7 @@ export function TransactionSaleReview({ transaction, workers, onEditCostBasis }:
         const profit = basisKnown ? roundMoney(Number(item.soldPrice || 0) - item.historicalCostBasis) : undefined;
         return <article key={item.id} className="surface-card p-4">
           <div className="flex items-start justify-between gap-3">
-            <div><h3 className="font-black">{item.itemName || "Unnamed item"}</h3><p className="text-xs text-slate-500">{item.ownershipShares.map((share) => `${ownerName(workers, share.workerId)} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
+            <div><div className="flex flex-wrap items-center gap-2"><h3 className="font-black">{item.itemName || "Unnamed item"}</h3>{item.cardGame ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black text-violet-700">{item.cardGame === "one_piece" ? "ONE PIECE" : item.cardLanguage === "ja" ? "POKÉMON · JA" : "POKÉMON · EN"}</span> : null}</div><p className="text-xs text-slate-500">{item.cardCode || item.collectorNumber ? `#${item.cardCode || item.collectorNumber} · ` : ""}{item.ownershipShares.map((share) => `${ownerName(workers, share.workerId)} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
             {!basisKnown ? <button type="button" onClick={() => onEditCostBasis(item)} className="min-h-10 shrink-0 rounded-xl bg-amber-500 px-3 text-xs font-black text-white">Edit Cost Basis</button> : null}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">

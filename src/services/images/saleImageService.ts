@@ -105,16 +105,23 @@ export async function uploadFinancialImage(file: File, folder: "sales" | "purcha
   return { imageUrl: data.publicUrl, imagePath };
 }
 
-export async function saveTransactionImage(file: File, transactionId: string, itemId?: string, imageType = "transaction", onProgress?: (stage: ImageUploadStage) => void) {
+export async function saveTransactionImage(
+  file: File,
+  transactionId: string,
+  itemId?: string,
+  imageType = "transaction",
+  onProgress?: (stage: ImageUploadStage) => void,
+  stableImageId: string = id("transaction-image")
+) {
   onProgress?.("preparing");
   if (!isSupabaseConfigured || !supabase) {
     const imageUrl = await fileToDataUrl(file);
     onProgress?.("complete");
-    return { id: id("transaction-image"), imageUrl, imagePath: undefined };
+    return { id: stableImageId, imageUrl, imagePath: undefined };
   }
   onProgress?.("compressing");
   const compressed = await compressSaleImage(file);
-  const imagePath = `${transactionId}/${itemId || "shared"}/${imageType}-${Date.now()}.jpg`;
+  const imagePath = `${transactionId}/${itemId || "shared"}/${imageType}-${stableImageId}.jpg`;
   onProgress?.("uploading");
   const { error } = await supabase.storage.from("transaction-images").upload(imagePath, compressed, {
     cacheControl: "31536000", upsert: true, contentType: compressed.type
@@ -122,9 +129,8 @@ export async function saveTransactionImage(file: File, transactionId: string, it
   if (error) throw new Error(error.message);
   const { data } = supabase.storage.from("transaction-images").getPublicUrl(imagePath);
   onProgress?.("saving");
-  const imageId = id("transaction-image");
   const imageRow: Record<string, string | number> = {
-    id: imageId,
+    id: stableImageId,
     transaction_id: transactionId,
     image_type: imageType,
     image_url: data.publicUrl,
@@ -133,8 +139,12 @@ export async function saveTransactionImage(file: File, transactionId: string, it
     updated_at: nowIso()
   };
   if (itemId) imageRow.transaction_item_id = itemId;
-  const metadata = await supabase.from("transaction_images").upsert(imageRow, { onConflict: "id" });
+  let metadata = await supabase.from("transaction_images").upsert(imageRow, { onConflict: "id" });
+  if (metadata.error && (metadata.error.code === "42703" || metadata.error.code === "PGRST204" || /sort_order|schema cache/i.test(metadata.error.message))) {
+    const { sort_order: _sortOrder, ...legacyImageRow } = imageRow;
+    metadata = await supabase.from("transaction_images").upsert(legacyImageRow as any, { onConflict: "id" });
+  }
   if (metadata.error) throw new Error(`The image uploaded, but its transaction record could not be saved: ${metadata.error.message}`);
   onProgress?.("complete");
-  return { id: imageId, imageUrl: data.publicUrl, imagePath };
+  return { id: stableImageId, imageUrl: data.publicUrl, imagePath };
 }

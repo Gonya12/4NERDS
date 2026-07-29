@@ -1,13 +1,16 @@
 import { BadgeDollarSign, ChevronDown, ChevronUp, Copy, Download, Eye, MoreVertical, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, Worker } from "../../types/models";
+import type { CardScanSuggestion } from "../../services/sales/cardScanService";
+import { calculateTargetPrice, selectedTcgplayerPrice } from "../../utils/cardPricing";
 import { effectiveSaleOwnership, expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { formatMoney } from "../../utils/paymentMath";
 import { ImageLightbox } from "./ImageLightbox";
+import { ManualCardSearch } from "./ManualCardSearch";
 
 type RecordType = "sale" | "purchase" | "expense";
 type SortKey = "date" | "item" | "type" | "status" | "bought" | "sold" | "profit";
-type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "ownershipType" | "gonzaloPercent" | "thiagoPercent" | "otherOwnerPercent" | "paidBy" | "gonzaloCost" | "thiagoCost" | "gonzaloProfit" | "thiagoProfit" | "internalBalance" | "ownershipAssigned" | "actions";
+type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardGame" | "cardLanguage" | "dataProvider" | "providerCardId" | "cardCode" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "ownershipType" | "gonzaloPercent" | "thiagoPercent" | "otherOwnerPercent" | "paidBy" | "gonzaloCost" | "thiagoCost" | "gonzaloProfit" | "thiagoProfit" | "internalBalance" | "ownershipAssigned" | "actions";
 
 type Props = {
   sales: SalesRecord[];
@@ -49,6 +52,7 @@ type UnifiedRow = {
   event: string;
   payment: string;
   notes: string;
+  cardGame?: string; cardLanguage?: string; dataProvider?: string; providerCardId?: string; cardCode?: string;
   cardName?: string; collectorNumber?: string; cardSet?: string; condition?: string; stickerPrice?: number;
   gradingCompany?: string; grade?: string; certificateNumber?: string; scanConfidence?: string; scanStatus?: string;
   original: SalesRecord | InventoryPurchase | BusinessExpense;
@@ -62,6 +66,8 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "profit", label: "Gross Profit" }, { key: "margin", label: "Margin" }, { key: "date", label: "Date" },
   { key: "source", label: "Source" }, { key: "worker", label: "Worker" }, { key: "event", label: "Event" },
   { key: "payment", label: "Payment" }, { key: "notes", label: "Notes" },
+  { key: "cardGame", label: "Card Game" }, { key: "cardLanguage", label: "Card Language" }, { key: "dataProvider", label: "Data Provider" },
+  { key: "providerCardId", label: "Provider Card ID" }, { key: "cardCode", label: "Card Code" },
   { key: "cardName", label: "Card Name" }, { key: "collectorNumber", label: "Collector #" }, { key: "cardSet", label: "Set" },
   { key: "condition", label: "Condition" }, { key: "stickerPrice", label: "Sticker Price" }, { key: "gradingCompany", label: "Grading Co." },
   { key: "grade", label: "Grade" }, { key: "certificateNumber", label: "Certificate #" }, { key: "scanConfidence", label: "Scan Confidence" },
@@ -82,6 +88,9 @@ function inputClass() {
 export function FinancialSpreadsheet(props: Props) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<RecordType | "all">("all");
+  const [cardGameFilter, setCardGameFilter] = useState("all");
+  const [cardLanguageFilter, setCardLanguageFilter] = useState("all");
+  const [providerFilter, setProviderFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [ascending, setAscending] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(defaultVisible);
@@ -96,26 +105,33 @@ export function FinancialSpreadsheet(props: Props) {
   const [soldTargetKeys, setSoldTargetKeys] = useState<string[]>([]);
   const [soldDraft, setSoldDraft] = useState({ date: new Date().toISOString().slice(0, 10), eventId: "", workerId: "", payment: "", prices: {} as Record<string, string>, quantities: {} as Record<string, string> });
   const [newRowKey, setNewRowKey] = useState("");
+  const [cardSearchRow, setCardSearchRow] = useState<UnifiedRow>();
   const knownRowKeys = useRef<Set<string> | undefined>(undefined);
   const pageSize = 25;
 
   const eventMap = useMemo(() => new Map(props.events.map((event) => [event.id, event.name])), [props.events]);
   const workerMap = useMemo(() => new Map(props.workers.map((worker) => [worker.id, worker.name])), [props.workers]);
   const rows = useMemo<UnifiedRow[]>(() => [
-    ...props.sales.map((sale) => ({ key: `sale-${sale.id}`, id: sale.id, type: "sale" as const, image: sale.imageUrl, item: sale.itemName || "Details pending", category: pokemonCategoryLabels[sale.category || "other_pokemon_product"], quantity: sale.quantity || 1, status: "Sold", raw: sale.isRawCard, market: Number(sale.marketValue || 0), buyPercent: Number(sale.buyPercentage || 0), target: Number(sale.targetBuyPrice || 0), bought: Number(sale.boughtPrice || 0), sold: Number(sale.soldPrice || 0), profit: saleProfit(sale), margin: Number(sale.soldPrice || 0) > 0 ? saleProfit(sale) / Number(sale.soldPrice) * 100 : 0, date: sale.soldAt, source: sale.purchaseSource || sale.boughtFrom || "", worker: workerMap.get(sale.soldByWorkerId || "") || "", event: eventMap.get(sale.eventId || "") || "", payment: sale.paymentMethod || "", notes: sale.notes || "", original: sale })),
-    ...props.purchases.map((purchase) => { const summary = inventoryQuantitySummary(purchase, props.sales); return { key: `purchase-${purchase.id}`, id: purchase.id, type: "purchase" as const, image: purchase.imageUrl, item: purchase.itemName, category: pokemonCategoryLabels[purchase.category], quantity: purchase.quantity, status: inventoryStatusLabels[purchase.status], raw: purchase.isRawCard, market: Number(purchase.marketValue || 0), buyPercent: Number(purchase.buyPercentage || 0), target: Number(purchase.targetBuyPrice || 0), bought: purchase.totalCost, sold: summary.realizedRevenue, profit: summary.realizedProfit, margin: summary.margin, date: purchase.purchaseDate, source: purchase.purchaseSource || purchase.seller || "", worker: workerMap.get(purchase.purchasedByWorkerId || "") || "", event: eventMap.get(purchase.eventId || "") || "", payment: purchase.soldPaymentMethod || "", notes: purchase.notes || "", original: purchase }; }),
+    ...props.sales.map((sale) => ({ key: `sale-${sale.id}`, id: sale.id, type: "sale" as const, image: sale.imageUrl, item: sale.itemName || "Details pending", category: pokemonCategoryLabels[sale.category || "other_pokemon_product"], quantity: sale.quantity || 1, status: "Sold", raw: sale.isRawCard, market: Number(sale.marketValue || 0), buyPercent: Number(sale.buyPercentage || 0), target: Number(sale.targetBuyPrice || 0), bought: Number(sale.boughtPrice || 0), sold: Number(sale.soldPrice || 0), profit: saleProfit(sale), margin: Number(sale.soldPrice || 0) > 0 ? saleProfit(sale) / Number(sale.soldPrice) * 100 : 0, date: sale.soldAt, source: sale.purchaseSource || sale.boughtFrom || "", worker: workerMap.get(sale.soldByWorkerId || "") || "", event: eventMap.get(sale.eventId || "") || "", payment: sale.paymentMethod || "", notes: sale.notes || "", cardGame: sale.cardGame, cardLanguage: sale.cardLanguage, dataProvider: sale.dataProvider, providerCardId: sale.providerCardId, cardCode: sale.cardCode, original: sale })),
+    ...props.purchases.map((purchase) => { const summary = inventoryQuantitySummary(purchase, props.sales); return { key: `purchase-${purchase.id}`, id: purchase.id, type: "purchase" as const, image: purchase.imageUrl, item: purchase.itemName, category: pokemonCategoryLabels[purchase.category], quantity: purchase.quantity, status: inventoryStatusLabels[purchase.status], raw: purchase.isRawCard, market: Number(purchase.marketValue || 0), buyPercent: Number(purchase.buyPercentage || 0), target: Number(purchase.targetBuyPrice || 0), bought: purchase.totalCost, sold: summary.realizedRevenue, profit: summary.realizedProfit, margin: summary.margin, date: purchase.purchaseDate, source: purchase.purchaseSource || purchase.seller || "", worker: workerMap.get(purchase.purchasedByWorkerId || "") || "", event: eventMap.get(purchase.eventId || "") || "", payment: purchase.soldPaymentMethod || "", notes: purchase.notes || "", cardGame: purchase.cardGame, cardLanguage: purchase.cardLanguage, dataProvider: purchase.dataProvider, providerCardId: purchase.providerCardId, cardCode: purchase.cardCode, original: purchase }; }),
     ...props.expenses.map((expense) => ({ key: `expense-${expense.id}`, id: expense.id, type: "expense" as const, image: expense.receiptImageUrl, item: expense.description || "Expense", category: expenseCategoryLabels[expense.category], quantity: 1, status: "Expense", raw: false, market: 0, buyPercent: 0, target: 0, bought: expense.amount, sold: 0, profit: -expense.amount, margin: 0, date: expense.expenseDate, source: expense.vendor || "", worker: workerMap.get(expense.paidByWorkerId || "") || "", event: eventMap.get(expense.eventId || "") || "", payment: "", notes: expense.notes || "", original: expense }))
   ], [props.sales, props.purchases, props.expenses, eventMap, workerMap]);
 
   const filteredRows = useMemo(() => {
     const needle = query.toLowerCase();
-    return rows.filter((row) => (typeFilter === "all" || row.type === typeFilter) && `${row.item} ${row.category} ${row.status} ${row.event} ${row.worker} ${row.notes}`.toLowerCase().includes(needle)).sort((a, b) => {
+    return rows.filter((row) =>
+      (typeFilter === "all" || row.type === typeFilter)
+      && (cardGameFilter === "all" || row.cardGame === cardGameFilter)
+      && (cardLanguageFilter === "all" || row.cardLanguage === cardLanguageFilter)
+      && (providerFilter === "all" || row.dataProvider === providerFilter)
+      && `${row.item} ${row.category} ${row.status} ${row.event} ${row.worker} ${row.notes} ${row.cardGame || ""} ${row.cardLanguage || ""} ${row.dataProvider || ""} ${row.providerCardId || ""} ${row.cardCode || ""}`.toLowerCase().includes(needle)
+    ).sort((a, b) => {
       const left = sortKey === "item" || sortKey === "type" || sortKey === "status" || sortKey === "date" ? String(a[sortKey]) : Number(a[sortKey]);
       const right = sortKey === "item" || sortKey === "type" || sortKey === "status" || sortKey === "date" ? String(b[sortKey]) : Number(b[sortKey]);
       const result = typeof left === "string" ? left.localeCompare(String(right)) : left - Number(right);
       return ascending ? result : -result;
     });
-  }, [rows, query, typeFilter, sortKey, ascending]);
+  }, [rows, query, typeFilter, cardGameFilter, cardLanguageFilter, providerFilter, sortKey, ascending]);
   useEffect(() => {
     const nextKeys = new Set(rows.map((row) => row.key));
     if (!knownRowKeys.current) {
@@ -249,6 +265,85 @@ export function FinancialSpreadsheet(props: Props) {
     } catch { setSaveState("error"); }
   }
 
+  async function applySpreadsheetCard(suggestion: CardScanSuggestion) {
+    const row = cardSearchRow;
+    if (!row || row.type === "expense") return;
+    const selectedPrice = selectedTcgplayerPrice(suggestion.tcgplayerPricing);
+    setSaveState("saving");
+    try {
+      if (row.type === "sale") {
+        const sale = row.original as SalesRecord;
+        const percentage = sale.buyPercentage ?? suggestion.tcgplayerPricing?.targetPercent ?? 75;
+        await props.onSaveSale({
+          ...sale,
+          itemName: suggestion.cardName || sale.itemName,
+          cardName: suggestion.cardName || sale.cardName,
+          collectorNumber: suggestion.collectorNumber || sale.collectorNumber,
+          cardSet: suggestion.cardSet || sale.cardSet,
+          cardSetId: suggestion.cardSetId || sale.cardSetId,
+          cardSetCode: suggestion.cardSetCode || sale.cardSetCode,
+          cardRarity: suggestion.cardRarity || sale.cardRarity,
+          cardGame: suggestion.cardGame || sale.cardGame,
+          cardLanguage: suggestion.cardLanguage || suggestion.language || sale.cardLanguage,
+          dataProvider: suggestion.dataProvider || sale.dataProvider,
+          providerCardId: suggestion.dataProvider === "manual" ? undefined : suggestion.providerCardId || sale.providerCardId,
+          cardCode: suggestion.cardCode || sale.cardCode,
+          marketPriceCurrency: suggestion.marketPriceCurrency || suggestion.tcgplayerPricing?.currency || sale.marketPriceCurrency,
+          pokemonTcgCardId: suggestion.dataProvider === "pokemontcg" ? suggestion.providerCardId || suggestion.pokemonTcgCardId : suggestion.dataProvider ? undefined : sale.pokemonTcgCardId,
+          officialCardImageUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.officialImageUrl || sale.officialCardImageUrl,
+          tcgplayerUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerUrl || suggestion.tcgplayerPricing?.url || sale.tcgplayerUrl,
+          marketValue: selectedPrice?.market ?? sale.marketValue,
+          marketPriceSource: suggestion.dataProvider === "manual" ? "Manual" : suggestion.tcgplayerPricing?.source || (suggestion.tcgplayerPricing ? "TCGplayer" : sale.marketPriceSource),
+          marketPriceVariant: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.selectedVariant || sale.marketPriceVariant,
+          marketPriceUpdatedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.updatedAt || sale.marketPriceUpdatedAt,
+          marketPriceCheckedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.checkedAt || sale.marketPriceCheckedAt,
+          buyPercentage: percentage,
+          targetBuyPrice: selectedPrice?.market == null ? sale.targetBuyPrice : calculateTargetPrice(selectedPrice.market, percentage),
+          // Actual bought/sold values and historical cost basis are deliberately preserved.
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        const purchase = row.original as InventoryPurchase;
+        const percentage = purchase.buyPercentage ?? suggestion.tcgplayerPricing?.targetPercent ?? 75;
+        await props.onSavePurchase({
+          ...purchase,
+          itemName: suggestion.cardName || purchase.itemName,
+          cardName: suggestion.cardName || purchase.cardName,
+          collectorNumber: suggestion.collectorNumber || purchase.collectorNumber,
+          cardSet: suggestion.cardSet || purchase.cardSet,
+          cardSetId: suggestion.cardSetId || purchase.cardSetId,
+          cardSetCode: suggestion.cardSetCode || purchase.cardSetCode,
+          cardRarity: suggestion.cardRarity || purchase.cardRarity,
+          cardGame: suggestion.cardGame || purchase.cardGame,
+          cardLanguage: suggestion.cardLanguage || suggestion.language || purchase.cardLanguage,
+          dataProvider: suggestion.dataProvider || purchase.dataProvider,
+          providerCardId: suggestion.dataProvider === "manual" ? undefined : suggestion.providerCardId || purchase.providerCardId,
+          cardCode: suggestion.cardCode || purchase.cardCode,
+          marketPriceCurrency: suggestion.marketPriceCurrency || suggestion.tcgplayerPricing?.currency || purchase.marketPriceCurrency,
+          pokemonTcgCardId: suggestion.dataProvider === "pokemontcg" ? suggestion.providerCardId || suggestion.pokemonTcgCardId : suggestion.dataProvider ? undefined : purchase.pokemonTcgCardId,
+          officialCardImageUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.officialImageUrl || purchase.officialCardImageUrl,
+          tcgplayerUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerUrl || suggestion.tcgplayerPricing?.url || purchase.tcgplayerUrl,
+          marketValue: selectedPrice?.market ?? purchase.marketValue,
+          marketPriceSource: suggestion.dataProvider === "manual" ? "Manual" : suggestion.tcgplayerPricing?.source || (suggestion.tcgplayerPricing ? "TCGplayer" : purchase.marketPriceSource),
+          marketPriceVariant: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.selectedVariant || purchase.marketPriceVariant,
+          marketPriceUpdatedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.updatedAt || purchase.marketPriceUpdatedAt,
+          marketPriceCheckedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.checkedAt || purchase.marketPriceCheckedAt,
+          buyPercentage: percentage,
+          targetBuyPrice: selectedPrice?.market == null ? purchase.targetBuyPrice : calculateTargetPrice(selectedPrice.market, percentage),
+          scanResult: suggestion.tcgplayerPricing
+            ? { ...(purchase.scanResult || {}), tcgplayerPricing: suggestion.tcgplayerPricing }
+            : purchase.scanResult,
+          // totalCost, soldPrice, and stickerPrice remain transaction facts.
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      setSaveState("saved");
+      setCardSearchRow(undefined);
+    } catch {
+      setSaveState("error");
+    }
+  }
+
   function cell(key: ColumnKey, row: UnifiedRow) {
     const editing = editingKey === row.key;
     if (key === "photo") return row.image ? <button type="button" title={`Preview ${row.type === "expense" ? "receipt" : "image"}`} onClick={(event) => { event.stopPropagation(); setPreviewKey(row.key); }} className="group/image rounded-lg border-2 border-transparent transition hover:border-coral focus:border-coral focus:outline-none"><img src={row.image} alt={`${row.item} thumbnail`} loading="lazy" className="size-10 cursor-zoom-in rounded-md bg-slate-100 object-contain transition-transform group-hover/image:scale-105 dark:bg-slate-900" /></button> : <div aria-label="No image" className="size-10 rounded-lg bg-slate-100 dark:bg-slate-800" />;
@@ -278,6 +373,7 @@ export function FinancialSpreadsheet(props: Props) {
     if (key === "event") return editing ? <select value={draft.eventId} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, eventId: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}><option value="">No event</option>{props.events.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : row.event;
     if (key === "payment") return editing && row.type !== "expense" ? <select value={draft.payment} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, payment: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}><option value="">Not set</option>{["cash", "zelle", "venmo", "cash_app", "paypal", "card", "trade", "other"].map((value) => <option key={value} value={value}>{value.replace("_", " ")}</option>)}</select> : row.payment;
     if (key === "notes") return editing ? <input value={draft.notes} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, notes: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : <span className="block max-w-44 truncate">{row.notes}</span>;
+    if (["cardGame", "cardLanguage", "dataProvider", "providerCardId", "cardCode"].includes(key)) return (row[key as keyof UnifiedRow] as string) || "—";
     if (["cardName", "collectorNumber", "cardSet", "condition", "stickerPrice", "gradingCompany", "grade", "certificateNumber", "scanConfidence", "scanStatus"].includes(key)) {
       if (row.type !== "purchase") return "—";
       const purchase = row.original as InventoryPurchase;
@@ -306,7 +402,7 @@ export function FinancialSpreadsheet(props: Props) {
       };
       return ["gonzaloCost", "thiagoCost", "gonzaloProfit", "thiagoProfit"].includes(key) ? formatMoney(Number(values[key])) : key.endsWith("Percent") ? `${values[key]}%` : values[key];
     }
-    return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" aria-label="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" aria-label="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Pencil size={15} /></button>}{row.type === "purchase" && (row.original as InventoryPurchase).status !== "sold" ? <button onClick={() => openSoldModal([row])} title="Mark sold" aria-label="Mark sold" className="rounded-lg bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/40"><BadgeDollarSign size={15} /></button> : null}<button onClick={() => openFullEditor(row)} title="View or edit full record" aria-label="View or edit full record" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" aria-label="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" aria-label="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
+    return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" aria-label="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" aria-label="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Pencil size={15} /></button>}{row.type === "purchase" && (row.original as InventoryPurchase).status !== "sold" ? <button onClick={() => openSoldModal([row])} title="Mark sold" aria-label="Mark sold" className="rounded-lg bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/40"><BadgeDollarSign size={15} /></button> : null}{row.type !== "expense" ? <button onClick={() => setCardSearchRow(row)} title="Search official Pokémon card" aria-label="Search official Pokémon card" className="rounded-lg bg-violet-50 p-2 text-violet-700 dark:bg-violet-950/40 dark:text-violet-200"><Search size={15} /></button> : null}<button onClick={() => openFullEditor(row)} title="View or edit full record" aria-label="View or edit full record" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" aria-label="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" aria-label="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
   }
 
   return (
@@ -314,6 +410,11 @@ export function FinancialSpreadsheet(props: Props) {
       <div className="space-y-3 border-b border-slate-200 p-3 dark:border-slate-800">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="eyebrow">Spreadsheet</p><h2 className="font-black text-ink dark:text-white">Records Grid</h2></div><div className="flex items-center gap-2"><button onClick={() => setAddRowOpen(true)} className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-coral px-3 text-sm font-black text-white"><Plus size={17} /> Add Row</button><span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-black ${saveState === "unsaved" ? "bg-amber-100 text-amber-700" : saveState === "saving" ? "bg-sky-100 text-sky-700" : saveState === "error" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>{saveState === "unsaved" ? "Unsaved" : saveState === "saving" ? "Saving..." : saveState === "error" ? "Save failed" : saveState === "saved" ? "Saved" : "Up to date"}</span></div></div>
         <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]"><label className="relative"><Search size={16} className="absolute left-3 top-3.5 text-slate-400" /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} placeholder="Search spreadsheet" className="w-full rounded-xl border border-slate-200 py-3 pl-9 pr-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white" /></label><select value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value as typeof typeFilter); setPage(0); }} className="rounded-xl border border-slate-200 px-3 py-3 text-base dark:border-slate-800 dark:bg-slate-950 dark:text-white"><option value="all">All records</option><option value="sale">Sales</option><option value="purchase">Inventory</option><option value="expense">Expenses</option></select><details className="relative"><summary className="flex min-h-12 cursor-pointer list-none items-center justify-center rounded-xl bg-slate-100 px-3 text-sm font-black dark:bg-slate-800">Columns</summary><div className="absolute right-0 z-30 mt-2 grid w-64 grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-900">{allColumns.map((column) => <label key={column.key} className="flex items-center gap-2 rounded-lg p-2 text-xs"><input type="checkbox" checked={visibleColumns.has(column.key)} onChange={() => toggleColumn(column.key)} /> {column.label}</label>)}</div></details></div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <select aria-label="Filter by card game" value={cardGameFilter} onChange={(event) => { setCardGameFilter(event.target.value); setPage(0); }} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950"><option value="all">All card games</option><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select>
+          <select aria-label="Filter by card language" value={cardLanguageFilter} onChange={(event) => { setCardLanguageFilter(event.target.value); setPage(0); }} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950"><option value="all">All languages</option><option value="en">English</option><option value="ja">Japanese</option><option value="unknown">Unknown</option></select>
+          <select aria-label="Filter by data provider" value={providerFilter} onChange={(event) => { setProviderFilter(event.target.value); setPage(0); }} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950"><option value="all">All providers</option><option value="pokemontcg">Pokémon TCG API</option><option value="tcgdex">TCGdex</option><option value="optcgapi">OPTCG API</option><option value="manual">Manual</option></select>
+        </div>
         {selected.size ? <div className="flex flex-wrap items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 p-2 text-xs dark:border-sky-900 dark:bg-sky-950/30">
           <strong>{selected.size} selected</strong>
           {onlyType === "purchase" ? <>{selectedRows.some((row) => (row.original as InventoryPurchase).status !== "sold") ? <button onClick={() => openSoldModal()} className="rounded-lg bg-emerald-600 px-3 py-2 font-bold text-white">Mark Sold</button> : null}<button onClick={() => void bulkStatus("in_stock")} className="rounded-lg bg-white px-3 py-2 font-bold dark:bg-slate-900">Mark In Stock</button><button onClick={() => void bulkStatus("personal")} className="rounded-lg bg-white px-3 py-2 font-bold dark:bg-slate-900">Mark Personal</button><select aria-label="Assign category" defaultValue="" onChange={(event) => void bulkAssign("category", event.target.value)} className="rounded-lg border border-slate-200 bg-white px-2 py-2 font-bold dark:border-slate-700 dark:bg-slate-900"><option value="">Assign Category</option>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></> : null}
@@ -335,7 +436,7 @@ export function FinancialSpreadsheet(props: Props) {
                 {row.image ? <img src={row.image} alt="" loading="lazy" className="size-14 shrink-0 rounded-xl bg-slate-100 object-contain dark:bg-slate-900" /> : <span className="grid size-14 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-900"><Eye size={18} /></span>}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-black text-slate-950 dark:text-white">{row.item}</span>
-                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-500"><span className="capitalize">{row.type}</span><span>·</span><span>{row.status}</span>{row.worker ? <><span>·</span><span>{row.worker}</span></> : null}</span>
+                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-500"><span className="capitalize">{row.type}</span><span>·</span><span>{row.status}</span>{row.cardGame ? <><span>·</span><span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-violet-700">{row.cardGame === "one_piece" ? "One Piece" : row.cardLanguage === "ja" ? "Pokémon · JA" : "Pokémon · EN"}</span></> : null}{row.worker ? <><span>·</span><span>{row.worker}</span></> : null}</span>
                   <span className="mt-2 grid grid-cols-3 gap-2 text-xs"><span><small className="block text-slate-500">Cost</small><b>{formatMoney(row.bought)}</b></span><span><small className="block text-slate-500">Sold</small><b>{formatMoney(row.sold)}</b></span><span><small className="block text-slate-500">Profit</small><b className={row.profit >= 0 ? "text-emerald-600" : "text-rose-600"}>{formatMoney(row.profit)}</b></span></span>
                 </span>
               </button>
@@ -343,6 +444,7 @@ export function FinancialSpreadsheet(props: Props) {
                 <summary className="grid size-10 cursor-pointer place-items-center rounded-xl bg-slate-100 dark:bg-slate-800" aria-label={`Actions for ${row.item}`}><MoreVertical size={18} /></summary>
                 <div className="absolute right-0 top-11 z-30 w-44 space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   <button type="button" onClick={() => openFullEditor(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Open details</button>
+                  {row.type !== "expense" ? <button type="button" onClick={() => setCardSearchRow(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30">Search official card</button> : null}
                   <button type="button" onClick={() => void props.onDuplicate(row.type, row.id)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Duplicate</button>
                   <button type="button" onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30">Delete</button>
                 </div>
@@ -378,6 +480,17 @@ export function FinancialSpreadsheet(props: Props) {
         </section>
       </div> : null}
       {addRowOpen ? <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/60 p-0 sm:items-center sm:p-4"><section className="w-full max-w-sm space-y-3 rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl dark:bg-slate-900"><div className="flex items-center justify-between"><div><p className="eyebrow">Manual record</p><h3 className="text-xl font-black text-ink dark:text-white">Choose record type</h3></div><button onClick={() => setAddRowOpen(false)} className="rounded-full bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button></div>{([['sale','Sale'],['purchase','Inventory Purchase'],['expense','Business Expense']] as const).map(([type, label]) => <button key={type} onClick={() => { setAddRowOpen(false); props.onAddRow(type); }} className="min-h-12 w-full rounded-xl bg-slate-100 px-4 text-left font-black hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-slate-700"><Plus className="mr-2 inline" size={17} />{label}</button>)}<p className="text-xs text-slate-500">Photos are optional. The record will save to its matching Supabase table.</p></section></div> : null}
+      {cardSearchRow && cardSearchRow.type !== "expense" ? <ManualCardSearch
+        open
+        category={(cardSearchRow.original as SalesRecord | InventoryPurchase).category || "raw_card"}
+        initialName={(cardSearchRow.original as SalesRecord | InventoryPurchase).cardName || cardSearchRow.item}
+        initialCollectorNumber={(cardSearchRow.original as SalesRecord | InventoryPurchase).cardCode || (cardSearchRow.original as SalesRecord | InventoryPurchase).collectorNumber}
+        initialSet={(cardSearchRow.original as SalesRecord | InventoryPurchase).cardSet}
+        initialLanguage={(cardSearchRow.original as SalesRecord | InventoryPurchase).cardLanguage}
+        initialGame={(cardSearchRow.original as SalesRecord | InventoryPurchase).cardGame}
+        onClose={() => setCardSearchRow(undefined)}
+        onApply={(suggestion) => void applySpreadsheetCard(suggestion)}
+      /> : null}
       <ImageLightbox imageUrl={previewRow?.image} title={previewRow?.item || "Sales Control image"} onClose={() => setPreviewKey("")} onPrevious={imageRows.length > 1 ? () => setPreviewKey(imageRows[(previewIndex - 1 + imageRows.length) % imageRows.length].key) : undefined} onNext={imageRows.length > 1 ? () => setPreviewKey(imageRows[(previewIndex + 1) % imageRows.length].key) : undefined} />
     </section>
   );

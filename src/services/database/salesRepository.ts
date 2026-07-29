@@ -6,6 +6,12 @@ import { fileToDataUrl, uploadSaleImage } from "../images/saleImageService";
 const pendingKey = "4nerds_pending_sales_v1";
 const cacheKey = "4nerds_sales_cache_v1";
 
+function canonicalCardLanguage(value: string | undefined, cardGame: SalesRecord["cardGame"]) {
+  if (value === "ja" || /japanese/i.test(value || "")) return "ja";
+  if (value === "unknown" || cardGame === "other") return "unknown";
+  return "en";
+}
+
 type SalesRow = {
   id: string;
   event_id?: string | null;
@@ -29,7 +35,12 @@ type SalesRow = {
   card_set_id?: string | null;
   card_set_code?: string | null;
   card_rarity?: string | null;
+  card_game?: SalesRecord["cardGame"] | null;
   card_language?: string | null;
+  data_provider?: SalesRecord["dataProvider"] | null;
+  provider_card_id?: string | null;
+  card_code?: string | null;
+  market_price_currency?: string | null;
   card_condition?: SalesRecord["cardCondition"] | null;
   sticker_price?: number | null;
   pokemon_tcg_card_id?: string | null;
@@ -75,7 +86,12 @@ function fromRow(row: SalesRow): SalesRecord {
     cardSetId: row.card_set_id || undefined,
     cardSetCode: row.card_set_code || undefined,
     cardRarity: row.card_rarity || undefined,
+    cardGame: row.card_game || undefined,
     cardLanguage: row.card_language || undefined,
+    dataProvider: row.data_provider || undefined,
+    providerCardId: row.provider_card_id || undefined,
+    cardCode: row.card_code || undefined,
+    marketPriceCurrency: row.market_price_currency || undefined,
     cardCondition: row.card_condition || undefined,
     stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
     pokemonTcgCardId: row.pokemon_tcg_card_id || undefined,
@@ -98,7 +114,9 @@ function fromRow(row: SalesRow): SalesRecord {
   };
 }
 
-function toRow(sale: SalesRecord): SalesRow {
+export function buildLegacySalePayload(sale: SalesRecord): SalesRow {
+  const cardGame = sale.cardGame || (sale.pokemonTcgCardId ? "pokemon" : "other");
+  const dataProvider = sale.dataProvider || (sale.pokemonTcgCardId ? "pokemontcg" : "manual");
   return {
     id: sale.id,
     event_id: sale.eventId || null,
@@ -122,10 +140,15 @@ function toRow(sale: SalesRecord): SalesRow {
     card_set_id: sale.cardSetId || null,
     card_set_code: sale.cardSetCode || null,
     card_rarity: sale.cardRarity || null,
-    card_language: sale.cardLanguage || null,
+    card_game: cardGame,
+    card_language: canonicalCardLanguage(sale.cardLanguage, cardGame),
+    data_provider: dataProvider,
+    provider_card_id: dataProvider === "manual" ? null : sale.providerCardId || sale.pokemonTcgCardId || null,
+    card_code: sale.cardCode || null,
+    market_price_currency: sale.marketPriceCurrency || null,
     card_condition: sale.cardCondition || null,
     sticker_price: sale.stickerPrice ?? null,
-    pokemon_tcg_card_id: sale.pokemonTcgCardId || null,
+    pokemon_tcg_card_id: dataProvider === "pokemontcg" ? sale.pokemonTcgCardId || sale.providerCardId || null : null,
     official_card_image_url: sale.officialCardImageUrl || null,
     bought_from: sale.boughtFrom || null,
     purchase_source: sale.purchaseSource || null,
@@ -160,7 +183,12 @@ function withoutManualSearchColumns(row: SalesRow) {
     card_set_id: _cardSetId,
     card_set_code: _cardSetCode,
     card_rarity: _cardRarity,
+    card_game: _cardGame,
     card_language: _cardLanguage,
+    data_provider: _dataProvider,
+    provider_card_id: _providerCardId,
+    card_code: _cardCode,
+    market_price_currency: _marketPriceCurrency,
     card_condition: _cardCondition,
     sticker_price: _stickerPrice,
     pokemon_tcg_card_id: _pokemonTcgCardId,
@@ -207,7 +235,7 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
-  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,notes,sold_at,pending_upload,created_at,updated_at";
+  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,notes,sold_at,pending_upload,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("sales_records", "listSalesRecordsPage", columns);
   const extended = await supabase
     .from("sales_records")
@@ -263,7 +291,7 @@ export async function saveSaleRecord(sale: SalesRecord) {
     savePendingSales([saved, ...pendingSales().filter((item) => item.id !== saved.id)]);
     return saved;
   }
-  const row = toRow(saved);
+  const row = buildLegacySalePayload(saved);
   let result = await supabase.from("sales_records").upsert(row).select("*").single();
   if (isMissingColumnError(result.error)) {
     result = await supabase.from("sales_records").upsert(withoutManualSearchColumns(row)).select("*").single();
@@ -318,7 +346,12 @@ export async function createSaleRecord(input: Partial<SalesRecord>, imageFile?: 
     cardSetId: input.cardSetId,
     cardSetCode: input.cardSetCode,
     cardRarity: input.cardRarity,
+    cardGame: input.cardGame,
     cardLanguage: input.cardLanguage,
+    dataProvider: input.dataProvider,
+    providerCardId: input.providerCardId,
+    cardCode: input.cardCode,
+    marketPriceCurrency: input.marketPriceCurrency,
     cardCondition: input.cardCondition,
     stickerPrice: input.stickerPrice,
     pokemonTcgCardId: input.pokemonTcgCardId,
@@ -364,7 +397,7 @@ export async function syncPendingSales() {
         const uploaded = await uploadSaleImage(file, sale.id);
         syncedSale = { ...syncedSale, imageUrl: uploaded.imageUrl, imagePath: uploaded.imagePath };
       }
-      const row = toRow({ ...syncedSale, pendingUpload: false, updatedAt: nowIso() });
+      const row = buildLegacySalePayload({ ...syncedSale, pendingUpload: false, updatedAt: nowIso() });
       let result = await supabase.from("sales_records").upsert(row);
       if (isMissingColumnError(result.error)) {
         result = await supabase.from("sales_records").upsert(withoutManualSearchColumns(row));

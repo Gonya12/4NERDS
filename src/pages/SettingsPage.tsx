@@ -1,4 +1,4 @@
-import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, Sparkles, Trash2, Upload, Wifi, X } from "lucide-react";
+import { BarChart3, Bell, CalendarSync, Download, Images, MapPinned, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2, Upload, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { addWorker, clearPlannerData, deleteWorker, listPlannerEvents, listPlannerHomeEvents, listWorkers, saveWorker, seedTeamWorkers } from "../services/planner/plannerRepository";
@@ -16,6 +16,7 @@ import { loadFlyerBrandDefaults, saveFlyerBrandDefaults } from "../services/prom
 import { appBuildTime, appVersion, getDebugLogs, subscribeDebugLogs } from "../services/debug/debugLog";
 import { getPwaStatus, subscribePwaStatus } from "../services/pwa/registerPwa";
 import { loadDefaultRawBuyPercentage, saveDefaultRawBuyPercentage } from "../services/sales/salesPreferences";
+import { runSupabaseHealthCheck, type SupabaseHealthReport } from "../services/database/supabasePreflight";
 
 export function SettingsPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -45,6 +46,8 @@ export function SettingsPage() {
   const [debugLogs, setDebugLogs] = useState(() => getDebugLogs());
   const [rawBuyPercentage, setRawBuyPercentage] = useState(() => String(loadDefaultRawBuyPercentage()));
   const [salesPreferenceMessage, setSalesPreferenceMessage] = useState("");
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [healthReport, setHealthReport] = useState<SupabaseHealthReport>();
   const { theme, setTheme } = useTheme();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -156,6 +159,15 @@ export function SettingsPage() {
       setSyncMessage(result.ok ? "Supabase connection works." : result.error);
     } finally {
       setSyncBusy(false);
+    }
+  }
+
+  async function runHealthCheck() {
+    setHealthBusy(true);
+    try {
+      setHealthReport(await runSupabaseHealthCheck());
+    } finally {
+      setHealthBusy(false);
     }
   }
 
@@ -373,6 +385,26 @@ export function SettingsPage() {
             <p className="font-black text-ink dark:text-white">{import.meta.env.DEV ? debugLogs.length : "Dev only"}</p>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => void runHealthCheck()}
+          disabled={healthBusy}
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-50"
+        >
+          <ShieldCheck size={17} /> {healthBusy ? "Running Supabase Health Check…" : "Run Supabase Health Check"}
+        </button>
+        {healthReport ? <div className="rounded-xl border border-slate-200 p-3 text-sm dark:border-slate-700">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-black text-ink dark:text-white">Supabase preflight: {healthReport.failed ? "Action required" : "Passed"}</p>
+            <p className={`text-xs font-black ${healthReport.failed ? "text-rose-600" : "text-emerald-600"}`}>{healthReport.passed} passed · {healthReport.failed} failed</p>
+          </div>
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {healthReport.results.map((result) => <div key={result.id} className={`rounded-lg p-2 ${result.status === "pass" ? "bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100" : "bg-rose-50 text-rose-900 dark:bg-rose-950/30 dark:text-rose-100"}`}>
+              <p className="font-black">{result.status === "pass" ? "✓" : "×"} {result.label} <span className="font-normal opacity-70">({result.durationMs}ms)</span></p>
+              <p className="mt-1 break-words text-xs">{result.detail}</p>
+            </div>)}
+          </div>
+        </div> : null}
         {pwaStatus.error ? <p className="rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{pwaStatus.error}</p> : null}
         {import.meta.env.DEV ? (
           <details className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">

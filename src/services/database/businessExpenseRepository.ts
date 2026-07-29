@@ -44,7 +44,7 @@ function fromRow(row: ExpenseRow): BusinessExpense {
   };
 }
 
-function toRow(value: BusinessExpense): ExpenseRow {
+export function buildBusinessExpensePayload(value: BusinessExpense): ExpenseRow {
   return {
     id: value.id,
     expense_date: value.expenseDate,
@@ -141,9 +141,9 @@ export async function saveBusinessExpense(input: Partial<BusinessExpense>, recei
     write(cacheKey, values);
     return value;
   }
-  let { data, error } = await supabase.from("business_expenses").upsert(toRow(value)).select("*").single();
+  let { data, error } = await supabase.from("business_expenses").upsert(buildBusinessExpensePayload(value)).select("*").single();
   if (isMissingColumnError(error)) {
-    const { financial_transaction_id: _financialTransactionId, financial_transaction_item_id: _financialTransactionItemId, ...legacyRow } = toRow(value);
+    const { financial_transaction_id: _financialTransactionId, financial_transaction_item_id: _financialTransactionItemId, ...legacyRow } = buildBusinessExpensePayload(value);
     const legacy = await supabase.from("business_expenses").upsert(legacyRow).select("*").single();
     data = legacy.data;
     error = legacy.error;

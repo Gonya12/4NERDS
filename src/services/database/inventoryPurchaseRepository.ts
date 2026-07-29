@@ -6,6 +6,12 @@ import { fileToDataUrl, uploadFinancialImage } from "../images/saleImageService"
 const localKey = "4nerds_inventory_purchases_local_v1";
 const cacheKey = "4nerds_inventory_purchases_cache_v1";
 
+function canonicalCardLanguage(value: string | undefined, cardGame: InventoryPurchase["cardGame"]) {
+  if (value === "ja" || /japanese/i.test(value || "")) return "ja";
+  if (value === "unknown" || cardGame === "other") return "unknown";
+  return "en";
+}
+
 type PurchaseRow = {
   id: string;
   image_url?: string | null;
@@ -42,7 +48,12 @@ type PurchaseRow = {
   card_set_id?: string | null;
   card_set_code?: string | null;
   card_rarity?: string | null;
+  card_game?: InventoryPurchase["cardGame"] | null;
   card_language?: string | null;
+  data_provider?: InventoryPurchase["dataProvider"] | null;
+  provider_card_id?: string | null;
+  card_code?: string | null;
+  market_price_currency?: string | null;
   pokemon_tcg_card_id?: string | null;
   official_card_image_url?: string | null;
   tcgplayer_url?: string | null;
@@ -108,7 +119,12 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     cardSetId: row.card_set_id || undefined,
     cardSetCode: row.card_set_code || undefined,
     cardRarity: row.card_rarity || undefined,
+    cardGame: row.card_game || undefined,
     cardLanguage: row.card_language || undefined,
+    dataProvider: row.data_provider || undefined,
+    providerCardId: row.provider_card_id || undefined,
+    cardCode: row.card_code || undefined,
+    marketPriceCurrency: row.market_price_currency || undefined,
     pokemonTcgCardId: row.pokemon_tcg_card_id || undefined,
     officialCardImageUrl: row.official_card_image_url || undefined,
     tcgplayerUrl: row.tcgplayer_url || undefined,
@@ -138,7 +154,9 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
   };
 }
 
-function toRow(value: InventoryPurchase): PurchaseRow {
+export function buildInventoryPurchasePayload(value: InventoryPurchase): PurchaseRow {
+  const cardGame = value.cardGame || (value.pokemonTcgCardId ? "pokemon" : "other");
+  const dataProvider = value.dataProvider || (value.pokemonTcgCardId ? "pokemontcg" : "manual");
   return {
     id: value.id,
     image_url: value.imageUrl || null,
@@ -175,8 +193,13 @@ function toRow(value: InventoryPurchase): PurchaseRow {
     card_set_id: value.cardSetId || null,
     card_set_code: value.cardSetCode || null,
     card_rarity: value.cardRarity || null,
-    card_language: value.cardLanguage || null,
-    pokemon_tcg_card_id: value.pokemonTcgCardId || null,
+    card_game: cardGame,
+    card_language: canonicalCardLanguage(value.cardLanguage, cardGame),
+    data_provider: dataProvider,
+    provider_card_id: dataProvider === "manual" ? null : value.providerCardId || value.pokemonTcgCardId || null,
+    card_code: value.cardCode || null,
+    market_price_currency: value.marketPriceCurrency || null,
+    pokemon_tcg_card_id: dataProvider === "pokemontcg" ? value.pokemonTcgCardId || value.providerCardId || null : null,
     official_card_image_url: value.officialCardImageUrl || null,
     tcgplayer_url: value.tcgplayerUrl || null,
     card_condition: value.cardCondition || null,
@@ -210,6 +233,12 @@ function withoutManualSearchColumns(row: PurchaseRow) {
     card_set_id: _cardSetId,
     card_set_code: _cardSetCode,
     card_rarity: _cardRarity,
+    card_game: _cardGame,
+    card_language: _cardLanguage,
+    data_provider: _dataProvider,
+    provider_card_id: _providerCardId,
+    card_code: _cardCode,
+    market_price_currency: _marketPriceCurrency,
     pokemon_tcg_card_id: _pokemonTcgCardId,
     official_card_image_url: _officialCardImageUrl,
     tcgplayer_url: _tcgplayerUrl,
@@ -251,7 +280,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_language,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const enhanced = await supabase.from("inventory_purchases")
     .select(columns)
@@ -260,7 +289,9 @@ export async function listInventoryPurchases(limit = 100) {
   let error = enhanced.error;
   if (isMissingColumnError(error)) {
     const legacyColumns = columns
+      .replace(",market_price_currency", "")
       .replace(",card_set_id,card_set_code,card_rarity", "")
+      .replace(",card_game,card_language,data_provider,provider_card_id,card_code", ",card_language")
       .replace(",pokemon_tcg_card_id,official_card_image_url,tcgplayer_url", "")
       .replace(",acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id", "");
     const legacy = await supabase.from("inventory_purchases")
@@ -309,7 +340,7 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     id: recordId,
     imageUrl,
     imagePath,
-    itemName: input.itemName?.trim() || "Untitled Pokemon item",
+    itemName: input.itemName?.trim() || "Untitled card item",
     category: input.category || "other_pokemon_product",
     quantity: Math.max(1, Number(input.quantity || 1)),
     quantitySold: Math.min(Math.max(0, Number(input.quantitySold || 0)), Math.max(1, Number(input.quantity || 1))),
@@ -341,7 +372,12 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     cardSetId: input.cardSetId?.trim() || undefined,
     cardSetCode: input.cardSetCode?.trim() || undefined,
     cardRarity: input.cardRarity?.trim() || undefined,
+    cardGame: input.cardGame,
     cardLanguage: input.cardLanguage?.trim() || undefined,
+    dataProvider: input.dataProvider,
+    providerCardId: input.providerCardId?.trim() || undefined,
+    cardCode: input.cardCode?.trim() || undefined,
+    marketPriceCurrency: input.marketPriceCurrency?.trim() || undefined,
     pokemonTcgCardId: input.pokemonTcgCardId?.trim() || undefined,
     officialCardImageUrl: input.officialCardImageUrl,
     tcgplayerUrl: input.tcgplayerUrl,
@@ -367,7 +403,7 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     write(cacheKey, values);
     return value;
   }
-  const row = toRow(value);
+  const row = buildInventoryPurchasePayload(value);
   let result = await supabase.from("inventory_purchases").upsert(row).select("*").single();
   if (isMissingColumnError(result.error)) {
     result = await supabase.from("inventory_purchases").upsert(withoutTradeColumns(withoutManualSearchColumns(row) as PurchaseRow)).select("*").single();

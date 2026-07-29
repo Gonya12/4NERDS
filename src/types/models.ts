@@ -16,6 +16,9 @@ export type SalePaymentMethod = "cash" | "zelle" | "venmo" | "cash_app" | "paypa
 export type InventoryStatus = "in_stock" | "partially_sold" | "sold" | "personal" | "traded_out" | "removed" | "reversed";
 export type CardCondition = "Mint" | "Near Mint / NM" | "Lightly Played / LP" | "Moderately Played / MP" | "Heavily Played / HP" | "Damaged";
 export type CardScanStatus = "not_scanned" | "analyzing" | "needs_review" | "ready_to_import" | "imported" | "failed";
+export type CardGame = "pokemon" | "one_piece" | "other";
+export type CardLanguage = "en" | "ja" | "unknown";
+export type CardDataProvider = "pokemontcg" | "tcgdex" | "optcgapi" | "manual";
 export type BusinessExpenseCategory = "event_table_fee" | "gas" | "tolls" | "parking" | "food" | "supplies" | "shipping" | "packaging" | "card_show_equipment" | "software_subscription" | "advertising" | "other";
 
 export interface Organizer {
@@ -157,6 +160,11 @@ export interface SalesRecord {
   cardSetCode?: string;
   cardRarity?: string;
   cardLanguage?: string;
+  cardGame?: CardGame;
+  dataProvider?: CardDataProvider;
+  providerCardId?: string;
+  cardCode?: string;
+  marketPriceCurrency?: string;
   cardCondition?: CardCondition;
   stickerPrice?: number;
   pokemonTcgCardId?: string;
@@ -216,6 +224,11 @@ export interface InventoryPurchase {
   cardSetCode?: string;
   cardRarity?: string;
   cardLanguage?: string;
+  cardGame?: CardGame;
+  dataProvider?: CardDataProvider;
+  providerCardId?: string;
+  cardCode?: string;
+  marketPriceCurrency?: string;
   pokemonTcgCardId?: string;
   officialCardImageUrl?: string;
   tcgplayerUrl?: string;
@@ -299,6 +312,11 @@ export interface TradeItem {
   cardSetCode?: string;
   cardRarity?: string;
   cardLanguage?: string;
+  cardGame?: CardGame;
+  dataProvider?: CardDataProvider;
+  providerCardId?: string;
+  cardCode?: string;
+  marketPriceCurrency?: string;
   pokemonTcgCardId?: string;
   officialCardImageUrl?: string;
   tcgplayerUrl?: string;

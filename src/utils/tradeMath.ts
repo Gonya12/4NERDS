@@ -42,6 +42,20 @@ export function allocateBasis(totalBasis: number, items: TradeItem[], method: "m
 }
 
 export function ownershipIsValid(item: TradeItem) {
-  if (!item.ownershipShares.length) return false;
-  return Math.abs(item.ownershipShares.reduce((sum, share) => sum + Number(share.ownershipPercentage || 0), 0) - 100) < 0.001;
+  return ownershipValidationError(item) === "";
+}
+
+export function ownershipValidationError(item: Pick<TradeItem, "ownershipShares">) {
+  if (!item.ownershipShares.length) return "At least one owner is required.";
+  const workers = new Set<string>();
+  let total = 0;
+  for (const share of item.ownershipShares) {
+    const percentage = Number(share.ownershipPercentage);
+    if (!share.workerId) return "Every ownership share requires a worker.";
+    if (workers.has(share.workerId)) return "The same worker cannot appear more than once.";
+    if (!Number.isFinite(percentage) || percentage <= 0 || percentage > 100) return "Ownership percentages must be greater than 0 and no more than 100.";
+    workers.add(share.workerId);
+    total += percentage;
+  }
+  return Math.abs(total - 100) < 0.001 ? "" : "Ownership must total exactly 100%.";
 }

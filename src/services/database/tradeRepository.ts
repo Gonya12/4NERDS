@@ -2,12 +2,29 @@ import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwne
 import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
-import { saveInventoryOwnership } from "./ownershipRepository";
+import { saveInventoryOwnership, saveSaleOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
 import { missingHistoricalCostBasisItems, transactionReview } from "../../utils/transactionMath";
 import { roundMoney } from "../../utils/paymentMath";
 import { buildFinancialTransactionPayload } from "./financialTransactionPayload";
+import {
+  buildTransactionItemPayload,
+  buildInventoryLineagePayload,
+  buildTransactionBalancePayload,
+  buildTransactionImagePayload,
+  buildTransactionOwnershipPayload,
+  buildTransactionPaymentPayload
+} from "./databasePayloads";
+import { ownershipValidationError } from "../../utils/tradeMath";
+import { prepareTransactionForCompletion } from "./transactionReliability";
+import {
+  mapTransactionTypeToApplicationValue,
+  mapTransactionTypeToDatabaseValue,
+  normalizeTransactionForApplication,
+  type DatabaseFinancialTransactionType
+} from "./financialTransactionType";
+export { prepareTransactionForCompletion } from "./transactionReliability";
 
 const localKey = "4nerds_financial_transactions_local_v1";
 const cacheKey = "4nerds_financial_transactions_cache_v1";
@@ -23,7 +40,7 @@ type TransactionRow = {
   bundle_total?: number | null; allocation_method?: TradeTransaction["pricingMode"] | null;
   notes?: string | null; status: TradeTransaction["status"]; item_mode?: TradeTransaction["itemMode"] | null; entered_by_worker_id?: string | null;
   general_image_url?: string | null; general_image_path?: string | null; expense_category?: TradeTransaction["expenseCategory"] | null;
-  payment_method?: TradeTransaction["paymentMethod"] | null; transaction_type?: TradeTransaction["transactionType"] | null;
+  payment_method?: TradeTransaction["paymentMethod"] | null; transaction_type?: DatabaseFinancialTransactionType | string | null;
   created_at?: string | null; updated_at?: string | null;
   // Read-only compatibility for rows created before the canonical payload names were adopted.
   completed_at?: string | null; reversed_at?: string | null; reversal_of_transaction_id?: string | null;
@@ -41,6 +58,13 @@ type ItemRow = {
   notes?: string | null; created_at: string; updated_at: string;
   trade_percentage?: number | null; sold_price?: number | null; bought_price?: number | null;
   created_sales_record_id?: string | null; created_business_expense_id?: string | null;
+  zero_cost_basis_confirmed?: boolean | null;
+  card_set_id?: string | null; card_set_code?: string | null; card_rarity?: string | null; card_game?: TradeItem["cardGame"] | null; card_language?: string | null;
+  data_provider?: TradeItem["dataProvider"] | null; provider_card_id?: string | null; card_code?: string | null; market_price_currency?: string | null;
+  official_card_image_url?: string | null; tcgplayer_url?: string | null; market_price_source?: string | null;
+  market_price_variant?: string | null; market_price_updated_at?: string | null; market_price_checked_at?: string | null;
+  tcgplayer_pricing?: TradeItem["tcgplayerPricing"] | null; target_buy_percentage?: number | null; target_buy_price?: number | null;
+  card_selection_source?: TradeItem["cardSelectionSource"] | null; cost_basis_is_estimate?: boolean | null;
 };
 type ShareRow = { id?: string; transaction_item_id: string; worker_id: string; ownership_percentage: number; allocated_cost_basis?: number | null; allocated_trade_value?: number | null };
 type PaymentRow = { id: string; transaction_id: string; direction: "received" | "paid"; payment_method: string; amount: number };
@@ -62,29 +86,61 @@ function transactionImagePath(url?: string) {
   return url.includes(marker) ? decodeURIComponent(url.split(marker)[1]) : undefined;
 }
 
-const itemRow = (item: TradeItem): ItemRow => ({
-  id: item.id, transaction_id: item.tradeTransactionId, inventory_purchase_id: item.inventoryPurchaseId || null,
-  created_inventory_purchase_id: item.createdInventoryPurchaseId || null, prior_inventory_purchase_id: item.priorInventoryPurchaseId || null,
-  direction: item.direction, item_name: item.itemName, item_type: item.itemType, quantity: item.quantity,
-  market_value: item.marketValue, agreed_trade_value: item.agreedTradeValue, historical_cost_basis: item.historicalCostBasis,
-  allocated_cost_basis: item.allocatedCostBasis, cash_allocation: item.cashAllocation ?? null, image_url: item.imageUrl || null,
-  image_path: item.imagePath || transactionImagePath(item.imageUrl) || null, back_image_url: item.backImageUrl || null, back_image_path: item.backImagePath || transactionImagePath(item.backImageUrl) || null,
-  collector_number: item.collectorNumber || null, card_set: item.cardSet || null, pokemon_tcg_card_id: item.pokemonTcgCardId || null,
-  card_condition: item.cardCondition || null, sticker_price: item.stickerPrice ?? null, grading_company: item.gradingCompany || null,
-  grade: item.grade || null, certificate_number: item.certificateNumber || null, notes: item.notes || null,
-  created_at: item.createdAt, updated_at: item.updatedAt
-  , trade_percentage: item.tradePercentage ?? null, sold_price: item.soldPrice ?? null, bought_price: item.boughtPrice ?? null,
-  created_sales_record_id: item.createdSalesRecordId || null, created_business_expense_id: item.createdBusinessExpenseId || null
-});
+function isMissingColumnError(error?: { code?: string; message?: string } | null) {
+  return Boolean(error && (
+    error.code === "42703"
+    || error.code === "PGRST204"
+    || /column .* does not exist|could not find the .* column|schema cache/i.test(error.message || "")
+  ));
+}
+
+function withoutReconciliationItemColumns(payload: ReturnType<typeof buildTransactionItemPayload>) {
+  const {
+    zero_cost_basis_confirmed: _zeroCostBasisConfirmed,
+    card_set_id: _cardSetId,
+    card_set_code: _cardSetCode,
+    card_rarity: _cardRarity,
+    card_game: _cardGame,
+    card_language: _cardLanguage,
+    data_provider: _dataProvider,
+    provider_card_id: _providerCardId,
+    card_code: _cardCode,
+    official_card_image_url: _officialCardImageUrl,
+    tcgplayer_url: _tcgplayerUrl,
+    market_price_source: _marketPriceSource,
+    market_price_variant: _marketPriceVariant,
+    market_price_updated_at: _marketPriceUpdatedAt,
+    market_price_checked_at: _marketPriceCheckedAt,
+    market_price_currency: _marketPriceCurrency,
+    tcgplayer_pricing: _tcgplayerPricing,
+    target_buy_percentage: _targetBuyPercentage,
+    target_buy_price: _targetBuyPrice,
+    card_selection_source: _cardSelectionSource,
+    cost_basis_is_estimate: _costBasisIsEstimate,
+    ...legacy
+  } = payload;
+  return legacy;
+}
+
 const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem => ({
   id: row.id, tradeTransactionId: row.transaction_id, inventoryPurchaseId: row.inventory_purchase_id || undefined,
   createdInventoryPurchaseId: row.created_inventory_purchase_id || undefined, priorInventoryPurchaseId: row.prior_inventory_purchase_id || undefined,
   direction: row.direction, itemName: row.item_name, itemType: row.item_type, quantity: Number(row.quantity || 1),
   marketValue: Number(row.market_value || 0), agreedTradeValue: Number(row.agreed_trade_value || 0),
-  historicalCostBasis: Number(row.historical_cost_basis || 0), allocatedCostBasis: Number(row.allocated_cost_basis || 0),
+  historicalCostBasis: Number(row.historical_cost_basis || 0), zeroCostBasisConfirmed: row.zero_cost_basis_confirmed === true,
+  allocatedCostBasis: Number(row.allocated_cost_basis || 0),
   cashAllocation: row.cash_allocation == null ? undefined : Number(row.cash_allocation), imageUrl: row.image_url || undefined,
   imagePath: row.image_path || undefined, backImageUrl: row.back_image_url || undefined, backImagePath: row.back_image_path || undefined,
-  collectorNumber: row.collector_number || undefined, cardSet: row.card_set || undefined, pokemonTcgCardId: row.pokemon_tcg_card_id || undefined,
+  collectorNumber: row.collector_number || undefined, cardSet: row.card_set || undefined, cardSetId: row.card_set_id || undefined,
+  cardSetCode: row.card_set_code || undefined, cardRarity: row.card_rarity || undefined, cardGame: row.card_game || undefined, cardLanguage: row.card_language || undefined,
+  dataProvider: row.data_provider || undefined, providerCardId: row.provider_card_id || undefined, cardCode: row.card_code || undefined,
+  pokemonTcgCardId: row.pokemon_tcg_card_id || undefined, officialCardImageUrl: row.official_card_image_url || undefined,
+  tcgplayerUrl: row.tcgplayer_url || undefined, marketPriceSource: row.market_price_source || undefined,
+  marketPriceVariant: row.market_price_variant || undefined, marketPriceUpdatedAt: row.market_price_updated_at || undefined,
+  marketPriceCheckedAt: row.market_price_checked_at || undefined, marketPriceCurrency: row.market_price_currency || undefined, tcgplayerPricing: row.tcgplayer_pricing || undefined,
+  targetBuyPercentage: row.target_buy_percentage == null ? undefined : Number(row.target_buy_percentage),
+  targetBuyPrice: row.target_buy_price == null ? undefined : Number(row.target_buy_price),
+  cardSelectionSource: row.card_selection_source || undefined, costBasisIsEstimate: row.cost_basis_is_estimate === true,
   cardCondition: row.card_condition || undefined, stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
   gradingCompany: row.grading_company || undefined, grade: row.grade || undefined, certificateNumber: row.certificate_number || undefined,
   notes: row.notes || undefined, ownershipShares: shares, createdAt: row.created_at, updatedAt: row.updated_at
@@ -103,15 +159,38 @@ export function blankTradeItem(tradeId: string, direction: TradeItem["direction"
   return { id: id("trade-item"), tradeTransactionId: tradeId, direction, itemName: "", itemType: "raw_card", quantity: 1, marketValue: 0, agreedTradeValue: 0, historicalCostBasis: 0, allocatedCostBasis: 0, ownershipShares: [], createdAt: timestamp, updatedAt: timestamp };
 }
 
-export function getCachedTrades() { return read<TradeTransaction>(cacheKey); }
+function normalizeStoredTransaction(transaction: TradeTransaction) {
+  return normalizeTransactionForApplication(transaction);
+}
+
+export function getCachedTrades() {
+  return read<TradeTransaction>(cacheKey).flatMap((transaction) => {
+    try {
+      return [normalizeStoredTransaction(transaction)];
+    } catch {
+      return [];
+    }
+  });
+}
 
 export async function listFinancialTransactions(transactionTypes?: TradeTransaction["transactionType"][]) {
   if (!isSupabaseConfigured || !supabase) {
-    const values = read<TradeTransaction>(localKey);
+    const values = read<TradeTransaction>(localKey).flatMap((transaction) => {
+      try {
+        return [normalizeStoredTransaction(transaction)];
+      } catch {
+        return [];
+      }
+    });
     return transactionTypes?.length ? values.filter((row) => transactionTypes.includes(row.transactionType)) : values;
   }
   let transactionQuery = supabase.from("financial_transactions").select("*");
-  if (transactionTypes?.length) transactionQuery = transactionQuery.in("transaction_type", transactionTypes);
+  if (transactionTypes?.length) {
+    transactionQuery = transactionQuery.in(
+      "transaction_type",
+      [...new Set(transactionTypes.map(mapTransactionTypeToDatabaseValue))]
+    );
+  }
   const transactions = await transactionQuery.order("transaction_date", { ascending: false });
   if (transactions.error) throw new Error(transactions.error.message);
   const ids = (transactions.data || []).map((row) => row.id);
@@ -154,7 +233,9 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     current[row.direction] += Number(row.amount || 0);
     paymentMap.set(row.transaction_id, current);
   });
-  const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => ({
+  const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => {
+    const applicationType = mapTransactionTypeToApplicationValue(row.transaction_type || "trade");
+    return ({
     images: imageRows
       .filter((value) => value.transaction_id === row.id && !value.transaction_item_id)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
@@ -167,12 +248,13 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     proofImagePath: imageRows.find((value) => value.transaction_id === row.id && !value.transaction_item_id && (value.image_type === "proof" || value.image_type === "receipt"))?.image_path, status: row.status,
     enteredByWorkerId: row.entered_by_worker_id || undefined, completedAt: row.completed_at || undefined, reversedAt: row.reversed_at || undefined,
     reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at || row.transaction_date, updatedAt: row.updated_at || row.transaction_date, items: itemMap.get(row.id) || []
-    , transactionType: row.transaction_type || "trade", itemMode: row.item_mode || "multiple", pricingMode: row.allocation_method || row.pricing_mode || "individual",
+    , transactionType: applicationType, itemMode: row.item_mode || "multiple", pricingMode: row.allocation_method || row.pricing_mode || "individual",
     bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
-    purchaseSource: row.transaction_type === "purchase" ? (row.transaction_subtype as TradeTransaction["purchaseSource"]) || row.purchase_source || undefined : undefined,
-    expenseCategory: row.transaction_type === "expense" ? row.expense_category || undefined : undefined,
+    purchaseSource: applicationType === "purchase" ? (row.transaction_subtype as TradeTransaction["purchaseSource"]) || row.purchase_source || undefined : undefined,
+    expenseCategory: applicationType === "expense" ? row.expense_category || undefined : undefined,
     paidByWorkerId: row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)
-  }));
+  });
+  });
   write(cacheKey, values);
   recordSupabaseRequest("financial_transactions", "listTrades", values.length);
   return values;
@@ -208,11 +290,12 @@ async function upsertFinancialTransactionParent(transaction: TradeTransaction) {
 }
 
 export async function saveFinancialTransactionDraft(input: TradeTransaction) {
+  const normalizedInput = normalizeTransactionForApplication(input);
   const draft = {
-    ...input,
+    ...normalizedInput,
     status: "draft" as const,
     updatedAt: nowIso(),
-    items: input.items.map((item) => ({ ...item, tradeTransactionId: input.id }))
+    items: normalizedInput.items.map((item) => ({ ...item, tradeTransactionId: normalizedInput.id }))
   };
   try {
     const transactionId = await upsertFinancialTransactionParent(draft);
@@ -236,7 +319,8 @@ export async function saveFinancialTransactionDraft(input: TradeTransaction) {
 }
 
 export async function saveTrade(input: TradeTransaction, options?: { syncImages?: boolean }) {
-  const trade = { ...input, updatedAt: nowIso(), items: input.items.map((item) => ({ ...item, tradeTransactionId: input.id, updatedAt: nowIso() })) };
+  const normalizedInput = normalizeTransactionForApplication(input);
+  const trade = { ...normalizedInput, updatedAt: nowIso(), items: normalizedInput.items.map((item) => ({ ...item, tradeTransactionId: normalizedInput.id, updatedAt: nowIso() })) };
   if (!isSupabaseConfigured || !supabase) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
     write(localKey, values); write(cacheKey, values); return trade;
@@ -258,7 +342,17 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
     }
   }
   if (persistedTrade.items.length) {
-    const itemResult = await supabase.from("financial_transaction_items").upsert(persistedTrade.items.map(itemRow));
+    const itemPayloads = persistedTrade.items.map((item) =>
+      buildTransactionItemPayload({
+        ...item,
+        imagePath: item.imagePath || transactionImagePath(item.imageUrl),
+        backImagePath: item.backImagePath || transactionImagePath(item.backImageUrl)
+      })
+    );
+    let itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads);
+    if (isMissingColumnError(itemResult.error)) {
+      itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads.map(withoutReconciliationItemColumns));
+    }
     if (itemResult.error) throw new Error(itemResult.error.message);
   }
   const existingPayments = await supabase.from("transaction_payments").select("id,direction,payment_method").eq("transaction_id", transactionId);
@@ -266,23 +360,27 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
   const paymentRows = [
     { direction: "received" as const, amount: Number(persistedTrade.cashReceived || 0) },
     { direction: "paid" as const, amount: Number(persistedTrade.cashPaid || 0) }
-  ].map((payment) => ({
+  ].map((payment) => buildTransactionPaymentPayload({
     id: existingPayments.data?.find((row) => row.direction === payment.direction && row.payment_method === (persistedTrade.paymentMethod || "cash"))?.id || id("payment"),
-    transaction_id: transactionId, direction: payment.direction, payment_method: persistedTrade.paymentMethod || "cash",
-    amount: payment.amount, worker_id: payment.direction === "paid" ? persistedTrade.paidByWorkerId || null : null, updated_at: persistedTrade.updatedAt
+    transactionId,
+    direction: payment.direction,
+    paymentMethod: persistedTrade.paymentMethod || "cash",
+    amount: payment.amount,
+    workerId: payment.direction === "paid" ? persistedTrade.paidByWorkerId : undefined,
+    updatedAt: persistedTrade.updatedAt
   }));
-  const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows);
+  const paymentResult = await supabase.from("transaction_payments").upsert(paymentRows, { onConflict: "transaction_id,direction,payment_method" });
   if (paymentResult.error) throw new Error(paymentResult.error.message);
   if (options?.syncImages !== false) {
   const transactionImages = persistedTrade.images?.length
     ? persistedTrade.images
     : [
       persistedTrade.generalImageUrl && (persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)) ? {
-        id: id("transaction-image"), transactionId, imageType: "general" as const, imageUrl: persistedTrade.generalImageUrl,
+        id: "", transactionId, imageType: "general" as const, imageUrl: persistedTrade.generalImageUrl,
         imagePath: persistedTrade.generalImagePath || transactionImagePath(persistedTrade.generalImageUrl)!, sortOrder: 0
       } : undefined,
       persistedTrade.proofImageUrl && (persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)) ? {
-        id: id("transaction-image"), transactionId, imageType: "proof" as const, imageUrl: persistedTrade.proofImageUrl,
+        id: "", transactionId, imageType: "proof" as const, imageUrl: persistedTrade.proofImageUrl,
         imagePath: persistedTrade.proofImagePath || transactionImagePath(persistedTrade.proofImageUrl)!, sortOrder: 1
       } : undefined
     ].filter(Boolean) as TransactionImageAttachment[];
@@ -290,50 +388,127 @@ export async function saveTrade(input: TradeTransaction, options?: { syncImages?
     ? item.images
     : [
       item.imageUrl && (item.imagePath || transactionImagePath(item.imageUrl)) ? {
-        id: id("transaction-image"), transactionId, transactionItemId: item.id, imageType: "front" as const,
+        id: "", transactionId, transactionItemId: item.id, imageType: "front" as const,
         imageUrl: item.imageUrl, imagePath: item.imagePath || transactionImagePath(item.imageUrl)!, sortOrder: 0
       } : undefined,
       item.backImageUrl && (item.backImagePath || transactionImagePath(item.backImageUrl)) ? {
-        id: id("transaction-image"), transactionId, transactionItemId: item.id, imageType: "back" as const,
+        id: "", transactionId, transactionItemId: item.id, imageType: "back" as const,
         imageUrl: item.backImageUrl, imagePath: item.backImagePath || transactionImagePath(item.backImageUrl)!, sortOrder: 1
       } : undefined
     ].filter(Boolean) as TransactionImageAttachment[]);
   const desiredImages = [...transactionImages, ...itemImages].filter((image) => image.imagePath);
-  const currentImages = await supabase.from("transaction_images").select("id,transaction_item_id,image_type,image_path,sort_order").eq("transaction_id", transactionId);
-  if (currentImages.error) throw new Error(currentImages.error.message);
-  const desiredRows = desiredImages.map((image) => ({
-    id: image.id || currentImages.data?.find((value) => value.image_path === image.imagePath)?.id || id("transaction-image"),
-    transaction_id: transactionId,
-    transaction_item_id: image.transactionItemId || null,
-    image_type: image.imageType,
-    image_url: image.imageUrl,
-    image_path: image.imagePath!,
-    sort_order: image.sortOrder,
-    updated_at: persistedTrade.updatedAt
-  }));
+  const currentImagesWithSort = await supabase.from("transaction_images").select("id,transaction_item_id,image_type,image_path,sort_order").eq("transaction_id", transactionId);
+  let currentImageData = (currentImagesWithSort.data || []) as ImageRow[];
+  let currentImageError = currentImagesWithSort.error;
+  if (isMissingColumnError(currentImageError)) {
+    const legacyImages = await supabase.from("transaction_images").select("id,transaction_item_id,image_type,image_path").eq("transaction_id", transactionId);
+    currentImageData = (legacyImages.data || []) as ImageRow[];
+    currentImageError = legacyImages.error;
+  }
+  if (currentImageError) throw new Error(currentImageError.message);
+  const desiredRows = desiredImages.map((image) => buildTransactionImagePayload(
+    image,
+    currentImageData.find((value) => value.image_path === image.imagePath)?.id || id("transaction-image"),
+    transactionId,
+    persistedTrade.updatedAt
+  ));
   if (desiredRows.length) {
-    const imageResult = await supabase.from("transaction_images").upsert(desiredRows);
+    let imageResult = await supabase.from("transaction_images").upsert(desiredRows);
+    if (isMissingColumnError(imageResult.error)) {
+      imageResult = await supabase.from("transaction_images").upsert(desiredRows.map(({ sort_order: _sortOrder, ...row }) => row) as any);
+    }
     if (imageResult.error) throw new Error(imageResult.error.message);
   }
   const desiredIds = new Set(desiredRows.map((row) => row.id));
-  const removedImageIds = (currentImages.data || []).map((row) => row.id).filter((imageId) => !desiredIds.has(imageId));
+  const removedImageIds = currentImageData.map((row) => row.id).filter((imageId) => !desiredIds.has(imageId));
   if (removedImageIds.length) {
     const removed = await supabase.from("transaction_images").delete().in("id", removedImageIds);
     if (removed.error) throw new Error(removed.error.message);
   }
   }
   for (const item of persistedTrade.items) {
-    const deletion = await supabase.from("transaction_item_ownership_shares").delete().eq("transaction_item_id", item.id);
-    if (deletion.error) throw new Error(deletion.error.message);
     if (item.ownershipShares.length) {
-      const result = await supabase.from("transaction_item_ownership_shares").insert(item.ownershipShares.map((share) => ({
-        transaction_item_id: item.id, worker_id: share.workerId, ownership_percentage: share.ownershipPercentage,
-        allocated_cost_basis: share.allocatedCostBasis ?? null, allocated_trade_value: share.allocatedTradeValue ?? null
-      })));
+      const result = await supabase.from("transaction_item_ownership_shares").upsert(
+        item.ownershipShares.map((share) => buildTransactionOwnershipPayload(item.id, share, persistedTrade.updatedAt)),
+        { onConflict: "transaction_item_id,worker_id" }
+      );
       if (result.error) throw new Error(result.error.message);
+    }
+    const ownershipRows = await supabase.from("transaction_item_ownership_shares").select("id,worker_id").eq("transaction_item_id", item.id);
+    if (ownershipRows.error) throw new Error(ownershipRows.error.message);
+    const desiredWorkers = new Set(item.ownershipShares.map((share) => share.workerId));
+    const staleIds = (ownershipRows.data || []).filter((row) => !desiredWorkers.has(row.worker_id)).map((row) => row.id);
+    if (staleIds.length) {
+      const deletion = await supabase.from("transaction_item_ownership_shares").delete().in("id", staleIds);
+      if (deletion.error) throw new Error(deletion.error.message);
     }
   }
   return persistedTrade;
+}
+
+function validateTransactionOwnership(transaction: TradeTransaction) {
+  const relevantItems = transaction.transactionType === "sale"
+    ? transaction.items.filter((item) => item.direction === "outgoing")
+    : transaction.transactionType === "expense"
+      ? []
+      : transaction.items.filter((item) => item.direction === "incoming");
+  for (const item of relevantItems) {
+    const error = ownershipValidationError(item);
+    if (error) throw new Error(`${item.itemName || "Unnamed item"}: ${error}`);
+  }
+}
+
+function isMissingClaimFunction(error: { code?: string; message?: string } | null) {
+  return Boolean(error && (
+    error.code === "PGRST202"
+    || error.code === "42883"
+    || /claim_financial_transaction_inventory|schema cache|function .* does not exist/i.test(error.message || "")
+  ));
+}
+
+async function claimOutgoingInventory(
+  transaction: TradeTransaction,
+  inventory: InventoryPurchase[],
+  disposition: "sold" | "traded_out"
+) {
+  const outgoing = transaction.items.filter((item) => item.direction === "outgoing" && item.inventoryPurchaseId);
+  const inventoryIds = outgoing.map((item) => item.inventoryPurchaseId!);
+  if (!inventoryIds.length) return;
+  if (new Set(inventoryIds).size !== inventoryIds.length) throw new Error("The same inventory item cannot be used more than once.");
+
+  if (isSupabaseConfigured && supabase) {
+    const claim = await supabase.rpc("claim_financial_transaction_inventory", {
+      p_transaction_id: transaction.id,
+      p_inventory_ids: inventoryIds,
+      p_disposition: disposition
+    });
+    if (!claim.error) return;
+    if (!isMissingClaimFunction(claim.error)) throw new Error(claim.error.message);
+
+    // Compatibility fallback before the reconciliation migration is applied.
+    // This is a fresh server check, but the migration RPC is required for
+    // cross-device atomicity.
+    const live = await supabase
+      .from("inventory_purchases")
+      .select("id,status,disposed_financial_transaction_id")
+      .in("id", inventoryIds);
+    if (live.error) throw new Error(live.error.message);
+    const unavailable = inventoryIds.find((inventoryId) => {
+      const row = live.data?.find((value) => value.id === inventoryId);
+      return !row || (row.status !== "in_stock" && !(row.status === disposition && row.disposed_financial_transaction_id === transaction.id));
+    });
+    if (unavailable) {
+      const item = outgoing.find((value) => value.inventoryPurchaseId === unavailable);
+      throw new Error(`${item?.itemName || "An inventory item"} is no longer available.`);
+    }
+    return;
+  }
+
+  const unavailable = outgoing.find((item) => {
+    const row = inventory.find((value) => value.id === item.inventoryPurchaseId);
+    return !row || (row.status !== "in_stock" && !(row.status === disposition && row.disposedFinancialTransactionId === transaction.id));
+  });
+  if (unavailable) throw new Error(`${unavailable.itemName} is no longer available.`);
 }
 
 function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partial<InventoryPurchase> {
@@ -342,7 +517,8 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
     purchaseDate: trade.tradeDate, totalCost: item.allocatedCostBasis, marketValue: item.marketValue, purchaseSource: "trade",
     seller: trade.tradePartner, eventId: trade.eventId, purchasedByWorkerId: trade.enteredByWorkerId, status: "in_stock",
     isRawCard: item.itemType === "raw_card", cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
-    cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardLanguage: item.cardLanguage,
+    cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardGame: item.cardGame, cardLanguage: item.cardLanguage,
+    dataProvider: item.dataProvider, providerCardId: item.providerCardId, cardCode: item.cardCode, marketPriceCurrency: item.marketPriceCurrency,
     pokemonTcgCardId: item.pokemonTcgCardId, officialCardImageUrl: item.officialCardImageUrl, tcgplayerUrl: item.tcgplayerUrl,
     marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
     marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
@@ -360,19 +536,21 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
 export type TransactionSaveStage = "transaction" | "items" | "inventory" | "ownership" | "finalizing";
 
 export async function completeTrade(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
-  if (input.status !== "draft") throw new Error("Only a draft trade can be completed.");
-  const outgoing = input.items.filter((item) => item.direction === "outgoing");
-  const incoming = input.items.filter((item) => item.direction === "incoming");
+  const normalizedInput = normalizeTransactionForApplication(input);
+  if (normalizedInput.status !== "draft") throw new Error("Only a draft trade can be completed.");
+  const outgoing = normalizedInput.items.filter((item) => item.direction === "outgoing");
+  const incoming = normalizedInput.items.filter((item) => item.direction === "incoming");
   if (!outgoing.length || !incoming.length) throw new Error("A trade needs at least one item on each side.");
-  const unavailable = outgoing.find((item) => inventory.find((row) => row.id === item.inventoryPurchaseId)?.status !== "in_stock");
-  if (unavailable) throw new Error(`${unavailable.itemName} is no longer available.`);
+  validateTransactionOwnership(normalizedInput);
   const timestamp = nowIso();
-  let trade: TradeTransaction = { ...input, status: "draft", items: input.items.map((item) => item.direction === "incoming" ? { ...item, createdInventoryPurchaseId: item.createdInventoryPurchaseId || id("purchase") } : item) };
+  let trade = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
   await saveTrade(trade);
   onProgress?.("inventory");
+  await claimOutgoingInventory(trade, inventory, "traded_out");
   for (const item of trade.items.filter((row) => row.direction === "outgoing")) {
-    const source = inventory.find((row) => row.id === item.inventoryPurchaseId)!;
+    const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
+    if (!source) throw new Error(`${item.itemName} is no longer available.`);
     await saveInventoryPurchase({ ...source, status: "traded_out", tradedAt: timestamp, disposedFinancialTransactionId: trade.id, financialTransactionId: trade.id, financialTransactionItemId: item.id });
   }
   const created: InventoryPurchase[] = [];
@@ -385,7 +563,7 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   const lineage: InventoryTradeLineage[] = [];
   for (const source of outgoing) for (const target of created) lineage.push({ id: id("lineage"), sourceInventoryPurchaseId: source.inventoryPurchaseId!, resultingInventoryPurchaseId: target.id, tradeTransactionId: trade.id, relationshipType: "exchanged_for", createdAt: timestamp });
   if (isSupabaseConfigured && supabase && lineage.length) {
-    const result = await supabase.from("inventory_lineage").upsert(lineage.map((row) => ({ id: row.id, source_inventory_purchase_id: row.sourceInventoryPurchaseId, resulting_inventory_purchase_id: row.resultingInventoryPurchaseId, transaction_id: row.tradeTransactionId, relationship_type: row.relationshipType, created_at: row.createdAt })), { onConflict: "source_inventory_purchase_id,resulting_inventory_purchase_id,transaction_id" });
+    const result = await supabase.from("inventory_lineage").upsert(lineage.map(buildInventoryLineagePayload), { onConflict: "source_inventory_purchase_id,resulting_inventory_purchase_id,transaction_id" });
     if (result.error) throw new Error(result.error.message);
   } else write(lineageKey, [...lineage, ...read<InventoryTradeLineage>(lineageKey)]);
   onProgress?.("finalizing");
@@ -395,12 +573,14 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
 }
 
 export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
-  if (input.transactionType === "trade" || input.transactionType === "cash_trade") return completeTrade(input, inventory, onProgress);
-  if (input.status !== "draft") throw new Error("Only a draft transaction can be completed.");
-  const missingBasis = missingHistoricalCostBasisItems(input);
+  const normalizedInput = normalizeTransactionForApplication(input);
+  if (normalizedInput.transactionType === "trade" || normalizedInput.transactionType === "cash_trade") return completeTrade(normalizedInput, inventory, onProgress);
+  if (normalizedInput.status !== "draft") throw new Error("Only a draft transaction can be completed.");
+  const missingBasis = missingHistoricalCostBasisItems(normalizedInput);
   if (missingBasis.length) throw new Error(`Cost basis required for: ${missingBasis.map((item) => item.itemName || "Unnamed item").join(", ")}.`);
+  validateTransactionOwnership(normalizedInput);
   const timestamp = nowIso();
-  let transaction: TradeTransaction = { ...input, status: "draft" };
+  let transaction = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
   await saveTrade(transaction);
   onProgress?.("items");
@@ -408,10 +588,12 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     const items = transaction.items.filter((item) => item.direction === "outgoing");
     if (!items.length) throw new Error("Add at least one inventory item to the sale.");
     onProgress?.("inventory");
+    await claimOutgoingInventory(transaction, inventory, "sold");
     for (const item of items) {
       const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
-      if (item.inventoryPurchaseId && (!source || source.status !== "in_stock")) throw new Error(`${item.itemName} is no longer available.`);
+      if (item.inventoryPurchaseId && !source) throw new Error(`${item.itemName} is no longer available.`);
       const result = await createSaleRecord({
+        id: item.createdSalesRecordId,
         eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
         imagePath: item.imagePath || transaction.generalImagePath, itemName: item.itemName, category: item.itemType, quantity: item.quantity,
         soldPrice: item.soldPrice || 0, boughtPrice: item.historicalCostBasis, marketValue: item.marketValue,
@@ -419,7 +601,9 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
         tcgplayerUrl: item.tcgplayerUrl, cardName: item.itemName, collectorNumber: item.collectorNumber,
         cardSet: item.cardSet, cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity,
-        cardLanguage: item.cardLanguage, cardCondition: item.cardCondition, pokemonTcgCardId: item.pokemonTcgCardId,
+        cardGame: item.cardGame, cardLanguage: item.cardLanguage, dataProvider: item.dataProvider,
+        providerCardId: item.providerCardId, cardCode: item.cardCode, marketPriceCurrency: item.marketPriceCurrency,
+        cardCondition: item.cardCondition, pokemonTcgCardId: item.pokemonTcgCardId,
         officialCardImageUrl: item.officialCardImageUrl, buyPercentage: item.targetBuyPercentage,
         targetBuyPrice: item.targetBuyPrice,
         paymentMethod: transaction.paymentMethod || "cash", soldByWorkerId: transaction.enteredByWorkerId,
@@ -427,11 +611,13 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
       item.createdSalesRecordId = result.sale.id;
+      await saveSaleOwnership(result.sale.id, item.ownershipShares);
       if (source) {
         await saveInventoryPurchase({
           ...source, status: "sold", quantitySold: source.quantity, soldPrice: item.soldPrice || 0,
           soldDate: transaction.tradeDate, soldByWorkerId: transaction.enteredByWorkerId, soldEventId: transaction.eventId,
-          soldPaymentMethod: transaction.paymentMethod, financialTransactionId: transaction.id, financialTransactionItemId: item.id
+          soldPaymentMethod: transaction.paymentMethod, disposedFinancialTransactionId: transaction.id,
+          financialTransactionId: transaction.id, financialTransactionItemId: item.id
         });
       }
     }
@@ -452,6 +638,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         id: id("ownership"), workerId, ownershipPercentage: roundMoney(ownershipPercentage)
       }));
       const saved = await saveInventoryPurchase({
+        id: items[0].createdInventoryPurchaseId,
         itemName: transaction.tradePartner ? `Lot from ${transaction.tradePartner}` : items.map((item) => item.itemName).filter(Boolean).slice(0, 3).join(" + ") || "Inventory lot",
         category: items.every((item) => item.itemType === items[0].itemType) ? items[0].itemType : "other_pokemon_product",
         quantity: items.reduce((sum, item) => sum + Number(item.quantity || 1), 0), quantitySold: 0, purchaseDate: transaction.tradeDate,
@@ -469,12 +656,14 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
       }
     } else for (const item of items) {
       const saved = await saveInventoryPurchase({
+        id: item.createdInventoryPurchaseId,
         itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
         totalCost: item.boughtPrice || item.allocatedCostBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
         purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
         purchasedByWorkerId: transaction.paidByWorkerId, notes: item.notes || transaction.notes, status: "in_stock",
         cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet, pokemonTcgCardId: item.pokemonTcgCardId,
-        cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardLanguage: item.cardLanguage,
+        cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardGame: item.cardGame, cardLanguage: item.cardLanguage,
+        dataProvider: item.dataProvider, providerCardId: item.providerCardId, cardCode: item.cardCode, marketPriceCurrency: item.marketPriceCurrency,
         officialCardImageUrl: item.officialCardImageUrl, tcgplayerUrl: item.tcgplayerUrl,
         marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
         marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
@@ -494,6 +683,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   } else {
     const amount = transaction.bundleTotal ?? transaction.cashPaid;
     const expense = await saveBusinessExpense({
+      id: transaction.items[0]?.createdBusinessExpenseId || transaction.id,
       expenseDate: transaction.tradeDate, amount, category: transaction.expenseCategory || "other",
       description: transaction.items.map((item) => item.itemName).filter(Boolean).join("; ") || transaction.notes || "Business expense", eventId: transaction.eventId,
       paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner, receiptImageUrl: transaction.proofImageUrl || transaction.generalImageUrl,
@@ -504,31 +694,37 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     transaction.cashPaid = amount;
   }
   onProgress?.("finalizing");
-  transaction = { ...transaction, status: "completed", completedAt: timestamp, updatedAt: timestamp };
-  await saveTrade(transaction);
   const balances = transactionReview(transaction).internalBalances;
   if (isSupabaseConfigured && supabase && balances.length) {
-    const balanceResult = await supabase.from("transaction_internal_balances").upsert(balances.map((row) => ({
-      transaction_id: transaction.id, owed_by_worker_id: row.owedByWorkerId, owed_to_worker_id: row.owedToWorkerId,
-      amount: row.amount, settled: false, updated_at: timestamp
-    })), { onConflict: "transaction_id,owed_by_worker_id,owed_to_worker_id" });
+    const balanceResult = await supabase.from("transaction_internal_balances").upsert(balances.map((row) =>
+      buildTransactionBalancePayload({
+        transactionId: transaction.id,
+        owedByWorkerId: row.owedByWorkerId,
+        owedToWorkerId: row.owedToWorkerId,
+        amount: row.amount,
+        updatedAt: timestamp
+      })
+    ), { onConflict: "transaction_id,owed_by_worker_id,owed_to_worker_id" });
     if (balanceResult.error) throw new Error(balanceResult.error.message);
   }
+  transaction = { ...transaction, status: "completed", completedAt: timestamp, updatedAt: timestamp };
+  await saveTrade(transaction);
   return { trade: transaction, created: [] as InventoryPurchase[] };
 }
 
 export async function reverseTrade(input: TradeTransaction, inventory: InventoryPurchase[]) {
-  if (input.status !== "completed") throw new Error("Only a completed trade can be reversed.");
+  const normalizedInput = normalizeTransactionForApplication(input);
+  if (normalizedInput.status !== "completed") throw new Error("Only a completed trade can be reversed.");
   const timestamp = nowIso();
-  for (const item of input.items.filter((row) => row.direction === "outgoing")) {
+  for (const item of normalizedInput.items.filter((row) => row.direction === "outgoing")) {
     const source = inventory.find((row) => row.id === item.inventoryPurchaseId);
     if (source?.status === "traded_out" && source.disposedFinancialTransactionId === input.id) await saveInventoryPurchase({ ...source, status: "in_stock", tradedAt: undefined, disposedFinancialTransactionId: undefined });
   }
-  for (const item of input.items.filter((row) => row.direction === "incoming")) {
+  for (const item of normalizedInput.items.filter((row) => row.direction === "incoming")) {
     const received = inventory.find((row) => row.id === item.createdInventoryPurchaseId);
     if (received) await saveInventoryPurchase({ ...received, status: "reversed" });
   }
-  const trade = { ...input, status: "reversed" as const, reversedAt: timestamp, updatedAt: timestamp };
+  const trade = { ...normalizedInput, status: "reversed" as const, reversedAt: timestamp, updatedAt: timestamp };
   await saveTrade(trade);
   return trade;
 }

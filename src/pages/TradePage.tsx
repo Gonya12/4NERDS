@@ -16,11 +16,15 @@ import {
   blankTrade, blankTradeItem, completeTrade, getCachedTrades, listTrades, reverseTrade,
   saveFinancialTransactionDraft, saveTrade, type TransactionSaveStage
 } from "../services/database/tradeRepository";
+import {
+  normalizeTransactionForApplication,
+  transactionTypeDeveloperDebug
+} from "../services/database/financialTransactionType";
 import { getCachedInventoryPurchases, listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
-import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
+import type { CardGame, CardLanguage, Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
 import { pokemonCategoryLabels } from "../utils/salesControl";
@@ -71,11 +75,15 @@ export function TradePage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | TradeTransaction["status"]>("all");
+  const [cardGameFilter, setCardGameFilter] = useState("all");
+  const [cardLanguageFilter, setCardLanguageFilter] = useState("all");
+  const [providerFilter, setProviderFilter] = useState("all");
   const [editor, setEditor] = useState<TradeTransaction>();
   const [detail, setDetail] = useState<TradeTransaction>();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveDebug, setSaveDebug] = useState("");
   const [saveStage, setSaveStage] = useState<TransactionSaveStage | undefined>(undefined);
   const [saveComplete, setSaveComplete] = useState(false);
   const [recoverableDraft, setRecoverableDraft] = useState<LocalTradeDraft | undefined>(() => readLocalTradeDraft());
@@ -143,10 +151,15 @@ export function TradePage() {
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return trades.filter((trade) => statusFilter === "all" || trade.status === statusFilter).filter((trade) =>
-      !term || trade.tradePartner?.toLowerCase().includes(term) || trade.items.some((item) => `${item.itemName} ${item.collectorNumber || ""} ${item.cardSet || ""}`.toLowerCase().includes(term))
-    );
-  }, [trades, search, statusFilter]);
+    return trades
+      .filter((trade) => statusFilter === "all" || trade.status === statusFilter)
+      .filter((trade) => cardGameFilter === "all" || trade.items.some((item) => item.cardGame === cardGameFilter))
+      .filter((trade) => cardLanguageFilter === "all" || trade.items.some((item) => item.cardLanguage === cardLanguageFilter))
+      .filter((trade) => providerFilter === "all" || trade.items.some((item) => item.dataProvider === providerFilter))
+      .filter((trade) =>
+        !term || trade.tradePartner?.toLowerCase().includes(term) || trade.items.some((item) => `${item.itemName} ${item.collectorNumber || ""} ${item.cardCode || ""} ${item.cardSet || ""} ${item.cardGame || ""} ${item.cardLanguage || ""} ${item.dataProvider || ""} ${item.providerCardId || ""}`.toLowerCase().includes(term))
+      );
+  }, [trades, search, statusFilter, cardGameFilter, cardLanguageFilter, providerFilter]);
   const completed = trades.filter((row) => row.status === "completed");
   const month = new Date().toISOString().slice(0, 7);
   const monthTrades = completed.filter((row) => row.tradeDate.startsWith(month));
@@ -176,7 +189,11 @@ export function TradePage() {
       setEditor(saved); setTrades((rows) => [saved, ...rows.filter((row) => row.id !== saved.id)]);
       localStorage.setItem(localTradeDraftKey, JSON.stringify({ trade: saved, step, savedAt: new Date().toISOString() } satisfies LocalTradeDraft));
       setMessage("Draft saved.");
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Draft could not be saved."); }
+      setSaveDebug("");
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Draft could not be saved.");
+      setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
+    }
     finally { setSaving(false); setSaveStage(undefined); }
   }
   async function finish() {
@@ -194,7 +211,10 @@ export function TradePage() {
       setEditor(undefined); setDetail(result.trade); setTrades((rows) => [result.trade, ...rows.filter((row) => row.id !== result.trade.id)]);
       await load();
       setMessage("Trade completed. Outgoing inventory is Traded Out and incoming inventory is In Stock.");
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Trade could not be completed."); }
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Trade could not be completed.");
+      setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
+    }
     finally { setSaving(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function reverseCurrent() {
@@ -217,9 +237,19 @@ export function TradePage() {
       {recoverableDraft ? <section className="fixed inset-x-3 top-3 z-[75] mx-auto max-w-2xl rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-xl dark:border-amber-800 dark:bg-amber-950">
         <p className="font-black text-amber-900 dark:text-amber-100">An unfinished trade draft is available</p>
         <p className="text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(recoverableDraft.savedAt).toLocaleString()}.</p>
-        <div className="mt-2 flex gap-2"><button type="button" onClick={() => { setEditor(recoverableDraft.trade); setStep(recoverableDraft.step); setRecoverableDraft(undefined); }} className="btn-primary">Resume Draft</button><button type="button" onClick={() => setDiscardDraftOpen(true)} className="btn-secondary">Discard</button></div>
+        <div className="mt-2 flex gap-2"><button type="button" onClick={() => {
+          try {
+            setEditor(normalizeTransactionForApplication(recoverableDraft.trade));
+            setStep(recoverableDraft.step);
+            setRecoverableDraft(undefined);
+            setSaveDebug("");
+          } catch (caught) {
+            setMessage(caught instanceof Error ? caught.message : "The restored draft has an invalid transaction type.");
+            setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
+          }
+        }} className="btn-primary">Resume Draft</button><button type="button" onClick={() => setDiscardDraftOpen(true)} className="btn-secondary">Discard</button></div>
       </section> : null}
-      <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />
+      <TradeEditor trade={editor} onChange={setEditor} inventory={inventory} events={events} workers={workers} step={step} onStep={setStep} saving={saving} message={message} developerDebug={saveDebug} onSave={() => void persistDraft()} onComplete={() => void finish()} onClose={() => setEditor(undefined)} />
       {saveStage ? <div className="fixed inset-x-3 bottom-24 z-[70] mx-auto max-w-2xl"><ProgressSteps steps={tradeSaveSteps} activeStep={saveStageIndex} complete={saveComplete} /></div> : null}
       <ConfirmDialog open={discardDraftOpen} title="Discard recovered trade?" description="The locally recovered trade will be removed. Supabase drafts are not affected." confirmLabel="Discard Draft" onConfirm={() => { localStorage.removeItem(localTradeDraftKey); setRecoverableDraft(undefined); setDiscardDraftOpen(false); }} onCancel={() => setDiscardDraftOpen(false)} />
     </>;
@@ -243,7 +273,7 @@ export function TradePage() {
 
     <section className="surface-card space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="eyebrow">Trade history</p><h2 className="text-xl font-black">All transactions</h2></div><div className="flex gap-2 text-xs font-black"><span>{trades.filter((row) => row.status === "draft").length} Drafts</span><span>·</span><span>{completed.length} Completed</span></div></div>
-      <div className="grid gap-2 sm:grid-cols-[1fr_12rem]"><label className="relative"><Search size={17} className="absolute left-3 top-3.5 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Partner, card, collector number, set…" className={`${inputClass} pl-10`} /></label><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className={inputClass}><option value="all">All statuses</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="reversed">Reversed</option></select></div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5"><label className="relative sm:col-span-2"><Search size={17} className="absolute left-3 top-3.5 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Partner, card, code, set, provider…" className={`${inputClass} pl-10`} /></label><select aria-label="Filter trades by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className={inputClass}><option value="all">All statuses</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="reversed">Reversed</option></select><select aria-label="Filter trades by card game" value={cardGameFilter} onChange={(event) => setCardGameFilter(event.target.value)} className={inputClass}><option value="all">All games</option><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select><select aria-label="Filter trades by card language" value={cardLanguageFilter} onChange={(event) => setCardLanguageFilter(event.target.value)} className={inputClass}><option value="all">All languages</option><option value="en">English</option><option value="ja">Japanese</option><option value="unknown">Unknown</option></select><select aria-label="Filter trades by provider" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} className={inputClass}><option value="all">All providers</option><option value="pokemontcg">Pokémon TCG API</option><option value="tcgdex">TCGdex</option><option value="optcgapi">OPTCG API</option><option value="manual">Manual</option></select></div>
       <div className="space-y-2">{filtered.map((trade) => {
         const summary = tradeSummary(trade);
         return <button key={trade.id} onClick={() => openExisting(trade)} className="w-full rounded-2xl border border-slate-200 p-3 text-left transition hover:border-violet-400 dark:border-slate-800">
@@ -257,6 +287,7 @@ export function TradePage() {
 
 type EditorProps = {
   trade: TradeTransaction; inventory: InventoryPurchase[]; events: Event[]; workers: Worker[]; step: number; saving: boolean; message: string;
+  developerDebug?: string;
   onChange: (trade: TradeTransaction) => void; onStep: (step: number) => void; onSave: () => void; onComplete: () => void; onClose: () => void;
 };
 function TradeEditor(props: EditorProps) {
@@ -267,6 +298,7 @@ function TradeEditor(props: EditorProps) {
   const [manualSearch, setManualSearch] = useState(false);
   const [draftSaveError, setDraftSaveError] = useState("");
   const [imageUploadError, setImageUploadError] = useState("");
+  const [draftSaveDebug, setDraftSaveDebug] = useState("");
   const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
   const update = (patch: Partial<TradeTransaction>) => onChange({ ...trade, ...patch });
   const updateItem = (item: TradeItem) => update({ items: trade.items.map((row) => row.id === item.id ? item : row) });
@@ -287,9 +319,13 @@ function TradeEditor(props: EditorProps) {
       return next;
     });
   }, []);
-
-  async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string) {
+  useEffect(() => {
+    if (props.message !== "Draft saved.") return;
     setDraftSaveError("");
+    setDraftSaveDebug("");
+  }, [props.message]);
+
+  async function uploadImage(file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, itemId?: string, stableImageId?: string) {
     setImageUploadError("");
     let persisted: TradeTransaction;
     try {
@@ -297,12 +333,15 @@ function TradeEditor(props: EditorProps) {
         ? await saveTrade(trade, { syncImages: false })
         : await saveFinancialTransactionDraft(trade);
       if (persisted.id !== trade.id) onChange(persisted);
+      setDraftSaveError("");
+      setDraftSaveDebug("");
     } catch (error) {
       setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be saved.");
+      setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
       throw new Error("Image upload is waiting for the transaction draft to save. Retry after the transaction error is resolved.");
     }
     try {
-      const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress);
+      const result = await saveTransactionImage(file, persisted.id, itemId, imageType, onProgress, stableImageId);
       return {
         id: result.id,
         transactionId: persisted.id,
@@ -334,8 +373,10 @@ function TradeEditor(props: EditorProps) {
     try {
       await saveFinancialTransactionDraft(updated);
       setDraftSaveError("");
+      setDraftSaveDebug("");
     } catch (error) {
       setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be updated.");
+      setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
     }
   }
 
@@ -357,13 +398,15 @@ function TradeEditor(props: EditorProps) {
     try {
       await saveTrade(updated);
       setDraftSaveError("");
+      setDraftSaveDebug("");
     } catch (error) {
       setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be updated.");
+      setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
     }
   }
   const available = props.inventory.filter((row) => row.status === "in_stock" && row.quantity > row.quantitySold).filter((row) => {
     const term = inventorySearch.toLowerCase();
-    return !term || `${row.itemName} ${row.cardName || ""} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.certificateNumber || ""} ${row.pokemonTcgCardId || ""} ${row.id}`.toLowerCase().includes(term);
+    return !term || `${row.itemName} ${row.cardName || ""} ${row.collectorNumber || ""} ${row.cardCode || ""} ${row.cardSet || ""} ${row.cardGame || ""} ${row.cardLanguage || ""} ${row.dataProvider || ""} ${row.providerCardId || ""} ${row.certificateNumber || ""} ${row.pokemonTcgCardId || ""} ${row.id}`.toLowerCase().includes(term);
   });
   const addOutgoing = (purchase: InventoryPurchase) => {
     if (trade.items.some((item) => item.direction === "outgoing" && item.inventoryPurchaseId === purchase.id)) return;
@@ -375,7 +418,9 @@ function TradeEditor(props: EditorProps) {
       imageUrl: purchase.frontImageUrl || purchase.imageUrl, imagePath: purchase.frontImagePath || purchase.imagePath,
       backImageUrl: purchase.backImageUrl, backImagePath: purchase.backImagePath, collectorNumber: purchase.collectorNumber,
       cardSet: purchase.cardSet, cardSetId: purchase.cardSetId, cardSetCode: purchase.cardSetCode, cardRarity: purchase.cardRarity,
-      cardLanguage: purchase.cardLanguage, pokemonTcgCardId: purchase.pokemonTcgCardId,
+      cardGame: purchase.cardGame, cardLanguage: purchase.cardLanguage, dataProvider: purchase.dataProvider,
+      providerCardId: purchase.providerCardId, cardCode: purchase.cardCode, marketPriceCurrency: purchase.marketPriceCurrency,
+      pokemonTcgCardId: purchase.pokemonTcgCardId,
       officialCardImageUrl: purchase.officialCardImageUrl, tcgplayerUrl: purchase.tcgplayerUrl,
       marketPriceSource: purchase.marketPriceSource, marketPriceVariant: purchase.marketPriceVariant,
       marketPriceUpdatedAt: purchase.marketPriceUpdatedAt, marketPriceCheckedAt: purchase.marketPriceCheckedAt,
@@ -412,6 +457,7 @@ function TradeEditor(props: EditorProps) {
     <div className="flex gap-1 overflow-x-auto pb-1">{steps.map((label, index) => <button key={label} disabled={imageUploading} onClick={() => props.onStep(index)} title={label} className={`h-2 min-w-10 flex-1 rounded-full disabled:opacity-50 ${index <= props.step ? "bg-violet-600" : "bg-slate-200 dark:bg-slate-800"}`} />)}</div>
     {props.message ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">{props.message}</p> : null}
     {draftSaveError ? <p role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800"><span className="block text-xs uppercase tracking-wide">Transaction draft error</span>{draftSaveError}</p> : null}
+    {draftSaveDebug || props.developerDebug ? <details className="rounded-xl border border-slate-300 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><summary className="cursor-pointer font-black">Developer Debug</summary><code className="mt-2 block whitespace-pre-wrap break-all">{draftSaveDebug || props.developerDebug}</code></details> : null}
     {imageUploadError ? <p role="alert" className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-sm font-bold text-orange-800"><span className="block text-xs uppercase tracking-wide">Image upload error</span>{imageUploadError}</p> : null}
 
     {props.step === 0 ? <section className="surface-card grid gap-3 p-4 sm:grid-cols-2">
@@ -428,9 +474,10 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         multiple
         maxImages={5}
-        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress)}
+        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
         onChange={(images) => changeTransactionImages(["general"], images)}
         onBusyChange={onImageBusyChange}
+        retryDisabled={Boolean(draftSaveError)}
       />
       <ImageAttachmentField
         label="Trade proof or payment screenshots"
@@ -440,9 +487,10 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         multiple
         maxImages={3}
-        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress)}
+        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, undefined, stableImageId)}
         onChange={(images) => changeTransactionImages(["proof", "receipt"], images)}
         onBusyChange={onImageBusyChange}
+        retryDisabled={Boolean(draftSaveError)}
       />
     </section> : null}
 
@@ -465,6 +513,7 @@ function TradeEditor(props: EditorProps) {
       dismissible={!imageUploading}
     >
       {editingItem ? <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Card game</span><select value={editingItem.cardGame || "other"} onChange={(event) => { const cardGame = event.target.value as CardGame; const cardLanguage: CardLanguage = cardGame === "pokemon" ? "en" : cardGame === "one_piece" ? "en" : "unknown"; const item = { ...editingItem, cardGame, cardLanguage, dataProvider: "manual" as const, providerCardId: undefined, pokemonTcgCardId: undefined, cardCode: undefined, officialCardImageUrl: undefined, tcgplayerUrl: undefined, marketPriceSource: "Manual", marketPriceVariant: undefined, marketPriceUpdatedAt: undefined, marketPriceCheckedAt: undefined, tcgplayerPricing: undefined }; setEditingItem(item); updateItem(item); }} className={inputClass}><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select></label>{editingItem.cardGame !== "one_piece" && editingItem.cardGame !== "other" && editingItem.cardGame != null ? <label><span className="text-xs font-black">Printing language</span><select value={editingItem.cardLanguage === "ja" ? "ja" : "en"} onChange={(event) => { const cardLanguage = event.target.value as Extract<CardLanguage, "en" | "ja">; const item = { ...editingItem, cardGame: "pokemon" as const, cardLanguage, dataProvider: "manual" as const, providerCardId: undefined, pokemonTcgCardId: undefined, officialCardImageUrl: undefined, tcgplayerUrl: undefined, marketPriceSource: "Manual", marketPriceVariant: undefined, marketPriceUpdatedAt: undefined, marketPriceCheckedAt: undefined, tcgplayerPricing: undefined }; setEditingItem(item); updateItem(item); }} className={inputClass}><option value="en">English</option><option value="ja">Japanese / 日本語</option></select></label> : <div className="self-end rounded-xl bg-slate-100 p-3 text-xs font-bold">{editingItem.cardGame === "one_piece" ? "English · search with OPTCG API" : "Manual metadata"}</div>}</div>
       <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Item name</span><input value={editingItem.itemName} onChange={(event) => { const item = { ...editingItem, itemName: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Item type</span><select value={editingItem.itemType} onChange={(event) => { const item = { ...editingItem, itemType: event.target.value as PokemonProductCategory }; setEditingItem(item); updateItem(item); }} className={inputClass}>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Quantity</span><input type="number" min="1" value={editingItem.quantity} onChange={(event) => { const item = { ...editingItem, quantity: Math.max(1, Number(event.target.value)) }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Collector number</span><input value={editingItem.collectorNumber || ""} onChange={(event) => { const item = { ...editingItem, collectorNumber: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Set</span><input value={editingItem.cardSet || ""} onChange={(event) => { const item = { ...editingItem, cardSet: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Market Value</span>{money(editingItem.marketValue, (marketValue) => { const item = { ...editingItem, marketValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "incoming" ? "Accepted Trade Value" : "Agreed Trade Value"}</span>{money(editingItem.agreedTradeValue, (agreedTradeValue) => { const item = { ...editingItem, agreedTradeValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "outgoing" ? "Original Cost Basis" : "Allocated Cost Basis"}</span>{editingItem.direction === "outgoing" && editingItem.inventoryPurchaseId ? <><input type="number" value={editingItem.historicalCostBasis} readOnly className={`${inputClass} bg-slate-100`} /><small className="block text-slate-500">Historical cost basis loaded from inventory</small></> : money(editingItem.direction === "outgoing" ? editingItem.historicalCostBasis : editingItem.allocatedCostBasis, (value) => { const item = editingItem.direction === "outgoing" ? { ...editingItem, historicalCostBasis: value } : { ...editingItem, allocatedCostBasis: value }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Grading company</span><input value={editingItem.gradingCompany || ""} onChange={(event) => { const item = { ...editingItem, gradingCompany: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Grade / certificate</span><input value={[editingItem.grade, editingItem.certificateNumber].filter(Boolean).join(" / ")} onChange={(event) => { const [grade, certificateNumber] = event.target.value.split("/").map((value) => value.trim()); const item = { ...editingItem, grade, certificateNumber }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label></div>
       <TransactionItemPricing item={editingItem} context={editingItem.direction === "incoming" ? "trade-incoming" : "trade-outgoing"} onChange={(item) => { setEditingItem(item); updateItem(item); }} />
       <ImageAttachmentField
@@ -477,9 +526,10 @@ function TradeEditor(props: EditorProps) {
         multiple
         maxImages={3}
         reusableAttachment={sharedImage}
-        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress, editingItem.id)}
+        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId)}
         onChange={(images) => changeItemImages(editingItem, ["front", "item", "crop"], images)}
         onBusyChange={onImageBusyChange}
+        retryDisabled={Boolean(draftSaveError)}
       />
       <ImageAttachmentField
         label="Slab back photo"
@@ -489,24 +539,25 @@ function TradeEditor(props: EditorProps) {
         transactionId={trade.id}
         transactionItemId={editingItem.id}
         maxImages={1}
-        onUpload={(file, imageType, onProgress) => uploadImage(file, imageType, onProgress, editingItem.id)}
+        onUpload={(file, imageType, onProgress, stableImageId) => uploadImage(file, imageType, onProgress, editingItem.id, stableImageId)}
         onChange={(images) => changeItemImages(editingItem, ["back"], images)}
         onBusyChange={onImageBusyChange}
+        retryDisabled={Boolean(draftSaveError)}
       />
-      {editingItem.direction === "incoming" ? <button type="button" onClick={() => setManualSearch(true)} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 p-2 text-xs font-black dark:bg-slate-800"><Search size={16} /> Search Pokémon card manually</button> : null}
+      {editingItem.direction === "incoming" ? <button type="button" onClick={() => setManualSearch(true)} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 p-2 text-xs font-black dark:bg-slate-800"><Search size={16} /> Search card catalog</button> : null}
       <OwnershipEditor workers={props.workers} shares={editingItem.ownershipShares} totalCost={editingItem.direction === "incoming" ? editingItem.allocatedCostBasis : editingItem.historicalCostBasis} label={`${editingItem.direction === "incoming" ? "Incoming" : "Outgoing"} item ownership`} onChange={(ownershipShares) => { const item = { ...editingItem, ownershipShares }; setEditingItem(item); updateItem(item); }} />
       <label><span className="text-xs font-black">Notes</span><textarea value={editingItem.notes || ""} onChange={(event) => { const item = { ...editingItem, notes: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label>
       <button type="button" disabled={imageUploading} onClick={() => setEditingItem(undefined)} className="btn-primary w-full disabled:opacity-50"><Check size={17} /> Done</button>
     </div> : null}
     </ResponsiveModal>
-    {manualSearch && editingItem ? <ManualCardSearch open category={editingItem.itemType} initialName={editingItem.itemName} initialCollectorNumber={editingItem.collectorNumber} initialSet={editingItem.cardSet} onClose={() => setManualSearch(false)} onApply={(suggestion) => { const item = applyCardSuggestionToItem(editingItem, suggestion, "manual"); setEditingItem(item); updateItem(item); setManualSearch(false); }} /> : null}
+    {manualSearch && editingItem ? <ManualCardSearch open category={editingItem.itemType} initialName={editingItem.itemName} initialCollectorNumber={editingItem.cardCode || editingItem.collectorNumber} initialSet={editingItem.cardSet} initialGame={editingItem.cardGame} initialLanguage={editingItem.cardLanguage} onClose={() => setManualSearch(false)} onApply={(suggestion) => { const item = applyCardSuggestionToItem(editingItem, suggestion, "manual"); setEditingItem(item); updateItem(item); setManualSearch(false); }} /> : null}
 
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:left-64"><div className="mx-auto flex max-w-5xl items-center gap-2"><button onClick={() => props.onStep(Math.max(0, props.step - 1))} disabled={props.step === 0 || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-slate-100 px-3 font-black disabled:opacity-40 dark:bg-slate-800"><ArrowLeft size={17} /> Back</button><div className="min-w-0 flex-1 text-center text-xs font-black"><span className="block truncate">Given {formatMoney(summary.outgoingAgreed + trade.cashPaid)} · Received {formatMoney(summary.incomingAgreed + trade.cashReceived)}</span><span className={summary.agreedDifference >= 0 ? "text-emerald-600" : "text-rose-600"}>Difference {formatMoney(summary.agreedDifference)}</span></div><button onClick={props.onSave} disabled={props.saving || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-amber-100 px-3 font-black text-amber-800 disabled:opacity-50"><Save size={17} /><span className="hidden sm:inline">Save Draft</span></button>{props.step < 5 ? <button onClick={() => props.onStep(props.step + 1)} disabled={imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-violet-600 px-3 font-black text-white disabled:opacity-50">Next <ArrowRight size={17} /></button> : <button onClick={props.onComplete} disabled={props.saving || imageUploading} className="inline-flex min-h-12 items-center gap-1 rounded-xl bg-emerald-600 px-3 font-black text-white disabled:opacity-50"><Check size={17} /> Complete</button>}</div></div>
   </div>;
 }
 
 function ItemList({ title, items, workers, onEdit, onRemove }: { title: string; items: TradeItem[]; workers: Worker[]; onEdit: (item: TradeItem) => void; onRemove: (id: string) => void }) {
-  return <section className="surface-card p-4"><h3 className="mb-3 font-black">{title}</h3><div className="space-y-2">{items.map((item) => <article key={item.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-2 dark:border-slate-800">{itemImage(item) ? <img src={itemImage(item)} className="size-14 rounded-lg object-contain" /> : <div className="size-14 shrink-0 rounded-lg bg-slate-100 dark:bg-slate-800" />}<div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1"><b className="truncate">{item.itemName || "Unnamed item"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${item.direction === "incoming" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"}`}>{item.direction === "incoming" ? "INCOMING" : "OUTGOING"}</span></div><p className="text-xs text-slate-500">{formatMoney(item.agreedTradeValue)} agreed · {item.ownershipShares.map((share) => `${workers.find((worker) => worker.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Unassigned"}</p></div><button onClick={() => onEdit(item)} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-700">Edit</button><button onClick={() => onRemove(item.id)} aria-label="Remove item" className="rounded-lg bg-rose-50 p-2 text-rose-600"><Trash2 size={16} /></button></article>)}{!items.length ? <p className="py-4 text-center text-sm font-bold text-slate-500">No items yet.</p> : null}</div></section>;
+  return <section className="surface-card p-4"><h3 className="mb-3 font-black">{title}</h3><div className="space-y-2">{items.map((item) => <article key={item.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-2 dark:border-slate-800">{itemImage(item) ? <img src={itemImage(item)} className="size-14 rounded-lg object-contain" /> : <div className="size-14 shrink-0 rounded-lg bg-slate-100 dark:bg-slate-800" />}<div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1"><b className="truncate">{item.itemName || "Unnamed item"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${item.direction === "incoming" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"}`}>{item.direction === "incoming" ? "INCOMING" : "OUTGOING"}</span>{item.cardGame ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black text-violet-700">{item.cardGame === "one_piece" ? "ONE PIECE" : item.cardLanguage === "ja" ? "POKÉMON · JA" : "POKÉMON · EN"}</span> : null}</div><p className="text-xs text-slate-500">{formatMoney(item.agreedTradeValue)} agreed · {item.cardCode || item.collectorNumber ? `#${item.cardCode || item.collectorNumber} · ` : ""}{item.ownershipShares.map((share) => `${workers.find((worker) => worker.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Unassigned"}</p></div><button onClick={() => onEdit(item)} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-700">Edit</button><button onClick={() => onRemove(item.id)} aria-label="Remove item" className="rounded-lg bg-rose-50 p-2 text-rose-600"><Trash2 size={16} /></button></article>)}{!items.length ? <p className="py-4 text-center text-sm font-bold text-slate-500">No items yet.</p> : null}</div></section>;
 }
 
 function TradeSummaryCard({ trade }: { trade: TradeTransaction }) {

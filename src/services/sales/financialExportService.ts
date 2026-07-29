@@ -29,6 +29,9 @@ export type FinancialExportFilters = {
   ownerId?: string;
   status?: "all" | string;
   query?: string;
+  cardGame?: "all" | "pokemon" | "one_piece" | "other";
+  cardLanguage?: "all" | "en" | "ja" | "unknown";
+  dataProvider?: "all" | "pokemontcg" | "tcgdex" | "optcgapi" | "manual";
 };
 
 export type FinancialExportInput = {
@@ -61,10 +64,12 @@ const transactionKinds: ExportColumnKind[] = [
 const itemHeaders = [
   "Transaction ID", "Transaction Item ID", "Date", "Transaction Type", "Direction", "Item Name", "Item Type",
   "Quantity", "Inventory Record ID", "Inventory Status", "Acquisition Method", "Disposition Method",
-  "Pokémon TCG Card ID", "Collector Number", "Set", "Rarity", "Condition", "Grading Company", "Grade",
+  "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Pokémon TCG Card ID",
+  "Collector Number", "Set", "Rarity", "Condition", "Grading Company", "Grade",
   "Certificate Number", "Owner Gonzalo %", "Owner Thiago %", "Other Ownership", "Ownership Breakdown",
   "Market Value", "Trade Percentage", "Agreed Trade Value", "Bought Price", "Cost Basis", "Sold Price",
-  "Allocated Cash Amount", "Gross Profit", "TCGplayer Variant", "TCGplayer Market Price", "TCGplayer URL",
+  "Allocated Cash Amount", "Gross Profit", "Market Price Source", "Market Price Currency",
+  "Provider Price Variant", "Provider Market Price", "Product URL",
   "Event", "Image URL", "Notes"
 ];
 const itemKinds: ExportColumnKind[] = itemHeaders.map((header) =>
@@ -99,12 +104,31 @@ function ownershipBreakdown(item: TradeItem, workers: Worker[]) {
   return item.ownershipShares.map((share) => `${workerName(workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; ");
 }
 
+function cardMetadataMatches(
+  record: { cardGame?: string; cardLanguage?: string; dataProvider?: string },
+  filters: FinancialExportFilters
+) {
+  if (filters.cardGame && filters.cardGame !== "all" && record.cardGame !== filters.cardGame) return false;
+  if (filters.cardLanguage && filters.cardLanguage !== "all" && record.cardLanguage !== filters.cardLanguage) return false;
+  if (filters.dataProvider && filters.dataProvider !== "all" && record.dataProvider !== filters.dataProvider) return false;
+  return true;
+}
+
+function hasCardMetadataFilter(filters: FinancialExportFilters) {
+  return (filters.cardGame && filters.cardGame !== "all")
+    || (filters.cardLanguage && filters.cardLanguage !== "all")
+    || (filters.dataProvider && filters.dataProvider !== "all");
+}
+
 function transactionMatches(transaction: TradeTransaction, filters: FinancialExportFilters, workers: Worker[]) {
   if (!isWithinFinancialRange(transaction.tradeDate, filters.dateRange, filters.customStart, filters.customEnd)) return false;
   if (filters.eventId && transaction.eventId !== filters.eventId) return false;
   if (filters.recordType && filters.recordType !== "all" && filters.recordType !== "inventory" && transaction.transactionType !== filters.recordType) return false;
   if (filters.status && filters.status !== "all" && transaction.status !== filters.status) return false;
   if (filters.ownerId && !transaction.items.some((item) => item.ownershipShares.some((share) => share.workerId === filters.ownerId))) return false;
+  if (hasCardMetadataFilter(filters)) {
+    if (!transaction.items.some((item) => cardMetadataMatches(item, filters))) return false;
+  }
   const query = filters.query?.trim().toLowerCase();
   return !query || `${transaction.id} ${transaction.tradePartner || ""} ${transaction.notes || ""} ${transaction.items.map((item) => `${item.itemName} ${item.collectorNumber || ""} ${item.cardSet || ""} ${ownershipBreakdown(item, workers)}`).join(" ")}`.toLowerCase().includes(query);
 }
@@ -127,18 +151,22 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   const transactions = input.transactions.filter((row) => transactionMatches(row, filters, input.workers));
   const legacySales = input.sales.filter((row) => !row.financialTransactionId || !allTransactionIds.has(row.financialTransactionId)).filter((row) =>
     (!filters.recordType || filters.recordType === "all" || filters.recordType === "sale")
+    && cardMetadataMatches(row, filters)
     && legacyMatches(row.soldAt, row.eventId, "completed", `${row.id} ${row.itemName || ""} ${row.cardName || ""} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.notes || ""}`, row.ownershipShares, filters)
   );
   const legacyPurchases = input.purchases.filter((row) => !row.financialTransactionId || !allTransactionIds.has(row.financialTransactionId)).filter((row) =>
     (!filters.recordType || filters.recordType === "all" || filters.recordType === "purchase" || filters.recordType === "inventory")
+    && cardMetadataMatches(row, filters)
     && legacyMatches(row.purchaseDate, row.eventId, row.status, `${row.id} ${row.itemName} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.seller || ""} ${row.notes || ""}`, row.ownershipShares, filters)
   );
   const legacyExpenses = input.expenses.filter((row) => !row.financialTransactionId || !allTransactionIds.has(row.financialTransactionId)).filter((row) =>
     (!filters.recordType || filters.recordType === "all" || filters.recordType === "expense")
+    && !hasCardMetadataFilter(filters)
     && legacyMatches(row.expenseDate, row.eventId, "completed", `${row.id} ${row.description} ${row.vendor || ""} ${row.notes || ""}`, undefined, filters)
   );
   const filteredInventory = input.purchases.filter((row) =>
     (!filters.recordType || filters.recordType === "all" || filters.recordType === "purchase" || filters.recordType === "inventory")
+    && cardMetadataMatches(row, filters)
     && legacyMatches(row.purchaseDate, row.eventId, row.status, `${row.id} ${row.itemName} ${row.collectorNumber || ""} ${row.cardSet || ""} ${row.seller || ""} ${row.notes || ""}`, row.ownershipShares, filters)
   );
 
@@ -173,7 +201,9 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   transactionRows.sort((a, b) => String(b[1]).localeCompare(String(a[1])));
 
   const inventoryById = new Map(input.purchases.map((row) => [row.id, row]));
-  const itemRows: ExportValue[][] = transactions.flatMap((transaction) => transaction.items.map((item) => {
+  const itemRows: ExportValue[][] = transactions.flatMap((transaction) => transaction.items
+    .filter((item) => !hasCardMetadataFilter(filters) || cardMetadataMatches(item, filters))
+    .map((item) => {
     const inventory = inventoryById.get(item.inventoryPurchaseId || item.createdInventoryPurchaseId || "");
     const basisKnown = item.direction !== "outgoing" || hasKnownHistoricalCostBasis(item);
     const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.allocatedCostBasis;
@@ -181,26 +211,33 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       transaction.id, item.id, transaction.tradeDate, transaction.transactionType, item.direction, item.itemName, pokemonCategoryLabels[item.itemType],
       item.quantity, item.inventoryPurchaseId || item.createdInventoryPurchaseId || "", inventory?.status || "", inventory?.acquisitionMethod || (item.direction === "incoming" ? transaction.transactionType : ""),
       inventory?.status === "sold" ? "sold" : inventory?.disposedFinancialTransactionId ? "traded_out" : "",
-      item.pokemonTcgCardId || inventory?.pokemonTcgCardId || "", item.collectorNumber || inventory?.collectorNumber || "", item.cardSet || inventory?.cardSet || "",
+      item.cardGame || inventory?.cardGame || "", item.cardLanguage || inventory?.cardLanguage || "",
+      item.dataProvider || inventory?.dataProvider || "", item.providerCardId || inventory?.providerCardId || "",
+      item.cardCode || inventory?.cardCode || "", item.pokemonTcgCardId || inventory?.pokemonTcgCardId || "",
+      item.collectorNumber || inventory?.collectorNumber || "", item.cardSet || inventory?.cardSet || "",
       inventory?.cardRarity || "", item.cardCondition || inventory?.cardCondition || "", item.gradingCompany || inventory?.gradingCompany || "",
       item.grade || inventory?.grade || "", item.certificateNumber || inventory?.certificateNumber || "", shareValue(item, input.workers, "gonzalo"),
       shareValue(item, input.workers, "thiago"), item.ownershipShares.filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
       ownershipBreakdown(item, input.workers), item.marketValue, item.tradePercentage ?? "", item.agreedTradeValue, item.boughtPrice ?? "",
       basisKnown ? basis : "", item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null || !basisKnown ? "" : roundMoney(item.soldPrice - basis),
-      inventory?.marketPriceVariant || "", inventory?.marketValue ?? "", inventory?.tcgplayerUrl || "", eventName(input.events, transaction.eventId),
+      item.marketPriceSource || inventory?.marketPriceSource || "", item.marketPriceCurrency || inventory?.marketPriceCurrency || "",
+      item.marketPriceVariant || inventory?.marketPriceVariant || "", item.marketValue || inventory?.marketValue || "",
+      item.tcgplayerUrl || inventory?.tcgplayerUrl || "", eventName(input.events, transaction.eventId),
       item.imageUrl || transaction.generalImageUrl || "", item.notes || ""
     ];
   }));
   legacySales.forEach((sale) => itemRows.push([
     sale.id, sale.id, sale.soldAt, "sale", "outgoing", sale.itemName || "Details pending", pokemonCategoryLabels[sale.category || "other_pokemon_product"],
     sale.quantity, sale.inventoryPurchaseId || "", inventoryById.get(sale.inventoryPurchaseId || "")?.status || "sold", "purchased", "sold",
+    sale.cardGame || "", sale.cardLanguage || "", sale.dataProvider || "", sale.providerCardId || "", sale.cardCode || "",
     sale.pokemonTcgCardId || "", sale.collectorNumber || "", sale.cardSet || "", sale.cardRarity || "", sale.cardCondition || "", "", "", "",
     (sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("gonzalo")).reduce((sum, share) => sum + share.ownershipPercentage, 0),
     (sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("thiago")).reduce((sum, share) => sum + share.ownershipPercentage, 0),
     (sale.ownershipShares || []).filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
     (sale.ownershipShares || []).map((share) => `${workerName(input.workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; "),
     sale.marketValue ?? "", "", "", "", sale.boughtPrice ?? "", sale.soldPrice ?? "", "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)),
-    sale.marketPriceVariant || "", sale.marketValue ?? "", sale.tcgplayerUrl || "", eventName(input.events, sale.eventId), sale.imageUrl || "", sale.notes || ""
+    sale.marketPriceSource || "", sale.marketPriceCurrency || "", sale.marketPriceVariant || "", sale.marketValue ?? "",
+    sale.tcgplayerUrl || "", eventName(input.events, sale.eventId), sale.imageUrl || "", sale.notes || ""
   ]));
 
   const inventoryRows = filteredInventory.map((purchase) => {
@@ -209,12 +246,14 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       purchase.id, purchase.purchaseDate, purchase.itemName, pokemonCategoryLabels[purchase.category], purchase.status, purchase.quantity,
       summary.quantitySold, summary.quantityRemaining, purchase.totalCost, summary.costPerUnit, purchase.marketValue ?? "", summary.realizedRevenue,
       summary.realizedCost, summary.realizedProfit, purchase.purchaseSource || "", purchase.acquisitionMethod || "", purchase.seller || "",
-      workerName(input.workers, purchase.purchasedByWorkerId), eventName(input.events, purchase.eventId), purchase.collectorNumber || "",
-      purchase.cardSet || "", purchase.cardRarity || "", purchase.cardCondition || "", purchase.gradingCompany || "", purchase.grade || "",
+      workerName(input.workers, purchase.purchasedByWorkerId), eventName(input.events, purchase.eventId),
+      purchase.cardGame || "", purchase.cardLanguage || "", purchase.dataProvider || "", purchase.providerCardId || "",
+      purchase.cardCode || "", purchase.collectorNumber || "", purchase.cardSet || "", purchase.marketPriceSource || "",
+      purchase.marketPriceCurrency || "", purchase.cardRarity || "", purchase.cardCondition || "", purchase.gradingCompany || "", purchase.grade || "",
       purchase.certificateNumber || "", purchase.imageUrl || purchase.frontImageUrl || "", purchase.notes || ""
     ];
   });
-  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Total Cost", "Cost Per Unit", "Market Value", "Realized Revenue", "Realized Cost", "Realized Profit", "Purchase Source", "Acquisition Method", "Seller", "Purchased By", "Event", "Collector Number", "Set", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
+  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Total Cost", "Cost Per Unit", "Market Value", "Realized Revenue", "Realized Cost", "Realized Profit", "Purchase Source", "Acquisition Method", "Seller", "Purchased By", "Event", "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Collector Number", "Set", "Market Price Source", "Market Price Currency", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
 
   const linkedExpenseIds = new Set(legacyExpenses.map((row) => row.financialTransactionId).filter(Boolean));
   const canonicalExpenses = transactions.filter((row) => row.transactionType === "expense" && !linkedExpenseIds.has(row.id)).map((transaction): BusinessExpense => ({
@@ -249,6 +288,9 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     eventId: transaction.eventId, eventDayId: transaction.eventDayId, imageUrl: item.imageUrl || transaction.generalImageUrl,
     itemName: item.itemName, category: item.itemType, quantity: item.quantity, soldPrice: item.soldPrice,
     boughtPrice: hasKnownHistoricalCostBasis(item) ? item.historicalCostBasis : undefined, marketValue: item.marketValue, paymentMethod: transaction.paymentMethod,
+    cardGame: item.cardGame, cardLanguage: item.cardLanguage, dataProvider: item.dataProvider, providerCardId: item.providerCardId,
+    cardCode: item.cardCode, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
+    marketPriceSource: item.marketPriceSource, marketPriceCurrency: item.marketPriceCurrency,
     soldByWorkerId: transaction.enteredByWorkerId, isRawCard: item.itemType === "raw_card", inventoryPurchaseId: item.inventoryPurchaseId,
     notes: item.notes, soldAt: transaction.tradeDate, pendingUpload: false, createdAt: item.createdAt, updatedAt: item.updatedAt,
     ownershipShares: item.ownershipShares
@@ -257,6 +299,9 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     id: item.createdInventoryPurchaseId || item.id, financialTransactionId: transaction.id, financialTransactionItemId: item.id,
     itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
     totalCost: Number(item.boughtPrice || item.allocatedCostBasis || 0), marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
+    cardGame: item.cardGame, cardLanguage: item.cardLanguage, dataProvider: item.dataProvider, providerCardId: item.providerCardId,
+    cardCode: item.cardCode, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
+    marketPriceSource: item.marketPriceSource, marketPriceCurrency: item.marketPriceCurrency,
     purchaseSource: transaction.purchaseSource, seller: transaction.tradePartner, eventId: transaction.eventId,
     purchasedByWorkerId: transaction.paidByWorkerId, status: "in_stock", acquisitionMethod: "purchased",
     createdAt: item.createdAt, updatedAt: item.updatedAt, ownershipShares: item.ownershipShares

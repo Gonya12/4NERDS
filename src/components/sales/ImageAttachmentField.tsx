@@ -10,6 +10,7 @@ import { AppButton, ResponsiveModal } from "./SalesDashboardPrimitives";
 
 type UploadJob = {
   id: string;
+  attachmentId: string;
   file: File;
   previewUrl: string;
   stage: ImageUploadStage | "failed";
@@ -29,9 +30,11 @@ type Props = {
   maxImages?: number;
   reusableAttachment?: TransactionImageAttachment;
   reusableLabel?: string;
-  onUpload: (file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void) => Promise<TransactionImageAttachment>;
+  onUpload: (file: File, imageType: TransactionImageType, onProgress: (stage: ImageUploadStage) => void, stableImageId: string) => Promise<TransactionImageAttachment>;
   onChange: (attachments: TransactionImageAttachment[]) => void | Promise<void>;
   onBusyChange?: (fieldId: string, busy: boolean) => void;
+  retryDisabled?: boolean;
+  retryDisabledReason?: string;
 };
 
 const stageLabels: Record<ImageUploadStage | "failed", string> = {
@@ -54,7 +57,8 @@ function cameraMessage(error: unknown) {
 
 export function ImageAttachmentField({
   label, description, attachments, imageType, transactionId, transactionItemId, multiple = false,
-  maxImages = multiple ? 8 : 1, reusableAttachment, reusableLabel = "Use group photo", onUpload, onChange, onBusyChange
+  maxImages = multiple ? 8 : 1, reusableAttachment, reusableLabel = "Use group photo", onUpload, onChange, onBusyChange,
+  retryDisabled = false, retryDisabledReason = "Resolve the transaction draft error before retrying this image."
 }: Props) {
   const fieldId = useId();
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -111,14 +115,15 @@ export function ImageAttachmentField({
     });
   }
 
-  async function uploadFile(file: File, targetId?: string) {
+  async function uploadFile(file: File, targetId?: string, retryAttachmentId?: string) {
     if (!isSupportedSaleImage(file)) {
       setMessage(`${file.name || "That file"} is not an image.`);
       return;
     }
     const jobId = crypto.randomUUID();
+    const attachmentId = retryAttachmentId || targetId || crypto.randomUUID();
     const previewUrl = URL.createObjectURL(file);
-    const job: UploadJob = { id: jobId, file, previewUrl, stage: "preparing", replaceId: targetId };
+    const job: UploadJob = { id: jobId, attachmentId, file, previewUrl, stage: "preparing", replaceId: targetId };
     setJobs((current) => [...current, job]);
     setMessage("");
     const slowTimer = window.setTimeout(() => updateJob(jobId, { slow: true }), 3_000);
@@ -128,7 +133,7 @@ export function ImageAttachmentField({
         timeoutTimer = window.setTimeout(() => reject(new Error("The image upload timed out. Retry this image when your connection is ready.")), 45_000);
       });
       const uploaded = await Promise.race([
-        onUpload(file, imageType, (stage) => updateJob(jobId, { stage: stage === "complete" ? "saving" : stage })),
+        onUpload(file, imageType, (stage) => updateJob(jobId, { stage: stage === "complete" ? "saving" : stage }), attachmentId),
         timeout
       ]);
       if (cancelledJobs.current.has(jobId)) return;
@@ -373,7 +378,7 @@ export function ImageAttachmentField({
           {job.error ? <p className="mt-1 text-xs leading-4 text-rose-600">{job.error}</p> : null}
           {job.stage !== "failed" && job.stage !== "complete" ? <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><span className="block h-full w-2/3 animate-pulse rounded-full bg-violet-500" /></div> : null}
         </div>
-        {job.stage === "failed" ? <button type="button" onClick={() => { removeJob(job.id); void uploadFile(job.file, job.replaceId); }} className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-black text-violet-700"><RotateCcw size={15} /> Retry</button> : <LoaderCircle size={18} className={job.stage === "complete" ? "text-emerald-500" : "animate-spin text-violet-500"} />}
+        {job.stage === "failed" ? <button type="button" disabled={retryDisabled} title={retryDisabled ? retryDisabledReason : "Retry image"} onClick={() => { removeJob(job.id); void uploadFile(job.file, job.replaceId, job.attachmentId); }} className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-black text-violet-700 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={15} /> Retry</button> : <LoaderCircle size={18} className={job.stage === "complete" ? "text-emerald-500" : "animate-spin text-violet-500"} />}
         <button type="button" onClick={() => removeJob(job.id)} aria-label={`Remove ${job.file.name || "upload"}`} className="grid size-11 shrink-0 place-items-center rounded-lg text-slate-500"><X size={17} /></button>
       </article>)}
     </div> : null}

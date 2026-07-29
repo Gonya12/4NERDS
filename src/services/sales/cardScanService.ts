@@ -1,58 +1,43 @@
 import type { Worker } from "tesseract.js";
 import type { CardCondition, PokemonProductCategory } from "../../types/models";
-import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
+import type {
+  CardDataProvider,
+  CardGame,
+  CardLanguage,
+} from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
+import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { compressSaleImage } from "../images/saleImageService";
 import { automaticallyPrepareCard, terminateCardImageWorker } from "./cardImageProcessor";
 import {
-  buildManualPokemonQuery,
   buildNameEvidence,
   buildPokemonApiQueries,
   conditionFromVisibleText,
   extractRawNameCandidate,
-  manualCardSearchValidationError,
-  normalizeManualCardSearchTerms,
   parseCollectorNumber,
-  rankPokemonCards,
   stickerPriceFromVisibleText,
-  type ManualCardSearchTerms,
-  type RankablePokemonCard,
 } from "./cardScanParsing";
+import {
+  cardProviderLabel,
+  fetchPokemonCardById,
+  pricingFromUnifiedCard,
+  searchPokemonCards,
+  searchPokemonCardsManually,
+  type CardMatch,
+  type ManualCardSearchInput,
+  type ManualCardSearchPage,
+  type ScanConfidence,
+  type TcgplayerPricing,
+  type TcgplayerPriceVariant,
+} from "./pokemonCardSearchService";
 
-export type ScanConfidence = "high" | "medium" | "low";
-export type CardMatch = {
-  id: string;
-  cardName: string;
-  collectorNumber: string;
-  setName: string;
-  setId?: string;
-  setCode?: string;
-  setReleaseDate?: string;
-  rarity?: string;
-  imageUrl?: string;
-  largeImageUrl?: string;
-  marketPrice?: number;
-  supertype?: string;
-  subtypes?: string[];
-  tcgplayerPricing?: TcgplayerPricing;
-  matchConfidence: ScanConfidence;
-  matchScore: number;
-  reasons: string[];
-};
-export type TcgplayerPriceVariant = {
-  variant: string;
-  market?: number;
-  low?: number;
-  mid?: number;
-  high?: number;
-  directLow?: number;
-};
-export type TcgplayerPricing = {
-  url?: string;
-  updatedAt?: string;
-  checkedAt: string;
-  variants: TcgplayerPriceVariant[];
-  selectedVariant?: string;
-  targetPercent?: number;
+export { searchPokemonCards, searchPokemonCardsManually };
+export type {
+  CardMatch,
+  ManualCardSearchInput,
+  ManualCardSearchPage,
+  ScanConfidence,
+  TcgplayerPricing,
+  TcgplayerPriceVariant,
 };
 export type CardScanSuggestion = {
   suggestedType: Extract<PokemonProductCategory, "raw_card" | "graded_card"> | null;
@@ -60,6 +45,12 @@ export type CardScanSuggestion = {
   collectorNumber: string | null;
   cardSet: string | null;
   language: string | null;
+  cardGame?: CardGame;
+  cardLanguage?: CardLanguage;
+  dataProvider?: CardDataProvider;
+  providerCardId?: string;
+  cardCode?: string;
+  marketPriceCurrency?: string;
   condition: CardCondition | null;
   stickerPrice: number | null;
   gradingCompany: string | null;
@@ -70,7 +61,7 @@ export type CardScanSuggestion = {
   overallConfidence: ScanConfidence;
   fieldConfidence: Record<string, ScanConfidence>;
   possibleMatches?: CardMatch[];
-  correctedNameCandidate?: string;
+  correctedNameCandidate?: string | null;
   correctedNameConfidence?: ScanConfidence;
   officialImageUrl?: string;
   cardSetId?: string;
@@ -104,35 +95,19 @@ export type CardScanStage =
   | "Reading collector number"
   | "Reading sticker"
   | "Reading full card fallback"
-  | "Searching Pokémon cards"
+  | "Searching card catalog"
   | "Preparing review";
 type ScanOptions = {
   signal?: AbortSignal;
   onStage?: (stage: CardScanStage) => void;
   skipCrop?: boolean;
+  game?: CardGame;
+  language?: CardLanguage;
 };
 
 let workerPromise: Promise<Worker> | null = null;
 let workerIdleTimer: number | undefined;
 let ocrQueue: Promise<unknown> = Promise.resolve();
-const searchCache = new Map<string, CardMatch[]>();
-const manualSearchCache = new Map<string, ManualCardSearchPage>();
-const manualSearchInFlight = new Map<string, Promise<ManualCardSearchPage>>();
-
-export type ManualCardSearchInput = ManualCardSearchTerms & {
-  page?: number;
-  pageSize?: number;
-};
-
-export type ManualCardSearchPage = {
-  matches: CardMatch[];
-  page: number;
-  pageSize: number;
-  totalCount: number;
-  hasMore: boolean;
-  normalizedTerms: ReturnType<typeof normalizeManualCardSearchTerms>;
-  warnings?: string[];
-};
 
 function abortError() {
   return new DOMException("Card scan cancelled.", "AbortError");
@@ -368,6 +343,11 @@ function photoQualityWarnings(image: HTMLImageElement) {
   return warnings;
 }
 
+/*
+ * The previous client-side Pokémon API implementation intentionally remains
+ * visible in source history during this migration, but is disabled here.
+ * Search traffic now goes through pokemonCardSearchService and the Edge
+ * Function so browser code never owns an API key or a competing query path.
 function marketPrice(card: RankablePokemonCard) {
   const values = Object.values(card.tcgplayer?.prices || {})
     .map((group) => group.market)
@@ -474,9 +454,7 @@ async function fetchPokemonApi(
     }
   }
 
-  const url = request.id
-    ? `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(request.id)}?select=${pokemonCardSelect}`
-    : `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(request.q || "")}&page=${request.page || 1}&pageSize=${request.pageSize || 20}&select=${pokemonCardSelect}`;
+  const url = "disabled-legacy-client-route";
   const response = await fetchWithTimeout(url, signal);
   const payload = await response.json().catch(() => ({})) as PokemonApiPayload & { error?: string; message?: string };
   if (!response.ok) throw pokemonApiError(response.status, payload);
@@ -568,16 +546,19 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
   return promise;
 }
 
+*/
 export async function confirmPokemonCardMatch(suggestion: CardScanSuggestion, match: CardMatch, signal?: AbortSignal) {
-  let pricing = match.tcgplayerPricing || { checkedAt: new Date().toISOString(), variants: [], targetPercent: 75 };
+  let pricing = pricingFromUnifiedCard(match);
   let detailedMatch = match;
-  if (!match.tcgplayerPricing) {
+  if (!match.pricing) {
     try {
-      const payload = await fetchPokemonApi({ id: match.id }, signal);
-      const card = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+      const card = await fetchPokemonCardById(match.providerCardId, signal, {
+        game: match.game,
+        language: match.language,
+      });
       if (card) {
-        pricing = pricingFromCard(card);
-        detailedMatch = cardMatch(card, match.matchScore, match.reasons);
+        pricing = pricingFromUnifiedCard(card);
+        detailedMatch = { ...match, ...card };
       }
     } catch (error) {
       if (signal?.aborted) throw abortError();
@@ -585,14 +566,21 @@ export async function confirmPokemonCardMatch(suggestion: CardScanSuggestion, ma
   }
   return {
     ...suggestion,
-    cardName: detailedMatch.cardName,
-    collectorNumber: detailedMatch.collectorNumber,
-    cardSet: detailedMatch.setName,
+    cardName: detailedMatch.name,
+    collectorNumber: detailedMatch.collectorNumber || null,
+    cardSet: detailedMatch.setName || null,
     cardSetId: detailedMatch.setId,
     cardSetCode: detailedMatch.setCode,
     cardRarity: detailedMatch.rarity,
-    pokemonTcgCardId: detailedMatch.id,
-    officialImageUrl: detailedMatch.largeImageUrl || detailedMatch.imageUrl,
+    cardGame: detailedMatch.game,
+    cardLanguage: detailedMatch.language,
+    language: detailedMatch.language,
+    dataProvider: detailedMatch.provider,
+    providerCardId: detailedMatch.providerCardId,
+    cardCode: detailedMatch.cardCode,
+    marketPriceCurrency: detailedMatch.pricing?.currency,
+    pokemonTcgCardId: detailedMatch.provider === "pokemontcg" ? detailedMatch.providerCardId : undefined,
+    officialImageUrl: detailedMatch.imageLarge || detailedMatch.imageSmall,
     tcgplayerUrl: pricing.url,
     fieldConfidence: {
       ...suggestion.fieldConfidence,
@@ -629,7 +617,9 @@ export async function scanPokemonCard(
   const preparedFront = await compressSaleImage(front);
   const preparedBack = back ? await compressSaleImage(back) : undefined;
   const hash = `${await imageHash(preparedFront)}:${preparedBack ? await imageHash(preparedBack) : ""}`;
-  const cacheKey = `4nerds_card_scan_v2_${hash}`;
+  const scanGame = options.game || "pokemon";
+  const scanLanguage = scanGame === "pokemon" ? options.language || "en" : "en";
+  const cacheKey = `4nerds_card_scan_v3_${scanGame}_${scanLanguage}_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);
@@ -681,16 +671,29 @@ export async function scanPokemonCard(
     const slab = slabFields(`${top.text}\n${label.text}`);
     const nameEvidence = buildNameEvidence(rawNameCandidate || "");
 
-    stage("Searching Pokémon cards");
+    const selectedGame = options.game || "pokemon";
+    const selectedLanguage = selectedGame === "pokemon" ? options.language || "en" : "en";
+    const onePieceCode = selectedGame === "one_piece"
+      ? extractOnePieceCardCode(`${bottom.text}\n${full.text}`)
+      : "";
+    const searchableName = selectedGame === "one_piece"
+      ? rawNameCandidate || null
+      : nameEvidence.isReliable ? nameEvidence.candidates[0] || null : null;
+    const searchableNumber = onePieceCode || collector?.normalized || null;
+    stage("Searching card catalog");
     const possibleMatches = await timed(
-      searchPokemonCards(nameEvidence.isReliable ? nameEvidence.candidates[0] || null : null, collector?.normalized || null, options.signal),
+      searchPokemonCards(searchableName, searchableNumber, options.signal, {
+        game: selectedGame,
+        language: selectedLanguage,
+      }),
       18_000,
-      "Pokémon card search timed out.",
+      `${selectedGame === "one_piece" ? "OPTCG API" : selectedLanguage === "ja" ? "TCGdex" : "Pokémon card search"} timed out.`,
     ).catch((error) => {
       if (options.signal?.aborted) throw abortError();
       return [] as CardMatch[];
     });
-    const correctedNameCandidate = possibleMatches[0]?.cardName || (nameEvidence.isReliable ? nameEvidence.candidates[0] : undefined);
+    const correctedNameCandidate = possibleMatches[0]?.name
+      || (selectedGame === "one_piece" ? rawNameCandidate : nameEvidence.isReliable ? nameEvidence.candidates[0] : undefined);
     const correctedNameConfidence = possibleMatches[0]?.matchConfidence
       || (correctedNameCandidate ? confidence(top.confidence) : undefined);
     const warnings = [...qualityWarnings];
@@ -701,14 +704,17 @@ export async function scanPokemonCard(
     } else {
       warnings.push("Automatic card detection was uncertain. Adjust the four corners before relying on OCR.");
     }
-    if (!nameEvidence.isReliable && !collector) warnings.push("No reliable card name was detected. Search manually or enter the card name.");
-    if (!collector) warnings.push("Collector number was not clear enough to suggest.");
-    if (!possibleMatches.length && (rawNameCandidate || collector)) {
-      warnings.push("No Pokémon TCG API match was found. Raw OCR is available only under Technical Details.");
+    if (!searchableName && !searchableNumber) warnings.push("No reliable card name or number was detected. Search manually or enter the card details.");
+    if (!searchableNumber) warnings.push(selectedGame === "one_piece"
+      ? "The One Piece card code was not clear enough to suggest."
+      : "Collector number was not clear enough to suggest.");
+    if (!possibleMatches.length && (rawNameCandidate || searchableNumber)) {
+      const provider = selectedGame === "one_piece" ? "optcgapi" : selectedLanguage === "ja" ? "tcgdex" : "pokemontcg";
+      warnings.push(`No ${cardProviderLabel(provider)} match was found. Raw OCR is available only under Technical Details.`);
     }
     const fieldConfidence = {
       cardName: correctedNameConfidence || "low" as const,
-      collectorNumber: collector ? confidence(bottom.confidence) : "low" as const,
+      collectorNumber: onePieceCode || collector ? confidence(bottom.confidence) : "low" as const,
       cardSet: possibleMatches.length ? "medium" as const : "low" as const,
       language: "low" as const,
       condition: condition ? confidence(sticker.confidence) : "low" as const,
@@ -718,16 +724,22 @@ export async function scanPokemonCard(
       certificateNumber: slab.certificateNumber ? confidence(label.confidence || top.confidence) : "low" as const,
     };
     const strongest = Math.max(full.confidence, top.confidence, bottom.confidence, sticker.confidence, label.confidence);
-    const apiQuery = buildPokemonApiQueries(nameEvidence, collector).join(" | ");
+    const apiQuery = selectedGame === "one_piece"
+      ? [searchableName, searchableNumber].filter(Boolean).join(" ")
+      : buildPokemonApiQueries(nameEvidence, collector).join(" | ");
     stage("Preparing review");
     const suggestion = {
       suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
       cardName: null,
       correctedNameCandidate,
       correctedNameConfidence,
-      collectorNumber: collector?.normalized || null,
+      collectorNumber: selectedGame === "one_piece" ? onePieceCode || null : collector?.normalized || null,
+      cardCode: selectedGame === "one_piece" ? onePieceCode || undefined : undefined,
       cardSet: null,
-      language: null,
+      language: selectedLanguage,
+      cardGame: selectedGame,
+      cardLanguage: selectedLanguage,
+      dataProvider: "manual" as const,
       condition,
       stickerPrice,
       gradingCompany: slab.gradingCompany,
@@ -754,7 +766,7 @@ export async function scanPokemonCard(
         parsed: {
           rawNameCandidate,
           correctedNameCandidate: correctedNameCandidate || null,
-          collectorNumber: collector?.normalized || null,
+          collectorNumber: selectedGame === "one_piece" ? onePieceCode || null : collector?.normalized || null,
           cleanedCandidates: nameEvidence.candidateScores.map((candidate) => `${candidate.candidate}: ${Math.round(candidate.score * 100)}%`).join(", ") || null,
           condition,
           stickerPrice,

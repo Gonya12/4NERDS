@@ -66,11 +66,11 @@ function fromDbDecision(decision: DbEventDecision): EventDecision {
   };
 }
 
-async function pullTable<T>(table: string) {
+async function pullTable<T>(table: string): Promise<T[]> {
   if (!supabase) return [] as T[];
   const { data, error } = await supabase.from(table).select("*");
   if (error) throw error;
-  return data || [];
+  return (data || []) as T[];
 }
 
 export async function syncFromSupabase() {

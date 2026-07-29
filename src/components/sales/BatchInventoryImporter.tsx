@@ -2,6 +2,7 @@ import { LoaderCircle, ScanLine, Search, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Event, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, Worker } from "../../types/models";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
+import type { CardGame, CardLanguage } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { ManualCardSearch } from "./ManualCardSearch";
 import { OwnershipEditor } from "./OwnershipEditor";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
@@ -18,6 +19,8 @@ type QueueItem = {
   hash?: string;
   actualCost: string;
   matchStatus: MatchStatus;
+  expectedGame: CardGame;
+  expectedLanguage: CardLanguage;
   error?: string;
 };
 type Props = {
@@ -27,13 +30,16 @@ type Props = {
   onImport: (input: Partial<InventoryPurchase>, file: File) => Promise<void>;
 };
 
-function manualSuggestion(): CardScanSuggestion {
+function manualSuggestion(game: CardGame = "pokemon", language: CardLanguage = "en"): CardScanSuggestion {
   return {
     suggestedType: "raw_card",
     cardName: null,
     collectorNumber: null,
     cardSet: null,
     language: null,
+    cardGame: game,
+    cardLanguage: language,
+    dataProvider: "manual",
     condition: null,
     stickerPrice: null,
     gradingCompany: null,
@@ -65,6 +71,8 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
   const [notes, setNotes] = useState("");
   const [ownershipShares, setOwnershipShares] = useState<OwnershipShare[]>([]);
   const [manualSearchItemId, setManualSearchItemId] = useState("");
+  const [batchGame, setBatchGame] = useState<CardGame>("pokemon");
+  const [batchLanguage, setBatchLanguage] = useState<CardLanguage>("en");
   const controllerRef = useRef<AbortController | null>(null);
   const itemsRef = useRef<QueueItem[]>([]);
   const mountedRef = useRef(true);
@@ -96,6 +104,8 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
         status: "not_scanned",
         actualCost: "",
         matchStatus: "Needs Review",
+        expectedGame: batchGame,
+        expectedLanguage: batchGame === "pokemon" ? batchLanguage : batchGame === "one_piece" ? "en" : "unknown",
       }));
     setItems((current) => [...current, ...next]);
   }
@@ -136,6 +146,8 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           const result = await scanPokemonCard(item.file, "raw_card", undefined, false, {
             signal: controller.signal,
             onStage: (stage) => patchItem(item.id, { stage }),
+            game: item.expectedGame,
+            language: item.expectedLanguage,
           });
           let nextFile = item.file;
           let nextPreview = item.preview;
@@ -158,7 +170,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           patchItem(item.id, {
             status: "needs_review",
             matchStatus: "Failed",
-            scan: manualSuggestion(),
+            scan: manualSuggestion(item.expectedGame, item.expectedLanguage),
             stage: undefined,
             error: error instanceof Error ? error.message : "Local OCR could not read this image.",
           });
@@ -211,7 +223,12 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           cardName: scan.cardName || undefined,
           collectorNumber: scan.collectorNumber || undefined,
           cardSet: scan.cardSet || undefined,
-          cardLanguage: scan.language || undefined,
+          cardGame: scan.cardGame || item.expectedGame,
+          cardLanguage: scan.cardLanguage || scan.language || item.expectedLanguage,
+          dataProvider: scan.dataProvider,
+          providerCardId: scan.providerCardId,
+          cardCode: scan.cardCode,
+          marketPriceCurrency: scan.marketPriceCurrency || scan.tcgplayerPricing?.currency,
           cardCondition: scan.condition || undefined,
           stickerPrice: scan.stickerPrice ?? undefined,
           gradingCompany: scan.gradingCompany || undefined,
@@ -223,7 +240,7 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           quantitySold: 0,
           totalCost: Number(item.actualCost || 0),
           marketValue: rawCard ? selectedPrice?.market : undefined,
-          marketPriceSource: rawCard && selectedPrice?.market != null ? "TCGplayer" : undefined,
+          marketPriceSource: rawCard && selectedPrice?.market != null ? scan.tcgplayerPricing?.source || "TCGplayer" : undefined,
           marketPriceVariant: rawCard ? scan.tcgplayerPricing?.selectedVariant : undefined,
           marketPriceUpdatedAt: rawCard ? scan.tcgplayerPricing?.updatedAt : undefined,
           marketPriceCheckedAt: rawCard ? scan.tcgplayerPricing?.checkedAt : undefined,
@@ -283,6 +300,25 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
         <button disabled={!items.length || busy} onClick={() => void analyze()} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-black text-white disabled:opacity-40"><ScanLine size={17} />Analyze Batch</button>
         {busy ? <button onClick={() => void cancelAnalysis()} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-rose-700 px-4 text-sm font-black text-white"><X size={17} />Cancel</button> : null}
       </div>
+      <div className="grid gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3 sm:grid-cols-[1fr_1fr_auto] dark:border-violet-900 dark:bg-violet-950/20">
+        <label className="text-xs font-bold">Expected card game<select value={batchGame} onChange={(event) => {
+          const game = event.target.value as CardGame;
+          setBatchGame(game);
+          if (game !== "pokemon") setBatchLanguage(game === "one_piece" ? "en" : "unknown");
+        }} className="mt-1 w-full rounded-lg border p-2 dark:bg-slate-900"><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select></label>
+        {batchGame === "pokemon" ? <label className="text-xs font-bold">Expected printing language<select value={batchLanguage} onChange={(event) => setBatchLanguage(event.target.value as CardLanguage)} className="mt-1 w-full rounded-lg border p-2 dark:bg-slate-900"><option value="en">English</option><option value="ja">Japanese</option></select></label> : <p className="self-end rounded-lg bg-white p-2 text-xs font-bold dark:bg-slate-900">{batchGame === "one_piece" ? "English · OPTCG API" : "No external provider"}</p>}
+        <button type="button" onClick={() => {
+          const expectedLanguage = batchGame === "pokemon" ? batchLanguage : batchGame === "one_piece" ? "en" : "unknown";
+          setItems((current) => current.map((item) => ({
+            ...item,
+            expectedGame: batchGame,
+            expectedLanguage,
+            status: item.status === "imported" ? item.status : "not_scanned",
+            matchStatus: item.status === "imported" ? item.matchStatus : "Needs Review",
+            scan: item.status === "imported" ? item.scan : undefined,
+          })));
+        }} className="min-h-10 self-end rounded-xl bg-violet-600 px-3 text-xs font-black text-white">Apply to all images</button>
+      </div>
       <div className="grid gap-2 rounded-2xl bg-slate-50 p-3 sm:grid-cols-3 dark:bg-slate-950">
         <label className="text-xs font-bold">Purchase date<input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} className="mt-1 w-full rounded-lg border p-2 dark:bg-slate-900" /></label>
         <label className="text-xs font-bold">Purchase source<select value={purchaseSource} onChange={(event) => setPurchaseSource(event.target.value as PurchaseSource | "")} className="mt-1 w-full rounded-lg border p-2 dark:bg-slate-900"><option value="">Not set</option>{["card_show", "online", "local", "trade", "personal_inventory", "other"].map((value) => <option key={value} value={value}>{value.replace(/_/g, " ")}</option>)}</select></label>
@@ -306,11 +342,19 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
             <strong>{item.status === "imported" ? "Imported" : item.matchStatus}</strong>
             {item.scan ? <span className="text-xs">{item.scan.overallConfidence} confidence</span> : null}
           </div>
+          <div className="grid grid-cols-2 gap-1">
+            <select value={item.expectedGame} disabled={busy || item.status === "imported"} onChange={(event) => {
+              const expectedGame = event.target.value as CardGame;
+              const expectedLanguage = expectedGame === "pokemon" ? item.expectedLanguage === "ja" ? "ja" : "en" : expectedGame === "one_piece" ? "en" : "unknown";
+              patchItem(item.id, { expectedGame, expectedLanguage, status: "not_scanned", scan: undefined, matchStatus: "Needs Review" });
+            }} className="rounded-lg border p-2 text-xs dark:bg-slate-950"><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select>
+            {item.expectedGame === "pokemon" ? <select value={item.expectedLanguage} disabled={busy || item.status === "imported"} onChange={(event) => patchItem(item.id, { expectedLanguage: event.target.value as CardLanguage, status: "not_scanned", scan: undefined, matchStatus: "Needs Review" })} className="rounded-lg border p-2 text-xs dark:bg-slate-950"><option value="en">English</option><option value="ja">Japanese</option></select> : <span className="rounded-lg bg-slate-100 p-2 text-xs font-bold dark:bg-slate-800">{item.expectedGame === "one_piece" ? "English" : "Manual"}</span>}
+          </div>
           {item.stage ? <p className="text-xs font-bold text-violet-700"><LoaderCircle className="mr-1 inline animate-spin" size={13} />{item.stage}</p> : null}
           {item.scan ? <div className="space-y-2">
-            {item.scan.possibleMatches?.map((match) => <div key={match.id} className="flex gap-2 rounded-lg bg-violet-50 p-2 text-xs dark:bg-violet-950/30">
-              {match.imageUrl ? <img src={match.imageUrl} alt="" className="h-20 w-14 object-contain" /> : null}
-              <div><b>{match.cardName} · {match.collectorNumber}</b><p>{match.setName} · {match.matchScore}%</p><button onClick={() => void chooseMatch(item, match)} className="mt-1 rounded bg-violet-600 px-2 py-1 font-black text-white">Use This Card</button></div>
+            {item.scan.possibleMatches?.map((match) => <div key={`${match.provider}:${match.providerCardId}`} className="flex gap-2 rounded-lg bg-violet-50 p-2 text-xs dark:bg-violet-950/30">
+              {match.imageSmall ? <img src={match.imageSmall} alt="" className="h-20 w-14 object-contain" /> : null}
+              <div><b>{match.name} · {match.cardCode || match.collectorNumber}</b><p>{match.setName} · {match.matchScore}%</p><button onClick={() => void chooseMatch(item, match)} className="mt-1 rounded bg-violet-600 px-2 py-1 font-black text-white">Use This Card</button></div>
             </div>)}
             <input value={item.scan.cardName || ""} onChange={(event) => patchScan(item.id, { cardName: event.target.value })} placeholder="Confirmed/manual card name" className="w-full rounded-lg border p-2 dark:bg-slate-950" />
             <input value={item.scan.collectorNumber || ""} onChange={(event) => patchScan(item.id, { collectorNumber: event.target.value })} placeholder="Collector number" className="w-full rounded-lg border p-2 dark:bg-slate-950" />
@@ -338,9 +382,10 @@ export function BatchInventoryImporter({ events, workers, onClose, onImport }: P
           category={(item?.scan?.suggestedType || "raw_card") as PokemonProductCategory}
           baseSuggestion={item?.scan}
           initialName={item?.scan?.cardName || (item?.scan?.correctedNameConfidence !== "low" ? item?.scan?.correctedNameCandidate : "") || ""}
-          initialCollectorNumber={item?.scan?.collectorNumber || ""}
+          initialCollectorNumber={item?.scan?.cardCode || item?.scan?.collectorNumber || ""}
           initialSet={item?.scan?.cardSet || ""}
-          initialLanguage={item?.scan?.language || ""}
+          initialGame={item?.scan?.cardGame || item?.expectedGame}
+          initialLanguage={item?.scan?.cardLanguage || item?.scan?.language || item?.expectedLanguage}
           onClose={() => setManualSearchItemId("")}
           onApply={(scan) => {
             if (!item) return;

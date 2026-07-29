@@ -15,6 +15,9 @@ function suggestionForItem(item: TradeItem): CardScanSuggestion {
     suggestedType: item.itemType === "graded_card" ? "graded_card" : "raw_card",
     cardName: item.itemName || null, collectorNumber: item.collectorNumber || null, cardSet: item.cardSet || null,
     language: item.cardLanguage || null, condition: item.cardCondition || null, stickerPrice: item.stickerPrice ?? null,
+    cardGame: item.cardGame, cardLanguage: item.cardLanguage === "ja" ? "ja" : item.cardLanguage === "unknown" ? "unknown" : "en",
+    dataProvider: item.dataProvider, providerCardId: item.providerCardId, cardCode: item.cardCode,
+    marketPriceCurrency: item.marketPriceCurrency,
     gradingCompany: item.gradingCompany || null, grade: item.grade || null, certificateNumber: item.certificateNumber || null,
     labelInformation: null, barcodeText: null, overallConfidence: "high", fieldConfidence: {},
     officialImageUrl: item.officialCardImageUrl, cardSetId: item.cardSetId, cardSetCode: item.cardSetCode,
@@ -30,7 +33,7 @@ export function TransactionItemPricing({ item, context, onChange }: Props) {
     const selected = selectedTcgplayerPrice(pricing);
     onChange({
       ...item, tcgplayerPricing: pricing, marketValue: selected?.market ?? item.marketValue,
-      marketPriceSource: "TCGplayer", marketPriceVariant: pricing.selectedVariant,
+      marketPriceSource: pricing.source || item.marketPriceSource || "TCGplayer", marketPriceCurrency: pricing.currency || item.marketPriceCurrency, marketPriceVariant: pricing.selectedVariant,
       marketPriceUpdatedAt: pricing.updatedAt, marketPriceCheckedAt: pricing.checkedAt,
       tcgplayerUrl: pricing.url || item.tcgplayerUrl,
       targetBuyPrice: selected?.market == null ? item.targetBuyPrice : calculateTargetPrice(selected.market, percentage),
@@ -47,8 +50,8 @@ export function TransactionItemPricing({ item, context, onChange }: Props) {
   const grossProfit = basisKnown ? Number(item.soldPrice || 0) - item.historicalCostBasis : undefined;
 
   return <div className="space-y-3">
-    {item.pokemonTcgCardId ? <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 text-xs dark:bg-slate-900">{item.officialCardImageUrl ? <img src={item.officialCardImageUrl} alt="" className="h-20 w-14 rounded-lg object-contain" /> : null}<div className="min-w-0"><b>{item.itemName}</b>{item.collectorNumber ? ` #${item.collectorNumber}` : ""} · {item.cardSet || "Set unavailable"}<span className="block text-slate-500">API ID {item.pokemonTcgCardId}{item.cardRarity ? ` · ${item.cardRarity}` : ""}</span></div></div> : null}
-    {item.tcgplayerPricing ? <TcgplayerPricingPanel suggestion={suggestionForItem(item)} isSlab={item.itemType === "graded_card"} onChange={(suggestion) => suggestion.tcgplayerPricing && updatePricing(suggestion.tcgplayerPricing)} showTargetCalculator={false} /> : item.pokemonTcgCardId ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">No TCGplayer market price is available for this printing. Market Value remains editable.</p> : null}
+    {item.providerCardId || item.pokemonTcgCardId ? <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 text-xs dark:bg-slate-900">{item.officialCardImageUrl ? <img src={item.officialCardImageUrl} alt="" className="h-20 w-14 rounded-lg object-contain" /> : null}<div className="min-w-0"><b>{item.itemName}</b>{item.cardCode || item.collectorNumber ? ` #${item.cardCode || item.collectorNumber}` : ""} · {item.cardSet || "Set unavailable"}<span className="block text-slate-500">{item.dataProvider || "pokemontcg"} ID {item.providerCardId || item.pokemonTcgCardId}{item.cardRarity ? ` · ${item.cardRarity}` : ""}</span></div></div> : null}
+    {item.tcgplayerPricing ? <TcgplayerPricingPanel suggestion={suggestionForItem(item)} isSlab={item.itemType === "graded_card"} onChange={(suggestion) => suggestion.tcgplayerPricing && updatePricing(suggestion.tcgplayerPricing)} showTargetCalculator={false} /> : item.providerCardId || item.pokemonTcgCardId ? <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">No provider market price is available for this printing. Market Value remains editable and was not set to $0.</p> : null}
     {item.itemType === "raw_card" && context === "purchase" ? <TargetPriceCalculator marketValue={item.marketValue} percentage={percentage} onPercentage={choosePercentage} actionLabel="Use as Bought Price" onApply={(amount) => onChange({ ...item, targetBuyPercentage: percentage, targetBuyPrice: amount, boughtPrice: amount, allocatedCostBasis: amount })} note="Choose a target first. Actual Bought Price changes only when you tap Use as Bought Price." /> : null}
     {item.itemType === "raw_card" && context === "trade-incoming" ? <TargetPriceCalculator marketValue={item.marketValue} percentage={percentage} onPercentage={choosePercentage} note="Trade Percentage directly sets Accepted Trade Value. It does not create cash revenue." /> : null}
     {item.itemType === "raw_card" && context === "sale" && linkedInventory ? <TargetPriceCalculator marketValue={item.marketValue} percentage={percentage} onPercentage={choosePercentage} note="Reference only. Historical cost basis loaded from inventory and will never be replaced." /> : null}

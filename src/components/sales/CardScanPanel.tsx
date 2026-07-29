@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import type { InventoryPurchase, PokemonProductCategory } from "../../types/models";
 import type { CropPoint } from "../../services/sales/cardImageProcessor";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
+import { cardProviderLabel } from "../../services/sales/pokemonCardSearchService";
+import type { CardGame, CardLanguage } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { ManualCardSearch } from "./ManualCardSearch";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
@@ -11,6 +13,8 @@ type Props = {
   backImageFile?: File;
   category: PokemonProductCategory;
   inventory: InventoryPurchase[];
+  initialGame?: CardGame;
+  initialLanguage?: CardLanguage;
   onApply: (suggestion: CardScanSuggestion, hash: string, processedFile?: File) => void;
   onRetakePhoto?: () => void;
 };
@@ -98,7 +102,7 @@ function CornerCropEditor({
   </div>;
 }
 
-export function CardScanPanel({ imageFile, backImageFile, category, inventory, onApply, onRetakePhoto }: Props) {
+export function CardScanPanel({ imageFile, backImageFile, category, inventory, initialGame = "pokemon", initialLanguage = "en", onApply, onRetakePhoto }: Props) {
   const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">("crop");
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState<CardScanStage>("Preparing image");
@@ -114,11 +118,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
   const [manualSearchOpen, setManualSearchOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [outcome, setOutcome] = useState<ScanOutcome>();
+  const [cardGame, setCardGame] = useState<CardGame>(initialGame);
+  const [cardLanguage, setCardLanguage] = useState<CardLanguage>(initialGame === "pokemon" ? initialLanguage : initialGame === "one_piece" ? "en" : "unknown");
   const preview = useFilePreview(imageFile);
   const processedPreview = useFilePreview(processedFile);
   const runRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    setCardGame(initialGame);
+    setCardLanguage(initialGame === "pokemon" ? initialLanguage : initialGame === "one_piece" ? "en" : "unknown");
+  }, [initialGame, initialLanguage]);
 
   useEffect(() => {
     const run = ++runRef.current;
@@ -194,6 +205,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         signal: controller.signal,
         onStage: setStage,
         skipCrop: true,
+        game: cardGame,
+        language: cardLanguage,
       });
       if (run !== runRef.current) return;
       setSuggestion(result.suggestion);
@@ -287,13 +300,33 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
   return <section className="space-y-3 rounded-2xl border border-violet-200 bg-violet-50/70 p-3 dark:border-violet-900 dark:bg-violet-950/20">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <p className="font-black text-violet-900 dark:text-violet-100">Pokémon card scanner</p>
-        <p className="text-xs text-violet-700 dark:text-violet-300">Free local OCR. Suggestions are never saved until the normal form is saved.</p>
+        <p className="font-black text-violet-900 dark:text-violet-100">Multi-game card scanner</p>
+        <p className="text-xs text-violet-700 dark:text-violet-300">Choose the catalog before OCR. Suggestions are never saved until the normal form is saved.</p>
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" onClick={() => setManualSearchOpen(true)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"><Search size={17} />Search Card Manually</button>
         {status === "analyzing" ? <button type="button" onClick={() => void cancelAnalysis()} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-rose-700 px-3 text-sm font-black text-white"><X size={17} />Cancel</button> : null}
       </div>
+    </div>
+    <div className="grid gap-2 rounded-xl bg-white/70 p-2 sm:grid-cols-2 dark:bg-slate-900/60">
+      <label className="text-xs font-black text-slate-600 dark:text-slate-300">Card game
+        <select value={cardGame} disabled={status === "analyzing"} onChange={(event) => {
+          const game = event.target.value as CardGame;
+          setCardGame(game);
+          if (game !== "pokemon") setCardLanguage(game === "one_piece" ? "en" : "unknown");
+          setSuggestion(undefined); setResolvedCard(undefined); setOutcome(undefined);
+        }} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+          <option value="pokemon">Pokémon</option>
+          <option value="one_piece">One Piece</option>
+          <option value="other">Other / Manual</option>
+        </select>
+      </label>
+      {cardGame === "pokemon" ? <label className="text-xs font-black text-slate-600 dark:text-slate-300">Printing language
+        <select value={cardLanguage} disabled={status === "analyzing"} onChange={(event) => { setCardLanguage(event.target.value as CardLanguage); setSuggestion(undefined); setResolvedCard(undefined); setOutcome(undefined); }} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+          <option value="en">English</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </label> : <p className="self-end rounded-xl bg-slate-100 p-3 text-xs font-bold dark:bg-slate-800">{cardGame === "one_piece" ? "One Piece OCR prioritizes exact card codes such as OP01-001." : "Manual mode skips catalog matching."}</p>}
     </div>
 
     {!imageFile && status !== "analyzing" ? <p className="rounded-xl bg-white/70 p-3 text-sm font-bold text-violet-800 dark:bg-slate-900/60 dark:text-violet-200">No photo is required. Search the official card catalog now, or add a photo when you want to use local OCR.</p> : null}
@@ -307,8 +340,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         {detectingCrop ? "Detecting card edges…" : message}
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        <button type="button" disabled={detectingCrop} onClick={() => void scan(false, false)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><Crop size={17} />Analyze Selected Crop</button>
-        <button type="button" onClick={() => void scan(false, true)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Use Full Image</button>
+        <button type="button" disabled={detectingCrop || cardGame === "other"} onClick={() => void scan(false, false)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><Crop size={17} />Analyze Selected Crop</button>
+        <button type="button" disabled={cardGame === "other"} onClick={() => void scan(false, true)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-40 dark:bg-slate-800">Use Full Image</button>
       </div>
     </div> : null}
 
@@ -343,7 +376,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         <p className="text-xs font-black uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Card selected manually</p>
         <div className="mt-2 flex gap-3">
           {reviewSuggestion.officialImageUrl ? <img src={reviewSuggestion.officialImageUrl} alt={`${reviewSuggestion.cardName} official card`} className="h-32 w-24 rounded-lg bg-white object-contain" /> : null}
-          <div className="min-w-0"><p className="font-black">{reviewSuggestion.cardName} · {reviewSuggestion.collectorNumber}</p><p className="text-sm">{reviewSuggestion.cardSet}{reviewSuggestion.cardRarity ? ` · ${reviewSuggestion.cardRarity}` : ""}</p><p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Source: Pokémon TCG API · TCGplayer pricing below</p></div>
+          <div className="min-w-0"><p className="font-black">{reviewSuggestion.cardName} · {reviewSuggestion.cardCode || reviewSuggestion.collectorNumber}</p><p className="text-sm">{reviewSuggestion.cardSet}{reviewSuggestion.cardRarity ? ` · ${reviewSuggestion.cardRarity}` : ""}</p><p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Source: {cardProviderLabel(reviewSuggestion.dataProvider)} · {reviewSuggestion.marketPriceCurrency || "provider currency"} pricing below</p></div>
         </div>
       </div> : null}
       {reviewSuggestion.correctedNameCandidate && !reviewSuggestion.cardName ? <div className="rounded-xl border border-violet-200 bg-white p-3 dark:bg-slate-900">
@@ -365,13 +398,13 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
         </> : null}
       </div>
       {reviewSuggestion.possibleMatches?.length ? <div className="space-y-2">
-        <p className="text-xs font-black">Possible Pokémon TCG API records — confirmation required</p>
-        {reviewSuggestion.possibleMatches.map((match) => <article key={match.id} className="flex gap-3 rounded-xl border border-violet-200 bg-white p-2 text-xs dark:bg-slate-900">
-          {match.imageUrl ? <img src={match.imageUrl} alt={`${match.cardName} official card`} loading="lazy" className="h-28 w-20 rounded object-contain" /> : null}
+        <p className="text-xs font-black">Possible {cardProviderLabel(reviewSuggestion.possibleMatches[0]?.provider)} records — confirmation required</p>
+        {reviewSuggestion.possibleMatches.map((match) => <article key={`${match.provider}:${match.providerCardId}`} className="flex gap-3 rounded-xl border border-violet-200 bg-white p-2 text-xs dark:bg-slate-900">
+          {match.imageSmall ? <img src={match.imageSmall} alt={`${match.name} official card`} loading="lazy" className="h-28 w-20 rounded object-contain" /> : null}
           <div className="min-w-0 flex-1">
-            <p className="font-black">{match.cardName} · {match.collectorNumber}</p>
+            <p className="font-black">{match.name} · {match.cardCode || match.collectorNumber}</p>
             <p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p>
-            <p>{match.matchScore}% match{match.marketPrice != null ? ` · $${match.marketPrice.toFixed(2)} market` : ""}</p>
+            <p>{match.matchScore}% match{match.pricing?.market != null ? ` · ${match.pricing.currency || "USD"} ${match.pricing.market.toFixed(2)} market` : ""}</p>
             <p className="text-slate-500">{match.reasons.join(" · ")}</p>
             <button type="button" disabled={searching} onClick={() => void chooseMatch(match)} className="mt-2 rounded-lg bg-violet-600 px-3 py-2 font-black text-white disabled:opacity-40">Use This Card</button>
           </div>
@@ -409,7 +442,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, o
       initialName={suggestion?.cardName || (suggestion?.correctedNameConfidence !== "low" ? suggestion?.correctedNameCandidate : "") || ""}
       initialCollectorNumber={suggestion?.collectorNumber || ""}
       initialSet={suggestion?.cardSet || ""}
-      initialLanguage={suggestion?.language || ""}
+      initialLanguage={suggestion?.language || cardLanguage}
+      initialGame={suggestion?.cardGame || cardGame}
       onClose={() => setManualSearchOpen(false)}
       onApply={(confirmed) => {
         // Invalidate any outstanding OCR/API request before committing the user
