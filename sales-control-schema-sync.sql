@@ -121,6 +121,7 @@ create table if not exists public.inventory_purchases (
   buyer_note text,
   card_name text,
   collector_number text,
+  set_name text,
   card_set text,
   card_language text,
   card_condition text,
@@ -166,6 +167,7 @@ alter table public.inventory_purchases add column if not exists sold_payment_met
 alter table public.inventory_purchases add column if not exists buyer_note text;
 alter table public.inventory_purchases add column if not exists card_name text;
 alter table public.inventory_purchases add column if not exists collector_number text;
+alter table public.inventory_purchases add column if not exists set_name text;
 alter table public.inventory_purchases add column if not exists card_set text;
 alter table public.inventory_purchases add column if not exists card_language text;
 alter table public.inventory_purchases add column if not exists card_condition text;
@@ -357,6 +359,7 @@ create index if not exists idx_inventory_purchases_sold_event_id on public.inven
 create index if not exists idx_inventory_purchases_sold_date on public.inventory_purchases(sold_date);
 create index if not exists idx_inventory_purchases_card_name on public.inventory_purchases(card_name);
 create index if not exists idx_inventory_purchases_collector_number on public.inventory_purchases(collector_number);
+create index if not exists idx_inventory_purchases_set_name on public.inventory_purchases(set_name);
 create index if not exists idx_inventory_purchases_card_set on public.inventory_purchases(card_set);
 create index if not exists idx_inventory_purchases_card_condition on public.inventory_purchases(card_condition);
 create index if not exists idx_inventory_purchases_certificate_number on public.inventory_purchases(certificate_number)

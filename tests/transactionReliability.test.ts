@@ -87,6 +87,7 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   const source = {
     ...item("30000000-0000-4000-8000-000000000007", "outgoing"),
     zeroCostBasisConfirmed: true,
+    cardSet: "Paradox Rift",
     cardSetId: "sv4",
     cardSetCode: "PAR",
     cardRarity: "Illustration Rare",
@@ -103,6 +104,8 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   };
   const payload = buildTransactionItemPayload(source);
   assert.equal(payload.zero_cost_basis_confirmed, true);
+  assert.equal(payload.set_name, source.cardSet);
+  assert.equal(payload.card_set, source.cardSet);
   assert.equal(payload.card_set_id, "sv4");
   assert.equal(payload.tcgplayer_url, source.tcgplayerUrl);
   assert.deepEqual(payload.tcgplayer_pricing, source.tcgplayerPricing);
@@ -113,6 +116,21 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   assert.equal("bought_price" in payload, false);
   assert.equal("cash_allocation" in payload, false);
   assert.equal("entry_mode" in payload, false);
+  assert.equal(Object.values(payload).includes(undefined), false);
+});
+
+test("legacy card repositories prefer set_name and explicitly dual-write the compatibility column", () => {
+  for (const path of [
+    "../src/services/database/inventoryPurchaseRepository.ts",
+    "../src/services/database/salesRepository.ts"
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.match(source, /cardSet:\s*row\.set_name\s*\|\|\s*row\.card_set\s*\|\|\s*undefined/);
+    assert.match(source, /set_name:\s*(?:value|sale)\.cardSet\s*\|\|\s*null/);
+    assert.match(source, /card_set:\s*(?:value|sale)\.cardSet\s*\|\|\s*null/);
+    assert.match(source, /collector_number,set_name,card_set,/);
+    assert.doesNotMatch(source, /return\s*\{\s*\.\.\.(?:value|sale)/);
+  }
 });
 
 test("single purchase stores item cost separately from its owner allocation", () => {
@@ -171,6 +189,10 @@ test("legacy purchase draft migrates obsolete item cost without touching images 
         ...item("legacy-purchase", "incoming"),
         costBasis: undefined,
         allocated_cost_basis: 80,
+        cardSet: "Stale UI Set",
+        card_set: "Compatibility Set",
+        set_name: "Canonical Set",
+        setName: "Old Camel Set",
         images: [{
           id: "image-1",
           transactionId: "10000000-0000-4000-8000-000000000000",
@@ -189,10 +211,14 @@ test("legacy purchase draft migrates obsolete item cost without touching images 
   });
   assert.equal(migrated?.version, LOCAL_TRANSACTION_DRAFT_VERSION);
   assert.equal(migrated?.transaction.items[0].costBasis, 80);
+  assert.equal(migrated?.transaction.items[0].cardSet, "Canonical Set");
   assert.equal(migrated?.transaction.items[0].images?.[0].imageUrl, "blob:preserved");
   assert.equal(migrated?.transaction.items[0].ownershipShares[0].allocatedCostBasis, 80);
   assert.equal("allocated_cost_basis" in (migrated?.transaction.items[0] || {}), false);
   assert.equal("allocatedCostBasis" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("set_name" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("card_set" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("setName" in (migrated?.transaction.items[0] || {}), false);
 });
 
 test("ownership validation rejects duplicates and accepts one exact 100 percent share", () => {

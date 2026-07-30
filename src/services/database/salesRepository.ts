@@ -31,6 +31,7 @@ type SalesRow = {
   tcgplayer_url?: string | null;
   card_name?: string | null;
   collector_number?: string | null;
+  set_name?: string | null;
   card_set?: string | null;
   card_set_id?: string | null;
   card_set_code?: string | null;
@@ -82,7 +83,7 @@ function fromRow(row: SalesRow): SalesRecord {
     tcgplayerUrl: row.tcgplayer_url || undefined,
     cardName: row.card_name || undefined,
     collectorNumber: row.collector_number || undefined,
-    cardSet: row.card_set || undefined,
+    cardSet: row.set_name || row.card_set || undefined,
     cardSetId: row.card_set_id || undefined,
     cardSetCode: row.card_set_code || undefined,
     cardRarity: row.card_rarity || undefined,
@@ -136,6 +137,7 @@ export function buildLegacySalePayload(sale: SalesRecord): SalesRow {
     tcgplayer_url: sale.tcgplayerUrl || null,
     card_name: sale.cardName || null,
     collector_number: sale.collectorNumber || null,
+    set_name: sale.cardSet || null,
     card_set: sale.cardSet || null,
     card_set_id: sale.cardSetId || null,
     card_set_code: sale.cardSetCode || null,
@@ -179,6 +181,7 @@ function withoutManualSearchColumns(row: SalesRow) {
     tcgplayer_url: _tcgplayerUrl,
     card_name: _cardName,
     collector_number: _collectorNumber,
+    set_name: _setName,
     card_set: _cardSet,
     card_set_id: _cardSetId,
     card_set_code: _cardSetCode,
@@ -235,7 +238,7 @@ export async function listSalesRecordsPage(page = 0, pageSize = 50) {
   if (!isSupabaseConfigured || !supabase) return { records: localPending, hasMore: false };
   const from = page * pageSize;
   const to = from + pageSize - 1;
-  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,tcgplayer_url,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,notes,sold_at,pending_upload,created_at,updated_at";
+  const columns = "id,event_id,event_day_id,image_url,image_path,item_name,category,quantity,sold_price,bought_price,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,tcgplayer_url,card_name,collector_number,set_name,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,card_condition,sticker_price,pokemon_tcg_card_id,official_card_image_url,bought_from,purchase_source,payment_method,sold_by_worker_id,is_raw_card,buy_percentage,target_buy_price,inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,notes,sold_at,pending_upload,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("sales_records", "listSalesRecordsPage", columns);
   const extended = await supabase
     .from("sales_records")

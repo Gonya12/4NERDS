@@ -59,7 +59,7 @@ type ItemRow = {
   prior_inventory_purchase_id?: string | null; direction: TradeItem["direction"]; item_name: string; item_type: TradeItem["itemType"];
   quantity: number; market_value: number; agreed_trade_value: number; cost_basis: number;
   allocated_cash_amount?: number | null; image_url?: string | null; image_path?: string | null; back_image_url?: string | null; back_image_path?: string | null;
-  collector_number?: string | null; card_set?: string | null; pokemon_tcg_card_id?: string | null; card_condition?: TradeItem["cardCondition"] | null;
+  collector_number?: string | null; set_name?: string | null; card_set?: string | null; pokemon_tcg_card_id?: string | null; card_condition?: TradeItem["cardCondition"] | null;
   sticker_price?: number | null; grading_company?: string | null; grade?: string | null; certificate_number?: string | null;
   notes?: string | null; created_at: string; updated_at: string;
   trade_percentage?: number | null; sold_price?: number | null; purchase_price?: number | null;
@@ -147,7 +147,7 @@ const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem =>
   costBasis: Number(row.cost_basis || 0),
   cashAllocation: row.allocated_cash_amount == null ? undefined : Number(row.allocated_cash_amount), imageUrl: row.image_url || undefined,
   imagePath: row.image_path || undefined, backImageUrl: row.back_image_url || undefined, backImagePath: row.back_image_path || undefined,
-  collectorNumber: row.collector_number || undefined, cardSet: row.card_set || undefined, cardSetId: row.card_set_id || undefined,
+  collectorNumber: row.collector_number || undefined, cardSet: row.set_name || row.card_set || undefined, cardSetId: row.card_set_id || undefined,
   cardSetCode: row.card_set_code || undefined, cardRarity: row.card_rarity || undefined, cardGame: row.card_game || undefined, cardLanguage: row.card_language || undefined,
   dataProvider: row.data_provider || undefined, providerCardId: row.provider_card_id || undefined, cardCode: row.card_code || undefined,
   pokemonTcgCardId: row.pokemon_tcg_card_id || undefined, officialCardImageUrl: row.official_card_image_url || undefined,

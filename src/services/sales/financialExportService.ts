@@ -65,7 +65,7 @@ const itemHeaders = [
   "Transaction ID", "Transaction Item ID", "Date", "Transaction Type", "Direction", "Item Name", "Item Type",
   "Quantity", "Inventory Record ID", "Inventory Status", "Acquisition Method", "Disposition Method",
   "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Pokémon TCG Card ID",
-  "Collector Number", "Set", "Rarity", "Condition", "Grading Company", "Grade",
+  "Collector Number", "Set Name", "Rarity", "Condition", "Grading Company", "Grade",
   "Certificate Number", "Owner Gonzalo %", "Owner Thiago %", "Other Ownership", "Ownership Breakdown",
   "Market Value", "Trade Percentage", "Agreed Trade Value", "Purchase Price", "Item Cost Basis",
   "Gonzalo Allocated Cost", "Thiago Allocated Cost", "Sold Price",
@@ -268,7 +268,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       purchase.certificateNumber || "", purchase.imageUrl || purchase.frontImageUrl || "", purchase.notes || ""
     ];
   });
-  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Total Cost", "Cost Per Unit", "Market Value", "Realized Revenue", "Realized Cost", "Realized Profit", "Purchase Source", "Acquisition Method", "Seller", "Purchased By", "Event", "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Collector Number", "Set", "Market Price Source", "Market Price Currency", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
+  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Total Cost", "Cost Per Unit", "Market Value", "Realized Revenue", "Realized Cost", "Realized Profit", "Purchase Source", "Acquisition Method", "Seller", "Purchased By", "Event", "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Collector Number", "Set Name", "Market Price Source", "Market Price Currency", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
 
   const linkedExpenseIds = new Set(legacyExpenses.map((row) => row.financialTransactionId).filter(Boolean));
   const canonicalExpenses = transactions.filter((row) => row.transactionType === "expense" && !linkedExpenseIds.has(row.id)).map((transaction): BusinessExpense => ({

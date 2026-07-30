@@ -1,6 +1,8 @@
 -- Manual Pokémon card search metadata. Safe, additive, and repeatable.
 -- Run this entire file in Supabase SQL Editor. Existing records are preserved.
 
+alter table public.inventory_purchases add column if not exists set_name text;
+alter table public.inventory_purchases add column if not exists card_set text;
 alter table public.inventory_purchases add column if not exists card_set_id text;
 alter table public.inventory_purchases add column if not exists card_set_code text;
 alter table public.inventory_purchases add column if not exists card_rarity text;
@@ -10,6 +12,7 @@ alter table public.inventory_purchases add column if not exists tcgplayer_url te
 
 alter table public.sales_records add column if not exists card_name text;
 alter table public.sales_records add column if not exists collector_number text;
+alter table public.sales_records add column if not exists set_name text;
 alter table public.sales_records add column if not exists card_set text;
 alter table public.sales_records add column if not exists card_set_id text;
 alter table public.sales_records add column if not exists card_set_code text;

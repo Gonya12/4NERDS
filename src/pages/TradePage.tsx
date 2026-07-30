@@ -21,6 +21,7 @@ import {
   normalizeTransactionForApplication,
   transactionTypeDeveloperDebug
 } from "../services/database/financialTransactionType";
+import { migrateLocalTransactionDraft } from "../services/database/transactionDraft";
 import { getCachedInventoryPurchases, listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
@@ -44,7 +45,14 @@ type LocalTradeDraft = { trade: TradeTransaction; step: number; savedAt: string 
 function readLocalTradeDraft() {
   try {
     const value = JSON.parse(localStorage.getItem(localTradeDraftKey) || "null") as LocalTradeDraft | null;
-    return value?.trade?.id ? value : undefined;
+    if (!value?.trade?.id) return undefined;
+    const migrated = migrateLocalTransactionDraft({
+      version: 1,
+      transaction: value.trade,
+      step: value.step,
+      savedAt: value.savedAt
+    });
+    return migrated ? { trade: migrated.transaction, step: migrated.step, savedAt: migrated.savedAt } : undefined;
   } catch {
     return undefined;
   }

@@ -53,6 +53,7 @@ create table if not exists public.financial_transaction_items (
   back_image_url text,
   back_image_path text,
   collector_number text,
+  set_name text,
   card_set text,
   card_set_id text,
   card_set_code text,
@@ -232,6 +233,8 @@ alter table public.financial_transaction_items add column if not exists created_
 alter table public.financial_transaction_items add column if not exists created_business_expense_id uuid references public.business_expenses(id) on delete set null;
 alter table public.financial_transaction_items add column if not exists prior_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null;
 alter table public.financial_transaction_items add column if not exists zero_cost_basis_confirmed boolean not null default false;
+alter table public.financial_transaction_items add column if not exists set_name text;
+alter table public.financial_transaction_items add column if not exists card_set text;
 alter table public.financial_transaction_items add column if not exists card_set_id text;
 alter table public.financial_transaction_items add column if not exists card_set_code text;
 alter table public.financial_transaction_items add column if not exists card_rarity text;

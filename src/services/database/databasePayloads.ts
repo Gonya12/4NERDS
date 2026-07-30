@@ -48,6 +48,7 @@ export function buildTransactionItemPayload(item: TradeItem): FinancialTransacti
     back_image_url: item.backImageUrl || null,
     back_image_path: item.backImagePath || null,
     collector_number: item.collectorNumber || null,
+    set_name: item.cardSet || null,
     card_set: item.cardSet || null,
     card_set_id: item.cardSetId || null,
     card_set_code: item.cardSetCode || null,

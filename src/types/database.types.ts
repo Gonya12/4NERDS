@@ -76,6 +76,7 @@ export type FinancialTransactionItemRow = {
   back_image_url: string | null;
   back_image_path: string | null;
   collector_number: string | null;
+  set_name: string | null;
   card_set: string | null;
   card_set_id: string | null;
   card_set_code: string | null;

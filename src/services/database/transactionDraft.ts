@@ -1,6 +1,6 @@
 import type { TradeItem, TradeTransaction } from "../../types/models";
 
-export const LOCAL_TRANSACTION_DRAFT_VERSION = 2;
+export const LOCAL_TRANSACTION_DRAFT_VERSION = 3;
 
 export type LocalTransactionDraft = {
   version: number;
@@ -12,12 +12,18 @@ export type LocalTransactionDraft = {
 type LegacyTransactionItem = Partial<TradeItem> & {
   allocated_cost_basis?: unknown;
   allocatedCostBasis?: unknown;
+  set_name?: unknown;
+  card_set?: unknown;
+  setName?: unknown;
 };
 
 function migrateItem(item: LegacyTransactionItem): TradeItem {
   const {
     allocated_cost_basis: legacySnakeCaseCost,
     allocatedCostBasis: legacyCamelCaseCost,
+    set_name: canonicalSetName,
+    card_set: legacyCardSet,
+    setName: legacyCamelCaseSetName,
     ...current
   } = item;
   const hasCurrentCostBasis = current.costBasis !== undefined && current.costBasis !== null;
@@ -28,8 +34,16 @@ function migrateItem(item: LegacyTransactionItem): TradeItem {
     ?? current.boughtPrice
     ?? 0
   );
+  const cardSet = String(
+    canonicalSetName
+    ?? current.cardSet
+    ?? legacyCardSet
+    ?? legacyCamelCaseSetName
+    ?? ""
+  ).trim();
   return {
     ...current,
+    cardSet: cardSet || undefined,
     costBasis: hasCurrentCostBasis && Number.isFinite(existingCostBasis)
       ? existingCostBasis
       : Number.isFinite(migratedCostBasis) ? migratedCostBasis : 0

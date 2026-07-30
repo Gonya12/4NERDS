@@ -44,6 +44,7 @@ type PurchaseRow = {
   buyer_note?: string | null;
   card_name?: string | null;
   collector_number?: string | null;
+  set_name?: string | null;
   card_set?: string | null;
   card_set_id?: string | null;
   card_set_code?: string | null;
@@ -115,7 +116,7 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     buyerNote: row.buyer_note || undefined,
     cardName: row.card_name || undefined,
     collectorNumber: row.collector_number || undefined,
-    cardSet: row.card_set || undefined,
+    cardSet: row.set_name || row.card_set || undefined,
     cardSetId: row.card_set_id || undefined,
     cardSetCode: row.card_set_code || undefined,
     cardRarity: row.card_rarity || undefined,
@@ -189,6 +190,7 @@ export function buildInventoryPurchasePayload(value: InventoryPurchase): Purchas
     buyer_note: value.buyerNote || null,
     card_name: value.cardName || null,
     collector_number: value.collectorNumber || null,
+    set_name: value.cardSet || null,
     card_set: value.cardSet || null,
     card_set_id: value.cardSetId || null,
     card_set_code: value.cardSetCode || null,
@@ -230,6 +232,7 @@ export function buildInventoryPurchasePayload(value: InventoryPurchase): Purchas
 
 function withoutManualSearchColumns(row: PurchaseRow) {
   const {
+    set_name: _setName,
     card_set_id: _cardSetId,
     card_set_code: _cardSetCode,
     card_rarity: _cardRarity,
@@ -280,7 +283,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,set_name,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const enhanced = await supabase.from("inventory_purchases")
     .select(columns)
@@ -290,6 +293,7 @@ export async function listInventoryPurchases(limit = 100) {
   if (isMissingColumnError(error)) {
     const legacyColumns = columns
       .replace(",market_price_currency", "")
+      .replace(",set_name", "")
       .replace(",card_set_id,card_set_code,card_rarity", "")
       .replace(",card_game,card_language,data_provider,provider_card_id,card_code", ",card_language")
       .replace(",pokemon_tcg_card_id,official_card_image_url,tcgplayer_url", "")

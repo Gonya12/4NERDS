@@ -52,6 +52,7 @@ create table if not exists public.financial_transaction_items (
   back_image_url text,
   back_image_path text,
   collector_number text,
+  set_name text,
   card_set text,
   pokemon_tcg_card_id text,
   card_condition text,

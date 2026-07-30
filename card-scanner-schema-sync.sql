@@ -3,6 +3,7 @@
 
 alter table public.inventory_purchases add column if not exists card_name text;
 alter table public.inventory_purchases add column if not exists collector_number text;
+alter table public.inventory_purchases add column if not exists set_name text;
 alter table public.inventory_purchases add column if not exists card_set text;
 alter table public.inventory_purchases add column if not exists card_language text;
 alter table public.inventory_purchases add column if not exists card_condition text;
@@ -21,6 +22,7 @@ alter table public.inventory_purchases add column if not exists scan_result json
 
 create index if not exists idx_inventory_purchases_card_name on public.inventory_purchases(card_name);
 create index if not exists idx_inventory_purchases_collector_number on public.inventory_purchases(collector_number);
+create index if not exists idx_inventory_purchases_set_name on public.inventory_purchases(set_name);
 create index if not exists idx_inventory_purchases_card_set on public.inventory_purchases(card_set);
 create index if not exists idx_inventory_purchases_certificate_number on public.inventory_purchases(certificate_number)
   where certificate_number is not null and btrim(certificate_number) <> '';

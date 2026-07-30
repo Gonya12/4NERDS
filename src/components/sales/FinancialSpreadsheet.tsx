@@ -68,7 +68,7 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "payment", label: "Payment" }, { key: "notes", label: "Notes" },
   { key: "cardGame", label: "Card Game" }, { key: "cardLanguage", label: "Card Language" }, { key: "dataProvider", label: "Data Provider" },
   { key: "providerCardId", label: "Provider Card ID" }, { key: "cardCode", label: "Card Code" },
-  { key: "cardName", label: "Card Name" }, { key: "collectorNumber", label: "Collector #" }, { key: "cardSet", label: "Set" },
+  { key: "cardName", label: "Card Name" }, { key: "collectorNumber", label: "Collector #" }, { key: "cardSet", label: "Set Name" },
   { key: "condition", label: "Condition" }, { key: "stickerPrice", label: "Sticker Price" }, { key: "gradingCompany", label: "Grading Co." },
   { key: "grade", label: "Grade" }, { key: "certificateNumber", label: "Certificate #" }, { key: "scanConfidence", label: "Scan Confidence" },
   { key: "scanStatus", label: "Scan Status" }, { key: "ownershipType", label: "Ownership Type" },
