@@ -1127,6 +1127,7 @@ export function SalesControlPage() {
             sales={sales}
             purchases={purchases}
             expenses={expenses}
+            trades={trades}
             events={events}
             workers={workers}
             onSaveSale={saveSpreadsheetSale}

@@ -21,7 +21,7 @@ import {
   buildTransactionOwnershipPayload,
   buildTransactionPaymentPayloads
 } from "./databasePayloads";
-import { ownershipValidationError } from "../../utils/tradeMath";
+import { normalizeTradeAccounting, ownershipValidationError } from "../../utils/tradeMath";
 import { prepareTransactionForCompletion } from "./transactionReliability";
 import { migrateLocalTransactionDraft, sanitizeTransactionInventoryLinks } from "./transactionDraft";
 import {
@@ -730,7 +730,7 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
 export type TransactionSaveStage = "transaction" | "items" | "inventory" | "ownership" | "finalizing";
 
 export async function completeTrade(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {
-  const normalizedInput = normalizeTransactionForApplication(input);
+  const normalizedInput = normalizeTradeAccounting(normalizeTransactionForApplication(input));
   if (normalizedInput.status !== "draft") throw new Error("Only a draft trade can be completed.");
   const outgoing = normalizedInput.items.filter((item) => item.direction === "outgoing");
   const incoming = normalizedInput.items.filter((item) => item.direction === "incoming");
@@ -766,6 +766,32 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   trade = { ...trade, status: "completed", completedAt: timestamp, updatedAt: timestamp };
   await saveTrade(trade);
   return { trade, created };
+}
+
+export async function recalculateCompletedTrade(input: TradeTransaction, inventory: InventoryPurchase[]) {
+  const normalizedInput = normalizeTradeAccounting(normalizeTransactionForApplication(input));
+  if (normalizedInput.status !== "completed") throw new Error("Only a completed trade can be recalculated.");
+  validateTransactionOwnership(normalizedInput);
+  let trade = await saveTrade(normalizedInput, { syncPayments: false });
+  for (const item of trade.items.filter((row) => row.direction === "incoming")) {
+    const inventoryId = await findCreatedInventoryPurchaseId(trade.id, [item.id], item.createdInventoryPurchaseId);
+    const existing = inventory.find((row) => row.id === inventoryId);
+    if (!existing) throw new Error(`The inventory record for ${item.itemName || "an incoming item"} could not be found.`);
+    const saved = await saveInventoryPurchase({
+      ...existing,
+      totalCost: item.costBasis,
+      marketValue: item.marketValue,
+      agreedTradeValue: item.agreedTradeValue || item.marketValue,
+      acquisitionMethod: "trade",
+      acquiredFinancialTransactionId: trade.id,
+      financialTransactionId: trade.id,
+      financialTransactionItemId: item.id
+    });
+    await linkCreatedInventoryPurchase(trade.id, item, saved.id);
+    if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
+  }
+  trade = await saveTrade({ ...trade, updatedAt: nowIso() });
+  return trade;
 }
 
 export async function completeFinancialTransaction(input: TradeTransaction, inventory: InventoryPurchase[], onProgress?: (stage: TransactionSaveStage) => void) {

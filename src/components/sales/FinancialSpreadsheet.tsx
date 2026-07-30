@@ -1,20 +1,22 @@
 import { BadgeDollarSign, ChevronDown, ChevronUp, Copy, Download, Eye, MoreVertical, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, Worker } from "../../types/models";
+import type { BusinessExpense, Event, InventoryPurchase, InventoryStatus, SalesRecord, TradeTransaction, Worker } from "../../types/models";
 import type { CardScanSuggestion } from "../../services/sales/cardScanService";
 import { calculateTargetPrice, selectedTcgplayerPrice } from "../../utils/cardPricing";
 import { effectiveSaleOwnership, expenseCategoryLabels, inventoryQuantitySummary, inventoryStatusLabels, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { formatMoney } from "../../utils/paymentMath";
+import { tradeGainByIncomingItem } from "../../utils/tradeMath";
 import { ImageLightbox } from "./ImageLightbox";
 import { ManualCardSearch } from "./ManualCardSearch";
 
 type RecordType = "sale" | "purchase" | "expense";
 type SortKey = "date" | "item" | "type" | "status" | "bought" | "sold" | "profit";
-type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "sold" | "profit" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardGame" | "cardLanguage" | "dataProvider" | "providerCardId" | "cardCode" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "ownershipType" | "gonzaloPercent" | "thiagoPercent" | "otherOwnerPercent" | "paidBy" | "gonzaloCost" | "thiagoCost" | "gonzaloProfit" | "thiagoProfit" | "internalBalance" | "ownershipAssigned" | "actions";
+type ColumnKey = "photo" | "item" | "type" | "category" | "quantity" | "status" | "raw" | "market" | "buyPercent" | "target" | "bought" | "costBasis" | "sold" | "profit" | "tradeGain" | "unrealized" | "margin" | "date" | "source" | "worker" | "event" | "payment" | "notes" | "cardGame" | "cardLanguage" | "dataProvider" | "providerCardId" | "cardCode" | "cardName" | "collectorNumber" | "cardSet" | "condition" | "stickerPrice" | "gradingCompany" | "grade" | "certificateNumber" | "scanConfidence" | "scanStatus" | "ownershipType" | "gonzaloPercent" | "thiagoPercent" | "otherOwnerPercent" | "paidBy" | "gonzaloCost" | "thiagoCost" | "gonzaloProfit" | "thiagoProfit" | "internalBalance" | "ownershipAssigned" | "actions";
 
 type Props = {
   sales: SalesRecord[];
   purchases: InventoryPurchase[];
+  trades: TradeTransaction[];
   expenses: BusinessExpense[];
   events: Event[];
   workers: Worker[];
@@ -33,6 +35,7 @@ type UnifiedRow = {
   key: string;
   id: string;
   type: RecordType;
+  recordLabel: string;
   image?: string;
   item: string;
   category: string;
@@ -43,8 +46,12 @@ type UnifiedRow = {
   buyPercent: number;
   target: number;
   bought: number;
+  costBasis: number;
   sold: number;
   profit: number;
+  tradeGain?: number;
+  unrealized?: number;
+  saleOccurred: boolean;
   margin: number;
   date: string;
   source: string;
@@ -62,8 +69,8 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "photo", label: "Photo" }, { key: "item", label: "Item Name" }, { key: "type", label: "Record Type" },
   { key: "category", label: "Category" }, { key: "quantity", label: "Quantity" }, { key: "status", label: "Inventory Status" },
   { key: "raw", label: "Raw Card" }, { key: "market", label: "Market Value" }, { key: "buyPercent", label: "Buy %" },
-  { key: "target", label: "Target Buy Price" }, { key: "bought", label: "Bought Price" }, { key: "sold", label: "Sold Price" },
-  { key: "profit", label: "Gross Profit" }, { key: "margin", label: "Margin" }, { key: "date", label: "Date" },
+  { key: "target", label: "Target Buy Price" }, { key: "bought", label: "Cash Paid" }, { key: "costBasis", label: "Cost Basis" }, { key: "sold", label: "Sold Price" },
+  { key: "profit", label: "Sale Profit" }, { key: "tradeGain", label: "Trade Gain/Loss" }, { key: "unrealized", label: "Unrealized Gain/Loss" }, { key: "margin", label: "Margin" }, { key: "date", label: "Date" },
   { key: "source", label: "Source" }, { key: "worker", label: "Worker" }, { key: "event", label: "Event" },
   { key: "payment", label: "Payment" }, { key: "notes", label: "Notes" },
   { key: "cardGame", label: "Card Game" }, { key: "cardLanguage", label: "Card Language" }, { key: "dataProvider", label: "Data Provider" },
@@ -79,7 +86,7 @@ const allColumns: { key: ColumnKey; label: string }[] = [
   { key: "actions", label: "Actions" }
 ];
 
-const defaultVisible = new Set<ColumnKey>(["photo", "item", "type", "quantity", "status", "bought", "sold", "profit", "date", "actions"]);
+const defaultVisible = new Set<ColumnKey>(["photo", "item", "type", "quantity", "status", "market", "bought", "costBasis", "sold", "profit", "tradeGain", "unrealized", "date", "actions"]);
 
 function inputClass() {
   return "min-h-9 w-full min-w-20 rounded-lg border border-coral/40 bg-white px-2 text-sm outline-none dark:bg-slate-950";
@@ -112,10 +119,20 @@ export function FinancialSpreadsheet(props: Props) {
   const eventMap = useMemo(() => new Map(props.events.map((event) => [event.id, event.name])), [props.events]);
   const workerMap = useMemo(() => new Map(props.workers.map((worker) => [worker.id, worker.name])), [props.workers]);
   const rows = useMemo<UnifiedRow[]>(() => [
-    ...props.sales.map((sale) => ({ key: `sale-${sale.id}`, id: sale.id, type: "sale" as const, image: sale.imageUrl, item: sale.itemName || "Details pending", category: pokemonCategoryLabels[sale.category || "other_pokemon_product"], quantity: sale.quantity || 1, status: "Sold", raw: sale.isRawCard, market: Number(sale.marketValue || 0), buyPercent: Number(sale.buyPercentage || 0), target: Number(sale.targetBuyPrice || 0), bought: Number(sale.boughtPrice || 0), sold: Number(sale.soldPrice || 0), profit: saleProfit(sale), margin: Number(sale.soldPrice || 0) > 0 ? saleProfit(sale) / Number(sale.soldPrice) * 100 : 0, date: sale.soldAt, source: sale.purchaseSource || sale.boughtFrom || "", worker: workerMap.get(sale.soldByWorkerId || "") || "", event: eventMap.get(sale.eventId || "") || "", payment: sale.paymentMethod || "", notes: sale.notes || "", cardGame: sale.cardGame, cardLanguage: sale.cardLanguage, dataProvider: sale.dataProvider, providerCardId: sale.providerCardId, cardCode: sale.cardCode, original: sale })),
-    ...props.purchases.map((purchase) => { const summary = inventoryQuantitySummary(purchase, props.sales); return { key: `purchase-${purchase.id}`, id: purchase.id, type: "purchase" as const, image: purchase.imageUrl, item: purchase.itemName, category: pokemonCategoryLabels[purchase.category], quantity: purchase.quantity, status: inventoryStatusLabels[purchase.status], raw: purchase.isRawCard, market: Number(purchase.marketValue || 0), buyPercent: Number(purchase.buyPercentage || 0), target: Number(purchase.targetBuyPrice || 0), bought: purchase.totalCost, sold: summary.realizedRevenue, profit: summary.realizedProfit, margin: summary.margin, date: purchase.purchaseDate, source: purchase.purchaseSource || purchase.seller || "", worker: workerMap.get(purchase.purchasedByWorkerId || "") || "", event: eventMap.get(purchase.eventId || "") || "", payment: purchase.soldPaymentMethod || "", notes: purchase.notes || "", cardGame: purchase.cardGame, cardLanguage: purchase.cardLanguage, dataProvider: purchase.dataProvider, providerCardId: purchase.providerCardId, cardCode: purchase.cardCode, original: purchase }; }),
-    ...props.expenses.map((expense) => ({ key: `expense-${expense.id}`, id: expense.id, type: "expense" as const, image: expense.receiptImageUrl, item: expense.description || "Expense", category: expenseCategoryLabels[expense.category], quantity: 1, status: "Expense", raw: false, market: 0, buyPercent: 0, target: 0, bought: expense.amount, sold: 0, profit: -expense.amount, margin: 0, date: expense.expenseDate, source: expense.vendor || "", worker: workerMap.get(expense.paidByWorkerId || "") || "", event: eventMap.get(expense.eventId || "") || "", payment: "", notes: expense.notes || "", original: expense }))
-  ], [props.sales, props.purchases, props.expenses, eventMap, workerMap]);
+    ...props.sales.map((sale) => ({ key: `sale-${sale.id}`, id: sale.id, type: "sale" as const, recordLabel: "Sale", image: sale.imageUrl, item: sale.itemName || "Details pending", category: pokemonCategoryLabels[sale.category || "other_pokemon_product"], quantity: sale.quantity || 1, status: "Sold", raw: sale.isRawCard, market: Number(sale.marketValue || 0), buyPercent: Number(sale.buyPercentage || 0), target: Number(sale.targetBuyPrice || 0), bought: 0, costBasis: Number(sale.boughtPrice || 0), sold: Number(sale.soldPrice || 0), profit: saleProfit(sale), saleOccurred: true, margin: Number(sale.soldPrice || 0) > 0 ? saleProfit(sale) / Number(sale.soldPrice) * 100 : 0, date: sale.soldAt, source: sale.purchaseSource || sale.boughtFrom || "", worker: workerMap.get(sale.soldByWorkerId || "") || "", event: eventMap.get(sale.eventId || "") || "", payment: sale.paymentMethod || "", notes: sale.notes || "", cardGame: sale.cardGame, cardLanguage: sale.cardLanguage, dataProvider: sale.dataProvider, providerCardId: sale.providerCardId, cardCode: sale.cardCode, original: sale })),
+    ...props.purchases.map((purchase) => {
+      const summary = inventoryQuantitySummary(purchase, props.sales);
+      const acquisitionTrade = props.trades.find((trade) => trade.id === purchase.acquiredFinancialTransactionId || trade.items.some((item) => item.createdInventoryPurchaseId === purchase.id));
+      const dispositionTrade = props.trades.find((trade) => trade.id === purchase.disposedFinancialTransactionId || trade.items.some((item) => item.inventoryPurchaseId === purchase.id));
+      const incomingItem = acquisitionTrade?.items.find((item) => item.createdInventoryPurchaseId === purchase.id || item.id === purchase.financialTransactionItemId);
+      const recordLabel = purchase.status === "traded_out" && dispositionTrade ? "Trade Disposition" : purchase.acquisitionMethod === "trade" || acquisitionTrade ? "Trade Acquisition" : "Purchase";
+      const tradeGain = acquisitionTrade && incomingItem ? tradeGainByIncomingItem(acquisitionTrade).get(incomingItem.id) : undefined;
+      const remainingRatio = Math.max(0, purchase.quantity - purchase.quantitySold) / Math.max(1, purchase.quantity);
+      const currentInventory = purchase.status === "in_stock" || purchase.status === "partially_sold";
+      return { key: `purchase-${purchase.id}`, id: purchase.id, type: "purchase" as const, recordLabel, image: purchase.imageUrl, item: purchase.itemName, category: pokemonCategoryLabels[purchase.category], quantity: purchase.quantity, status: inventoryStatusLabels[purchase.status], raw: purchase.isRawCard, market: Number(purchase.marketValue || 0), buyPercent: Number(purchase.buyPercentage || 0), target: Number(purchase.targetBuyPrice || 0), bought: acquisitionTrade ? Number(incomingItem?.boughtPrice ?? incomingItem?.cashAllocation ?? 0) : purchase.totalCost, costBasis: purchase.totalCost, sold: summary.realizedRevenue, profit: summary.realizedProfit, tradeGain, unrealized: currentInventory ? Number(purchase.marketValue || 0) * remainingRatio - purchase.totalCost * remainingRatio : undefined, saleOccurred: summary.quantitySold > 0 || purchase.status === "sold", margin: summary.margin, date: purchase.purchaseDate, source: purchase.purchaseSource || purchase.seller || "", worker: workerMap.get(purchase.purchasedByWorkerId || "") || "", event: eventMap.get(purchase.eventId || "") || "", payment: purchase.soldPaymentMethod || "", notes: purchase.notes || "", cardGame: purchase.cardGame, cardLanguage: purchase.cardLanguage, dataProvider: purchase.dataProvider, providerCardId: purchase.providerCardId, cardCode: purchase.cardCode, original: purchase };
+    }),
+    ...props.expenses.map((expense) => ({ key: `expense-${expense.id}`, id: expense.id, type: "expense" as const, recordLabel: "Expense", image: expense.receiptImageUrl, item: expense.description || "Expense", category: expenseCategoryLabels[expense.category], quantity: 1, status: "Expense", raw: false, market: 0, buyPercent: 0, target: 0, bought: expense.amount, costBasis: 0, sold: 0, profit: -expense.amount, saleOccurred: false, margin: 0, date: expense.expenseDate, source: expense.vendor || "", worker: workerMap.get(expense.paidByWorkerId || "") || "", event: eventMap.get(expense.eventId || "") || "", payment: "", notes: expense.notes || "", original: expense }))
+  ], [props.sales, props.purchases, props.expenses, props.trades, eventMap, workerMap]);
 
   const filteredRows = useMemo(() => {
     const needle = query.toLowerCase();
@@ -222,7 +239,7 @@ export function FinancialSpreadsheet(props: Props) {
   }
 
   function exportSelected() {
-    const csvRows = [["Record Type", "Date", "Item", "Category", "Status", "Amount / Cost", "Sold Price", "Profit"], ...selectedRows.map((row) => [row.type, row.date, row.item, row.category, row.status, row.bought, row.type === "expense" ? "" : row.sold, row.type === "expense" ? "" : row.profit])];
+    const csvRows = [["Record Type", "Date", "Item", "Category", "Status", "Current Market Value", "Cash Paid", "Cost Basis", "Sold Price", "Sale Profit", "Trade Gain/Loss", "Unrealized Gain/Loss"], ...selectedRows.map((row) => [row.recordLabel, row.date, row.item, row.category, row.status, row.market, row.bought, row.costBasis, row.saleOccurred ? row.sold : "", row.saleOccurred ? row.profit : "", row.tradeGain ?? "", row.unrealized ?? ""])];
     const csv = csvRows.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const link = document.createElement("a");
@@ -348,7 +365,7 @@ export function FinancialSpreadsheet(props: Props) {
     const editing = editingKey === row.key;
     if (key === "photo") return row.image ? <button type="button" title={`Preview ${row.type === "expense" ? "receipt" : "image"}`} onClick={(event) => { event.stopPropagation(); setPreviewKey(row.key); }} className="group/image rounded-lg border-2 border-transparent transition hover:border-coral focus:border-coral focus:outline-none"><img src={row.image} alt={`${row.item} thumbnail`} loading="lazy" className="size-10 cursor-zoom-in rounded-md bg-slate-100 object-contain transition-transform group-hover/image:scale-105 dark:bg-slate-900" /></button> : <div aria-label="No image" className="size-10 rounded-lg bg-slate-100 dark:bg-slate-800" />;
     if (key === "item") return editing ? <input autoFocus value={draft.item} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, item: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : <span className="block max-w-44 truncate font-black text-ink dark:text-white">{row.item}</span>;
-    if (key === "type") return <span className="capitalize" title="Record type cannot be converted in place. Use + Add Row to create another type.">{row.type}</span>;
+    if (key === "type") return <span title="Record type cannot be converted in place. Use + Add Row to create another type.">{row.recordLabel}</span>;
     if (key === "category") return editing ? <select value={draft.category} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, category: event.target.value }); setSaveState("unsaved"); }} className={inputClass()}>{Object.entries(row.type === "expense" ? expenseCategoryLabels : pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : row.category;
     if (key === "quantity") return editing && row.type !== "expense" ? <input type="number" min="1" value={draft.quantity} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, quantity: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : row.quantity;
     if (key === "status") {
@@ -360,12 +377,19 @@ export function FinancialSpreadsheet(props: Props) {
       return row.type === "expense" ? <span className="text-slate-500">Expense</span> : <span className="text-emerald-600">Completed sale</span>;
     }
     if (key === "raw") return editing && row.type !== "expense" ? <input type="checkbox" checked={draft.raw} onChange={(event) => { setDraft({ ...draft, raw: event.target.checked }); setSaveState("unsaved"); }} className="size-5 accent-coral" /> : row.raw ? "Yes" : "No";
-    if (key === "market") return editing && row.type !== "expense" ? <input type="number" min="0" step="0.01" value={draft.market} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, market: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : formatMoney(row.market);
+    if (key === "market") {
+      if (editing && row.type !== "expense") return <input type="number" min="0" step="0.01" value={draft.market} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, market: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} />;
+      const priced = row.type === "expense" ? undefined : row.original as SalesRecord | InventoryPurchase;
+      return <span><b>{formatMoney(row.market)}</b>{priced?.marketPriceSource ? <small className="block text-[10px] text-slate-500">{priced.marketPriceSource}{priced.marketPriceCheckedAt ? ` · ${new Date(priced.marketPriceCheckedAt).toLocaleDateString()}` : ""}</small> : null}</span>;
+    }
     if (key === "buyPercent") return editing && row.type !== "expense" ? <input type="number" min="0" step="0.1" value={draft.buyPercent} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, buyPercent: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : `${row.buyPercent || 0}%`;
     if (key === "target") return editing && row.type !== "expense" ? <input type="number" min="0" step="0.01" value={draft.target} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, target: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : formatMoney(row.target);
-    if (key === "bought") return editing ? <input type="number" min="0" step="0.01" value={draft.bought} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, bought: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : formatMoney(row.bought);
-    if (key === "sold") return row.type === "expense" ? <span className="text-slate-400">—</span> : editing ? <input type="number" min="0" step="0.01" value={draft.sold} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, sold: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : formatMoney(row.sold);
-    if (key === "profit") return row.type === "expense" ? <span className="font-bold text-rose-600">{formatMoney(row.bought)} operating expense</span> : <span className={row.profit >= 0 ? "font-black text-emerald-600" : "font-black text-rose-600"}>{formatMoney(row.profit)}</span>;
+    if (key === "bought") return editing && row.type !== "sale" && row.recordLabel === "Purchase" ? <input type="number" min="0" step="0.01" value={draft.bought} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, bought: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : row.type === "sale" ? <span className="text-slate-400">—</span> : formatMoney(row.bought);
+    if (key === "costBasis") return row.type === "expense" ? <span className="text-slate-400">—</span> : formatMoney(row.costBasis);
+    if (key === "sold") return row.type === "expense" || !row.saleOccurred ? <span className="text-slate-400">Not sold</span> : editing ? <input type="number" min="0" step="0.01" value={draft.sold} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, sold: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : formatMoney(row.sold);
+    if (key === "profit") return row.type === "expense" ? <span className="text-slate-400">—</span> : !row.saleOccurred ? <span className="text-slate-400">Not sold</span> : <span className={row.profit >= 0 ? "font-black text-emerald-600" : "font-black text-rose-600"}>{formatMoney(row.profit)}</span>;
+    if (key === "tradeGain") return row.tradeGain == null ? <span className="text-slate-400">—</span> : <span className={row.tradeGain >= 0 ? "font-black text-emerald-600" : "font-black text-rose-600"}>{formatMoney(row.tradeGain)}</span>;
+    if (key === "unrealized") return row.unrealized == null ? <span className="text-slate-400">—</span> : <span className={row.unrealized >= 0 ? "font-black text-emerald-600" : "font-black text-rose-600"}>{formatMoney(row.unrealized)}</span>;
     if (key === "margin") return `${row.margin.toFixed(1)}%`;
     if (key === "date") return editing ? <input type="date" value={draft.date} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, date: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : new Date(row.date).toLocaleDateString();
     if (key === "source") return editing ? <input value={draft.source} onKeyDown={(event) => editorKeyDown(event, row)} onChange={(event) => { setDraft({ ...draft, source: event.target.value }); setSaveState("unsaved"); }} className={inputClass()} /> : row.source;
@@ -402,7 +426,7 @@ export function FinancialSpreadsheet(props: Props) {
       };
       return ["gonzaloCost", "thiagoCost", "gonzaloProfit", "thiagoProfit"].includes(key) ? formatMoney(Number(values[key])) : key.endsWith("Percent") ? `${values[key]}%` : values[key];
     }
-    return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" aria-label="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" aria-label="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Pencil size={15} /></button>}{row.type === "purchase" && (row.original as InventoryPurchase).status !== "sold" ? <button onClick={() => openSoldModal([row])} title="Mark sold" aria-label="Mark sold" className="rounded-lg bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/40"><BadgeDollarSign size={15} /></button> : null}{row.type !== "expense" ? <button onClick={() => setCardSearchRow(row)} title="Search official Pokémon card" aria-label="Search official Pokémon card" className="rounded-lg bg-violet-50 p-2 text-violet-700 dark:bg-violet-950/40 dark:text-violet-200"><Search size={15} /></button> : null}<button onClick={() => openFullEditor(row)} title="View or edit full record" aria-label="View or edit full record" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" aria-label="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" aria-label="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
+    return <div className="flex items-center gap-1">{editing ? <button onClick={() => void saveDraft(row)} title="Save row" aria-label="Save row" className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Save size={15} /></button> : <button onClick={() => beginEdit(row)} title="Edit inline" aria-label="Edit inline" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Pencil size={15} /></button>}{row.type === "purchase" && (row.original as InventoryPurchase).status !== "sold" ? <button onClick={() => openSoldModal([row])} title="Mark sold" aria-label="Mark sold" className="rounded-lg bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/40"><BadgeDollarSign size={15} /></button> : null}{row.type !== "expense" ? <button onClick={() => setCardSearchRow(row)} title="Refresh Market Price" aria-label="Refresh Market Price" className="rounded-lg bg-violet-50 p-2 text-violet-700 dark:bg-violet-950/40 dark:text-violet-200"><Search size={15} /></button> : null}<button onClick={() => openFullEditor(row)} title="View or edit full record" aria-label="View or edit full record" className="rounded-lg bg-slate-100 p-2 text-slate-600 dark:bg-slate-800 dark:text-slate-200"><Eye size={15} /></button><button onClick={() => void props.onDuplicate(row.type, row.id)} title="Duplicate" aria-label="Duplicate" className="rounded-lg bg-sky-50 p-2 text-sky-600 dark:bg-sky-950/40"><Copy size={15} /></button><button onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} title="Delete" aria-label="Delete" className="rounded-lg bg-rose-50 p-2 text-rose-600 dark:bg-rose-950/40"><Trash2 size={15} /></button></div>;
   }
 
   return (
@@ -436,15 +460,15 @@ export function FinancialSpreadsheet(props: Props) {
                 {row.image ? <img src={row.image} alt="" loading="lazy" className="size-14 shrink-0 rounded-xl bg-slate-100 object-contain dark:bg-slate-900" /> : <span className="grid size-14 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-900"><Eye size={18} /></span>}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-black text-slate-950 dark:text-white">{row.item}</span>
-                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-500"><span className="capitalize">{row.type}</span><span>·</span><span>{row.status}</span>{row.cardGame ? <><span>·</span><span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-violet-700">{row.cardGame === "one_piece" ? "One Piece" : row.cardLanguage === "ja" ? "Pokémon · JA" : "Pokémon · EN"}</span></> : null}{row.worker ? <><span>·</span><span>{row.worker}</span></> : null}</span>
-                  <span className="mt-2 grid grid-cols-3 gap-2 text-xs"><span><small className="block text-slate-500">Cost</small><b>{formatMoney(row.bought)}</b></span><span><small className="block text-slate-500">Sold</small><b>{formatMoney(row.sold)}</b></span><span><small className="block text-slate-500">Profit</small><b className={row.profit >= 0 ? "text-emerald-600" : "text-rose-600"}>{formatMoney(row.profit)}</b></span></span>
+                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-500"><span>{row.recordLabel}</span><span>·</span><span>{row.status}</span>{row.cardGame ? <><span>·</span><span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-violet-700">{row.cardGame === "one_piece" ? "One Piece" : row.cardLanguage === "ja" ? "Pokémon · JA" : "Pokémon · EN"}</span></> : null}{row.worker ? <><span>·</span><span>{row.worker}</span></> : null}</span>
+                  <span className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><span><small className="block text-slate-500">Cash paid</small><b>{row.type === "sale" ? "—" : formatMoney(row.bought)}</b></span><span><small className="block text-slate-500">Cost basis</small><b>{row.type === "expense" ? "—" : formatMoney(row.costBasis)}</b></span><span><small className="block text-slate-500">Sale profit</small><b className={row.saleOccurred ? row.profit >= 0 ? "text-emerald-600" : "text-rose-600" : "text-slate-400"}>{row.saleOccurred ? formatMoney(row.profit) : "Not sold"}</b></span><span><small className="block text-slate-500">Trade gain/loss</small><b className={row.tradeGain == null ? "text-slate-400" : row.tradeGain >= 0 ? "text-emerald-600" : "text-rose-600"}>{row.tradeGain == null ? "—" : formatMoney(row.tradeGain)}</b></span></span>
                 </span>
               </button>
               <details className="relative shrink-0">
                 <summary className="grid size-10 cursor-pointer place-items-center rounded-xl bg-slate-100 dark:bg-slate-800" aria-label={`Actions for ${row.item}`}><MoreVertical size={18} /></summary>
                 <div className="absolute right-0 top-11 z-30 w-44 space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   <button type="button" onClick={() => openFullEditor(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Open details</button>
-                  {row.type !== "expense" ? <button type="button" onClick={() => setCardSearchRow(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30">Search official card</button> : null}
+                  {row.type !== "expense" ? <button type="button" onClick={() => setCardSearchRow(row)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30">Refresh Market Price</button> : null}
                   <button type="button" onClick={() => void props.onDuplicate(row.type, row.id)} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black hover:bg-slate-100 dark:hover:bg-slate-800">Duplicate</button>
                   <button type="button" onClick={() => { if (confirm("Delete this record?")) void props.onDelete(row.type, row.id); }} className="w-full rounded-lg px-3 py-2 text-left text-xs font-black text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30">Delete</button>
                 </div>

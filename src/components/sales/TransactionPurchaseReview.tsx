@@ -29,7 +29,7 @@ export function TransactionPurchaseReview({ transaction, workers, onEditItem }: 
         {[
           ["Cash paid", cashPaid],
           ["Item count", transaction.items.length],
-          ["Total purchase price", review.bought],
+          ["Total cash paid", review.bought],
           ["Assigned inventory cost", review.purchaseCostBasis],
           ["Market value", review.marketValue],
           ["Potential margin", review.potentialMargin]
@@ -53,7 +53,7 @@ export function TransactionPurchaseReview({ transaction, workers, onEditItem }: 
           <div>
             <h3 className="font-black">{item.itemName || "Unnamed item"}</h3>
             <p className="text-sm text-slate-500">
-              Purchase price {formatMoney(item.boughtPrice || 0)} · Item cost basis {formatMoney(item.costBasis)} · Market {formatMoney(item.marketValue)}
+              Cash paid {formatMoney(item.boughtPrice || 0)} · Item cost basis {formatMoney(item.costBasis)} · Market {formatMoney(item.marketValue)}
             </p>
           </div>
           <button type="button" onClick={() => onEditItem(item)} className="min-h-10 rounded-xl bg-violet-100 px-3 text-xs font-black text-violet-700">

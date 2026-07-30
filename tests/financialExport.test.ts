@@ -42,7 +42,7 @@ test("CSV and XLSX shared item schemas include provider-neutral card metadata", 
     "Set Name",
     "Sticker Price",
     "Sticker Condition",
-    "Market Price Source",
+    "Pricing Source",
     "Market Price Currency",
   ]) {
     assert.ok(source.includes(`"${header}"`), `${header} column is required`);
@@ -52,8 +52,8 @@ test("CSV and XLSX shared item schemas include provider-neutral card metadata", 
 test("item exports distinguish item cost basis from owner cost allocations", () => {
   const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
   for (const header of [
-    "Purchase Price",
-    "Item Cost Basis",
+    "Cash Paid",
+    "Cost Basis",
     "Gonzalo Allocated Cost",
     "Thiago Allocated Cost",
     "Ownership Breakdown",
@@ -61,4 +61,24 @@ test("item exports distinguish item cost basis from owner cost allocations", () 
     assert.ok(source.includes(`"${header}"`), `${header} column is required`);
   }
   assert.ok(!source.includes('"Allocated Cost Basis"'));
+});
+
+test("CSV and XLSX exports keep trade, cash, market, basis, and profit concepts separate", () => {
+  const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
+  for (const header of [
+    "Acquisition Method",
+    "Cash Paid",
+    "Cost Basis",
+    "Current Market Value",
+    "Trade-Time Market Value",
+    "Trade Gain/Loss",
+    "Unrealized Gain/Loss",
+    "Sale Profit",
+    "Ownership Breakdown",
+    "Pricing Source",
+    "Pricing Checked At",
+  ]) {
+    assert.ok(source.includes(`"${header}"`), `${header} column is required`);
+  }
+  assert.ok(!source.includes('"Estimated Trade Gain/Loss"'));
 });

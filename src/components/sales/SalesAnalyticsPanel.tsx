@@ -9,11 +9,11 @@ import { filterFinancialRecords, financialDateRangeLabels, isWithinFinancialRang
 import { formatMoney } from "../../utils/paymentMath";
 import { effectiveSaleOwnership, expenseCategoryLabels, financialOverview, inventoryQuantitySummary, inventoryStatusLabels, ownerProfitRows, pokemonCategoryLabels, saleProfit } from "../../utils/salesControl";
 import { ImageLightbox } from "./ImageLightbox";
-import { tradeSummary } from "../../utils/tradeMath";
+import { tradeGainOwnership, tradeSummary } from "../../utils/tradeMath";
 import { AppButton, DashboardEmptyState, DashboardPanel, MetricCard } from "./SalesDashboardPrimitives";
 
 type FeedFilter = "all" | "in_stock" | "sold" | "sales" | "purchases" | "trades" | "expenses" | "missing";
-type ChartMetric = "revenue" | "gross_profit" | "net_profit" | "expenses" | "inventory" | "unsold_inventory" | "items_sold" | "average_sale" | "owner_profit" | "trade_value" | "trade_value_in" | "trade_value_out" | "trade_gain" | "trade_cash_received" | "trade_cash_paid" | "trade_count" | "average_trade";
+type ChartMetric = "revenue" | "sale_profit" | "net_profit" | "expenses" | "inventory_cost_basis" | "inventory_market_value" | "unrealized_inventory_gain" | "items_sold" | "average_sale" | "owner_profit" | "trade_value" | "trade_value_in" | "trade_value_out" | "trade_gain" | "trade_cash_received" | "trade_cash_paid" | "trade_count" | "average_trade";
 type ChartGrouping = "daily" | "weekly" | "monthly" | "event" | "category" | "owner" | "payment";
 type ChartStyle = "line" | "bar" | "area" | "donut" | "stacked";
 
@@ -63,7 +63,7 @@ export function SalesAnalyticsPanel(props: Props) {
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string }>();
   const filtered = useMemo(() => filterFinancialRecords(props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd), [props.sales, props.purchases, props.expenses, props.events, props.dateRange, props.customStart, props.customEnd]);
   const filteredTrades = useMemo(() => props.trades.filter((trade) => trade.status === "completed" && (trade.transactionType === "trade" || trade.transactionType === "cash_trade") && isWithinFinancialRange(trade.tradeDate, props.dateRange, props.customStart, props.customEnd)), [props.trades, props.dateRange, props.customStart, props.customEnd]);
-  const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events), [filtered]);
+  const overview = useMemo(() => financialOverview(filtered.sales, filtered.purchases, filtered.expenses, filtered.events, filteredTrades), [filtered, filteredTrades]);
 
   const chartRows = useMemo(() => {
     const buckets = new Map<string, { label: string; total: number; count: number; segments: Map<string, number> }>();
@@ -92,7 +92,7 @@ export function SalesAnalyticsPanel(props: Props) {
         const value = chartMetric === "trade_value" ? (summary.outgoingAgreed + summary.incomingAgreed) / 2
           : chartMetric === "trade_value_in" ? summary.incomingAgreed
           : chartMetric === "trade_value_out" ? summary.outgoingAgreed
-          : chartMetric === "trade_gain" ? summary.estimatedGainLoss
+          : chartMetric === "trade_gain" ? summary.tradeGainLoss
           : chartMetric === "trade_cash_received" ? trade.cashReceived
           : chartMetric === "trade_cash_paid" ? trade.cashPaid
           : chartMetric === "trade_count" ? 1 : summary.incomingAgreed;
@@ -118,11 +118,13 @@ export function SalesAnalyticsPanel(props: Props) {
       });
     } else if (chartMetric === "expenses") {
       filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, Number(row.amount || 0)); });
-    } else if (chartMetric === "inventory" || chartMetric === "unsold_inventory") {
-      filtered.purchases.filter((row) => chartMetric === "inventory" || row.status !== "sold").forEach((row) => {
+    } else if (chartMetric === "inventory_cost_basis" || chartMetric === "inventory_market_value" || chartMetric === "unrealized_inventory_gain") {
+      filtered.purchases.filter((row) => row.status === "in_stock" || row.status === "partially_sold").forEach((row) => {
         const g = group(row.purchaseDate, row.eventId, row.category);
-        const remainingRatio = chartMetric === "unsold_inventory" ? Math.max(0, row.quantity - row.quantitySold) / Math.max(1, row.quantity) : 1;
-        add(g.key, g.label, Number(row.totalCost || 0) * remainingRatio);
+        const remainingRatio = Math.max(0, row.quantity - row.quantitySold) / Math.max(1, row.quantity);
+        const basis = Number(row.totalCost || 0) * remainingRatio;
+        const market = Number(row.marketValue || 0) * remainingRatio;
+        add(g.key, g.label, chartMetric === "inventory_market_value" ? market : chartMetric === "unrealized_inventory_gain" ? market - basis : basis);
       });
     } else {
       filtered.sales.forEach((row) => {
@@ -131,7 +133,10 @@ export function SalesAnalyticsPanel(props: Props) {
           : chartMetric === "items_sold" ? Number(row.quantity || 1) : saleProfit(row);
         add(g.key, g.label, value);
       });
-      if (chartMetric === "net_profit") filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, -Number(row.amount || 0), 0); });
+      if (chartMetric === "net_profit") {
+        filtered.expenses.forEach((row) => { const g = group(row.expenseDate, row.eventId, row.category); add(g.key, g.label, -Number(row.amount || 0), 0); });
+        filteredTrades.forEach((trade) => { const g = group(trade.tradeDate, trade.eventId); add(g.key, g.label, tradeSummary(trade).tradeGainLoss, 0); });
+      }
     }
     return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => ({
       key, label: row.label, value: (chartMetric === "average_sale" || chartMetric === "average_trade") && row.count ? row.total / row.count : row.total,
@@ -145,7 +150,14 @@ export function SalesAnalyticsPanel(props: Props) {
     const y = 160 - Math.max(0, row.value) / maxChart * 130;
     return `${x},${y}`;
   }).join(" ");
-  const ownerRows = useMemo(() => ownerProfitRows(filtered.sales, props.purchases), [filtered.sales, props.purchases]);
+  const ownerRows = useMemo(() => {
+    const totals = ownerProfitRows(filtered.sales, props.purchases);
+    filteredTrades.forEach((trade) => tradeGainOwnership(trade).forEach((gain, workerId) => {
+      const current = totals.get(workerId) || { profit: 0, revenue: 0, itemsSold: 0 };
+      totals.set(workerId, { ...current, profit: current.profit + gain });
+    }));
+    return totals;
+  }, [filtered.sales, props.purchases, filteredTrades]);
   const ownerInventory = useMemo(() => {
     const totals = new Map<string, { cost: number; unsold: number; balance: number }>();
     filtered.purchases.forEach((purchase) => (purchase.ownershipShares || []).forEach((share) => {
@@ -176,17 +188,18 @@ export function SalesAnalyticsPanel(props: Props) {
     if (!availableStyles.includes(chartStyle)) setChartStyle(availableStyles[0]);
   }, [availableStyles, chartStyle]);
   const metricLabels: Record<ChartMetric, string> = {
-    revenue: "Revenue", gross_profit: "Gross Profit", net_profit: "Net Profit", expenses: "Expenses",
-    inventory: "Inventory Purchases", unsold_inventory: "Unsold Inventory Cost", items_sold: "Items Sold",
+    revenue: "Sales Revenue", sale_profit: "Sale Profit", net_profit: "Net Profit", expenses: "Expenses",
+    inventory_cost_basis: "Inventory Cost Basis", inventory_market_value: "Inventory Market Value",
+    unrealized_inventory_gain: "Unrealized Inventory Gain", items_sold: "Items Sold",
     average_sale: "Average Sale", owner_profit: "Profit by Owner", trade_value: "Total Trade Value",
-    trade_value_in: "Value Traded In", trade_value_out: "Value Traded Out", trade_gain: "Estimated Trade Gain/Loss",
+    trade_value_in: "Value Traded In", trade_value_out: "Value Traded Out", trade_gain: "Trade Gain/Loss",
     trade_cash_received: "Trade Cash Received", trade_cash_paid: "Trade Cash Paid", trade_count: "Number of Trades",
     average_trade: "Average Trade Value"
   };
   const isTradeMetric = chartMetric.startsWith("trade_") || chartMetric === "average_trade";
   const groupingOptions: [ChartGrouping, string][] = isTradeMetric
     ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"]]
-    : chartMetric === "expenses" || chartMetric === "inventory" || chartMetric === "unsold_inventory"
+    : chartMetric === "expenses" || chartMetric === "inventory_cost_basis" || chartMetric === "inventory_market_value" || chartMetric === "unrealized_inventory_gain"
     ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["category", "By Category"]]
     : chartMetric === "owner_profit"
       ? [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["event", "By Event"], ["owner", "By Owner"]]
@@ -194,7 +207,7 @@ export function SalesAnalyticsPanel(props: Props) {
   useEffect(() => {
     if (!groupingOptions.some(([value]) => value === chartGrouping)) setChartGrouping(groupingOptions[0][0]);
   }, [chartMetric, chartGrouping]);
-  const chartRecordCount = isTradeMetric ? filteredTrades.length : chartMetric === "expenses" ? filtered.expenses.length : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? filtered.purchases.length : filtered.sales.length;
+  const chartRecordCount = isTradeMetric ? filteredTrades.length : chartMetric === "expenses" ? filtered.expenses.length : chartMetric === "inventory_cost_basis" || chartMetric === "inventory_market_value" || chartMetric === "unrealized_inventory_gain" ? filtered.purchases.length : filtered.sales.length;
   const chartTotal = chartMetric === "average_sale" || chartMetric === "average_trade"
     ? (chartRows.length ? chartRows.reduce((sum, row) => sum + row.value, 0) / chartRows.length : 0)
     : chartRows.reduce((sum, row) => sum + row.value, 0);
@@ -220,11 +233,13 @@ export function SalesAnalyticsPanel(props: Props) {
   }, [props.sales, props.purchases, props.trades, props.expenses, feedFilter]);
 
   const summaryCards = [
-    { label: "Revenue", value: overview.revenue, accent: "green" as const, icon: <WalletCards size={18} /> },
-    { label: "Gross profit", value: overview.grossProfit, accent: "blue" as const, icon: <BadgeDollarSign size={18} /> },
+    { label: "Sales revenue", value: overview.revenue, accent: "green" as const, icon: <WalletCards size={18} /> },
+    { label: "Realized sale profit", value: overview.realizedSaleProfit, accent: "blue" as const, icon: <BadgeDollarSign size={18} /> },
+    { label: "Realized trade gain", value: overview.realizedTradeGain, accent: overview.realizedTradeGain >= 0 ? "purple" as const : "red" as const, icon: <Handshake size={18} /> },
     { label: "Operating expenses", value: overview.operatingExpenses + overview.eventTableCosts, accent: "red" as const, icon: <TrendingDown size={18} /> },
-    { label: "Inventory purchased", value: overview.inventoryInvestment, accent: "orange" as const, icon: <Boxes size={18} /> },
-    { label: "Unsold inventory cost", value: overview.unsoldInventoryCost, accent: "cyan" as const, icon: <PackagePlus size={18} /> },
+    { label: "Current inventory market value", value: overview.currentInventoryMarketValue, accent: "orange" as const, icon: <Boxes size={18} /> },
+    { label: "Current inventory cost basis", value: overview.currentInventoryCostBasis, accent: "cyan" as const, icon: <PackagePlus size={18} /> },
+    { label: "Unrealized inventory gain", value: overview.unrealizedInventoryGain, accent: overview.unrealizedInventoryGain >= 0 ? "green" as const : "red" as const, icon: <TrendingUp size={18} /> },
     { label: "Net profit", value: overview.netProfit, accent: overview.netProfit >= 0 ? "purple" as const : "red" as const, icon: <TrendingUp size={18} /> }
   ];
 
@@ -232,7 +247,7 @@ export function SalesAnalyticsPanel(props: Props) {
     const heightClass = expanded ? "h-[55vh] min-h-80" : "h-64 sm:h-72";
     if (!chartRows.length) {
       const action = chartMetric === "expenses" ? { label: "Add Expense", run: props.onAddExpense }
-        : chartMetric === "inventory" || chartMetric === "unsold_inventory" ? { label: "Add Purchase", run: props.onAddPurchase }
+        : chartMetric === "inventory_cost_basis" || chartMetric === "inventory_market_value" || chartMetric === "unrealized_inventory_gain" ? { label: "Add Purchase", run: props.onAddPurchase }
           : { label: "Add Sale", run: props.onAddSale };
       return <div className={heightClass}><DashboardEmptyState icon={<BarChart3 size={24} />} title="No chart data yet" description="Add records in this date range to see a performance trend." action={<AppButton onClick={action.run}>{action.label}</AppButton>} /></div>;
     }
@@ -255,7 +270,7 @@ export function SalesAnalyticsPanel(props: Props) {
 
       <DashboardPanel eyebrow="Performance charts" title="Explore your numbers" className="dashboard-reveal lg:col-span-8 lg:col-start-1 lg:row-start-2" action={<AppButton variant="ghost" onClick={() => setChartExpanded(true)} className="min-h-9 px-3 text-xs"><Maximize2 size={15} /> Expand</AppButton>}>
         <div className="grid gap-2 sm:grid-cols-3">
-          <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["revenue","Revenue"],["gross_profit","Gross Profit"],["net_profit","Net Profit"],["expenses","Expenses"],["inventory","Inventory Purchases"],["unsold_inventory","Unsold Inventory"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"],["trade_value","Total Trade Value"],["trade_value_in","Value Traded In"],["trade_value_out","Value Traded Out"],["trade_gain","Estimated Trade Gain/Loss"],["trade_cash_received","Trade Cash Received"],["trade_cash_paid","Trade Cash Paid"],["trade_count","Number of Trades"],["average_trade","Average Trade Value"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-black text-slate-500">Metric<select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{([["inventory_market_value","Inventory Market Value"],["inventory_cost_basis","Inventory Cost Basis"],["unrealized_inventory_gain","Unrealized Inventory Gain"],["trade_gain","Trade Gain/Loss"],["revenue","Sales Revenue"],["sale_profit","Sale Profit"],["expenses","Expenses"],["net_profit","Net Profit"],["items_sold","Items Sold"],["average_sale","Average Sale"],["owner_profit","Owner Profit"],["trade_value","Total Trade Value"],["trade_value_in","Value Traded In"],["trade_value_out","Value Traded Out"],["trade_cash_received","Trade Cash Received"],["trade_cash_paid","Trade Cash Paid"],["trade_count","Number of Trades"],["average_trade","Average Trade Value"]] as [ChartMetric,string][]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Group by<select value={chartGrouping} onChange={(event) => setChartGrouping(event.target.value as ChartGrouping)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{groupingOptions.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs font-black text-slate-500">Date range<select value={props.dateRange} onChange={(event) => props.onDateRange(event.target.value as FinancialDateRange)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-ink dark:border-slate-800 dark:bg-slate-950 dark:text-white">{Object.entries(financialDateRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         </div>
@@ -309,7 +324,7 @@ export function SalesAnalyticsPanel(props: Props) {
         <div className="space-y-2 [&>button]:rounded-2xl [&>button]:border [&>button]:border-transparent [&>button]:p-3 [&>button]:transition [&>button]:duration-180 hover:[&>button]:border-slate-200 hover:[&>button]:shadow-md dark:hover:[&>button]:border-slate-700">{recentRecords.length ? recentRecords.map((row) => {
           if (row.type === "sale") return <button key={row.id} onClick={() => props.onEditSale(row.sale)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700"><Camera size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.sale.itemName || "Sale details pending"}</p><p className="text-xs text-slate-500">Bought {formatMoney(row.sale.boughtPrice || 0)} · Sold {formatMoney(row.sale.soldPrice || 0)}</p><p className={`text-xs font-black ${saleProfit(row.sale) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(saleProfit(row.sale))} profit</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>;
           if (row.type === "purchase") { const summary = inventoryQuantitySummary(row.purchase, props.sales); return <button key={row.id} onClick={() => props.onEditPurchase(row.purchase)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700"><PackagePlus size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.purchase.itemName}</p><p className="text-xs text-slate-500">{formatMoney(row.purchase.totalCost)} · {summary.quantityRemaining}/{row.purchase.quantity} left</p><span className={`text-xs font-black ${row.purchase.status === "sold" ? "text-emerald-600" : row.purchase.status === "partially_sold" ? "text-amber-600" : row.purchase.status === "personal" ? "text-slate-500" : "text-sky-600"}`}>{inventoryStatusLabels[row.purchase.status]}</span></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>; }
-          if (row.type === "trade") { const summary = tradeSummary(row.trade); return <button key={row.id} onClick={props.onOpenTrades} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700"><Handshake size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.trade.tradePartner || "Trade transaction"}</p><p className="text-xs text-slate-500">{formatMoney(summary.outgoingAgreed)} out · {formatMoney(summary.incomingAgreed)} in</p><p className={`text-xs font-black ${summary.estimatedGainLoss >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(summary.estimatedGainLoss)} estimated gain/loss</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>; }
+          if (row.type === "trade") { const summary = tradeSummary(row.trade); return <button key={row.id} onClick={props.onOpenTrades} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700"><Handshake size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.trade.tradePartner || "Trade transaction"}</p><p className="text-xs text-slate-500">{formatMoney(summary.outgoingAgreed)} out · {formatMoney(summary.incomingTradeTimeValue)} in</p><p className={`text-xs font-black ${summary.tradeGainLoss >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{formatMoney(summary.tradeGainLoss)} trade gain/loss</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>; }
           return <button key={row.id} onClick={() => props.onEditExpense(row.expense)} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-2 text-left dark:bg-slate-950/70">{row.image ? <img src={row.image} alt={row.expense.description || "Expense receipt"} loading="lazy" className="size-16 shrink-0 rounded-lg bg-slate-100 object-contain dark:bg-slate-900" /> : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-700"><Receipt size={20} /></div>}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink dark:text-white">{row.expense.description}</p><p className="text-xs text-slate-500">{expenseCategoryLabels[row.expense.category]}</p><p className="text-xs font-black text-rose-600">-{formatMoney(row.expense.amount)}</p></div><span className="text-[10px] text-slate-500">{new Date(row.date).toLocaleDateString()}</span></button>;
         }) : <DashboardEmptyState icon={<Activity size={22} />} title="No transactions yet" description="Your sales, purchases, trades, and expenses will appear here." />}</div>
       </section>

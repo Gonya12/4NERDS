@@ -422,7 +422,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop / Rescan</button>
         <button type="button" onClick={() => { onApply(reviewSuggestion, hash, processedFile); setMessage("Suggestions applied. Confirm the normal form, then press Save."); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white"><Sparkles size={17} />Apply Suggestions</button>
       </div>
-      <p className="text-xs text-slate-500">Sticker price never fills Actual Bought Price. A single photo is not a physical condition grade.</p>
+      <p className="text-xs text-slate-500">Sticker price never fills Cash Paid or Cost Basis. A single photo is not a physical condition grade.</p>
     </div> : null}
 
     {status === "failed" ? <div className="space-y-2">

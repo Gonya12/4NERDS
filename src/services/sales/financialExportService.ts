@@ -6,7 +6,7 @@ import { financialDateBounds, isWithinFinancialRange } from "../../utils/financi
 import { roundMoney } from "../../utils/paymentMath";
 import { expenseCategoryLabels, inventoryQuantitySummary, pokemonCategoryLabels } from "../../utils/salesControl";
 import { dailyFinancialSummary, hasKnownHistoricalCostBasis, transactionReview } from "../../utils/transactionMath";
-import { tradeSummary } from "../../utils/tradeMath";
+import { tradeGainByIncomingItem, tradeGainOwnership, tradeSummary, tradeTimeValue } from "../../utils/tradeMath";
 export { createCsv, downloadCsv, financialExportFilename } from "./financialCsvService";
 
 export type FinancialExportKind = "transactions" | "items" | "inventory" | "expenses" | "trades" | "daily" | "all";
@@ -53,7 +53,7 @@ const transactionHeaders = [
   "Transaction ID", "Transaction Date", "Transaction Time", "Transaction Type", "Transaction Subtype", "Status",
   "Item Mode", "Item Count", "Customer or Seller", "Event", "Event Day", "Payment Method", "Cash Received",
   "Cash Paid", "Bundle Total", "Allocation Method", "Market Value In", "Market Value Out", "Agreed Value In",
-  "Agreed Value Out", "Total Cost Basis", "Gross Profit", "Estimated Trade Gain/Loss", "Operating Expense",
+  "Agreed Value Out", "Total Cost Basis", "Sale Profit", "Trade Gain/Loss", "Operating Expense",
   "Entered By", "Paid By", "Notes", "Created At", "Updated At"
 ];
 const transactionKinds: ExportColumnKind[] = [
@@ -67,10 +67,10 @@ const itemHeaders = [
   "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Pokémon TCG Card ID",
   "Collector Number", "Set Name", "Rarity", "Card Condition", "Sticker Price", "Sticker Condition", "Grading Company", "Grade",
   "Certificate Number", "Owner Gonzalo %", "Owner Thiago %", "Other Ownership", "Ownership Breakdown",
-  "Market Value", "Trade Percentage", "Agreed Trade Value", "Purchase Price", "Item Cost Basis",
+  "Current Market Value", "Trade Percentage", "Trade-Time Market Value", "Cash Paid", "Cost Basis",
   "Gonzalo Allocated Cost", "Thiago Allocated Cost", "Sold Price",
-  "Allocated Cash Amount", "Gross Profit", "Market Price Source", "Market Price Currency",
-  "Provider Price Variant", "Provider Market Price", "Product URL",
+  "Allocated Cash Amount", "Sale Profit", "Trade Gain/Loss", "Unrealized Gain/Loss", "Pricing Source", "Market Price Currency",
+  "Provider Price Variant", "Provider Market Price", "Pricing Checked At", "Product URL",
   "Event", "Image URL", "Notes"
 ];
 const itemKinds: ExportColumnKind[] = itemHeaders.map((header) =>
@@ -192,7 +192,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       transaction.cashReceived, transaction.cashPaid, transaction.bundleTotal ?? "", transaction.pricingMode,
       summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed,
       transaction.transactionType === "purchase" ? review.purchaseCostBasis : transaction.transactionType === "sale" && !review.basisComplete ? "" : review.basis,
-      transaction.transactionType === "sale" ? review.grossProfit ?? "" : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.estimatedGainLoss : "",
+      transaction.transactionType === "sale" ? review.grossProfit ?? "" : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.tradeGainLoss : "",
       operatingExpense || "", workerName(input.workers, transaction.enteredByWorkerId), workerName(input.workers, transaction.paidByWorkerId), transaction.notes || "",
       transaction.createdAt, transaction.updatedAt
     ];
@@ -218,6 +218,13 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     const inventory = inventoryById.get(item.inventoryPurchaseId || item.createdInventoryPurchaseId || "");
     const basisKnown = item.direction !== "outgoing" || hasKnownHistoricalCostBasis(item);
     const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.costBasis;
+    const isTrade = transaction.transactionType === "trade" || transaction.transactionType === "cash_trade";
+    const itemTradeGain = isTrade && item.direction === "incoming" ? tradeGainByIncomingItem(transaction).get(item.id) : undefined;
+    const currentInventory = inventory?.status === "in_stock" || inventory?.status === "partially_sold";
+    const remainingRatio = inventory ? Math.max(0, inventory.quantity - inventory.quantitySold) / Math.max(1, inventory.quantity) : 0;
+    const unrealized = currentInventory && inventory
+      ? roundMoney(Number(inventory.marketValue || 0) * remainingRatio - Number(inventory.totalCost || 0) * remainingRatio)
+      : undefined;
     return [
       transaction.id, item.id, transaction.tradeDate, transaction.transactionType, item.direction, item.itemName, pokemonCategoryLabels[item.itemType],
       item.quantity, item.inventoryPurchaseId || item.createdInventoryPurchaseId || "", inventory?.status || "", inventory?.acquisitionMethod || (item.direction === "incoming" ? transaction.transactionType : ""),
@@ -231,11 +238,13 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       item.gradingCompany || inventory?.gradingCompany || "",
       item.grade || inventory?.grade || "", item.certificateNumber || inventory?.certificateNumber || "", shareValue(item, input.workers, "gonzalo"),
       shareValue(item, input.workers, "thiago"), item.ownershipShares.filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
-      ownershipBreakdown(item, input.workers), item.marketValue, item.tradePercentage ?? "", item.agreedTradeValue, item.boughtPrice ?? "",
+      ownershipBreakdown(item, input.workers), inventory?.marketValue ?? item.marketValue, item.tradePercentage ?? "", isTrade ? tradeTimeValue(item) : item.agreedTradeValue, item.boughtPrice ?? "",
       basisKnown ? basis : "", ownerAllocatedCost(item, input.workers, "gonzalo"), ownerAllocatedCost(item, input.workers, "thiago"),
       item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null || !basisKnown ? "" : roundMoney(item.soldPrice - basis),
+      itemTradeGain ?? "", unrealized ?? "",
       item.marketPriceSource || inventory?.marketPriceSource || "", item.marketPriceCurrency || inventory?.marketPriceCurrency || "",
       item.marketPriceVariant || inventory?.marketPriceVariant || "", item.marketValue || inventory?.marketValue || "",
+      item.marketPriceCheckedAt || inventory?.marketPriceCheckedAt || "",
       item.tcgplayerUrl || inventory?.tcgplayerUrl || "", eventName(input.events, transaction.eventId),
       item.imageUrl || transaction.generalImageUrl || "", item.notes || ""
     ];
@@ -253,25 +262,46 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     sale.marketValue ?? "", "", "", "", sale.boughtPrice ?? "",
     roundMoney((sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("gonzalo")).reduce((sum, share) => sum + Number(sale.boughtPrice || 0) * share.ownershipPercentage / 100, 0)),
     roundMoney((sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("thiago")).reduce((sum, share) => sum + Number(sale.boughtPrice || 0) * share.ownershipPercentage / 100, 0)),
-    sale.soldPrice ?? "", "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)),
+    sale.soldPrice ?? "", "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)), "", "",
     sale.marketPriceSource || "", sale.marketPriceCurrency || "", sale.marketPriceVariant || "", sale.marketValue ?? "",
+    sale.marketPriceCheckedAt || "",
     sale.tcgplayerUrl || "", eventName(input.events, sale.eventId), sale.imageUrl || "", sale.notes || ""
   ]));
 
   const inventoryRows = filteredInventory.map((purchase) => {
     const summary = inventoryQuantitySummary(purchase, input.sales);
+    const acquisitionTrade = transactions.find((transaction) =>
+      transaction.id === purchase.acquiredFinancialTransactionId
+      || transaction.items.some((item) => item.createdInventoryPurchaseId === purchase.id)
+    );
+    const acquisitionItem = acquisitionTrade?.items.find((item) =>
+      item.createdInventoryPurchaseId === purchase.id || item.id === purchase.financialTransactionItemId
+    );
+    const tradeGain = acquisitionTrade && acquisitionItem
+      ? tradeGainByIncomingItem(acquisitionTrade).get(acquisitionItem.id)
+      : undefined;
+    const remainingRatio = Math.max(0, purchase.quantity - purchase.quantitySold) / Math.max(1, purchase.quantity);
+    const currentInventory = purchase.status === "in_stock" || purchase.status === "partially_sold";
+    const unrealized = currentInventory
+      ? roundMoney(Number(purchase.marketValue || 0) * remainingRatio - Number(purchase.totalCost || 0) * remainingRatio)
+      : undefined;
     return [
       purchase.id, purchase.purchaseDate, purchase.itemName, pokemonCategoryLabels[purchase.category], purchase.status, purchase.quantity,
-      summary.quantitySold, summary.quantityRemaining, purchase.totalCost, summary.costPerUnit, purchase.marketValue ?? "", summary.realizedRevenue,
-      summary.realizedCost, summary.realizedProfit, purchase.purchaseSource || "", purchase.acquisitionMethod || "", purchase.seller || "",
+      summary.quantitySold, summary.quantityRemaining, purchase.acquisitionMethod || "purchased",
+      acquisitionTrade ? Number(acquisitionItem?.boughtPrice ?? acquisitionItem?.cashAllocation ?? 0) : purchase.totalCost,
+      purchase.totalCost, summary.costPerUnit, purchase.marketValue ?? "",
+      acquisitionItem ? tradeTimeValue(acquisitionItem) : purchase.agreedTradeValue ?? "",
+      tradeGain ?? "", unrealized ?? "", summary.realizedRevenue,
+      summary.realizedCost, summary.quantitySold > 0 ? summary.realizedProfit : "", purchase.purchaseSource || "", purchase.seller || "",
       workerName(input.workers, purchase.purchasedByWorkerId), eventName(input.events, purchase.eventId),
+      (purchase.ownershipShares || []).map((share) => `${workerName(input.workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; "),
       purchase.cardGame || "", purchase.cardLanguage || "", purchase.dataProvider || "", purchase.providerCardId || "",
       purchase.cardCode || "", purchase.collectorNumber || "", purchase.cardSet || "", purchase.marketPriceSource || "",
-      purchase.marketPriceCurrency || "", purchase.cardRarity || "", purchase.cardCondition || "", purchase.gradingCompany || "", purchase.grade || "",
+      purchase.marketPriceCheckedAt || "", purchase.marketPriceCurrency || "", purchase.cardRarity || "", purchase.cardCondition || "", purchase.gradingCompany || "", purchase.grade || "",
       purchase.certificateNumber || "", purchase.imageUrl || purchase.frontImageUrl || "", purchase.notes || ""
     ];
   });
-  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Total Cost", "Cost Per Unit", "Market Value", "Realized Revenue", "Realized Cost", "Realized Profit", "Purchase Source", "Acquisition Method", "Seller", "Purchased By", "Event", "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Collector Number", "Set Name", "Market Price Source", "Market Price Currency", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
+  const inventoryHeaders = ["Inventory ID", "Purchase Date", "Item", "Category", "Status", "Quantity", "Quantity Sold", "Quantity Remaining", "Acquisition Method", "Cash Paid", "Cost Basis", "Cost Per Unit", "Current Market Value", "Trade-Time Market Value", "Trade Gain/Loss", "Unrealized Gain/Loss", "Realized Revenue", "Realized Cost", "Sale Profit", "Purchase Source", "Seller", "Purchased By", "Event", "Ownership Breakdown", "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Collector Number", "Set Name", "Pricing Source", "Pricing Checked At", "Market Price Currency", "Rarity", "Condition", "Grading Company", "Grade", "Certificate Number", "Image URL", "Notes"];
 
   const linkedExpenseIds = new Set(legacyExpenses.map((row) => row.financialTransactionId).filter(Boolean));
   const canonicalExpenses = transactions.filter((row) => row.transactionType === "expense" && !linkedExpenseIds.has(row.id)).map((transaction): BusinessExpense => ({
@@ -291,15 +321,16 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
 
   const tradeRows = transactions.filter((row) => row.transactionType === "trade" || row.transactionType === "cash_trade").map((transaction) => {
     const summary = tradeSummary(transaction);
+    const gainOwnership = Array.from(tradeGainOwnership(transaction), ([workerId, amount]) => `${workerName(input.workers, workerId) || workerId}: ${amount.toFixed(2)}`).join("; ");
     return [
       transaction.id, transaction.tradeDate, transaction.tradePartner || "", eventName(input.events, transaction.eventId),
       summary.outgoing.map((item) => item.itemName).join("; "), summary.incoming.map((item) => item.itemName).join("; "),
       summary.outgoing.length, summary.incoming.length, summary.outgoingMarket, summary.incomingMarket, summary.outgoingAgreed,
-      summary.incomingAgreed, transaction.cashPaid, transaction.cashReceived, summary.estimatedGainLoss,
-      transaction.items.map((item) => `${item.itemName}: ${ownershipBreakdown(item, input.workers)}`).join(" | "), transaction.status, transaction.notes || ""
+      summary.incomingAgreed, transaction.cashPaid, transaction.cashReceived, summary.tradeGainLoss,
+      transaction.items.map((item) => `${item.itemName}: ${ownershipBreakdown(item, input.workers)}`).join(" | "), gainOwnership, transaction.status, transaction.notes || ""
     ];
   });
-  const tradeHeaders = ["Transaction ID", "Date", "Trade Partner", "Event", "Items Given", "Items Received", "Outgoing Item Count", "Incoming Item Count", "Market Value Out", "Market Value In", "Agreed Value Out", "Agreed Value In", "Cash Paid", "Cash Received", "Estimated Trade Gain/Loss", "Ownership Summary", "Status", "Notes"];
+  const tradeHeaders = ["Transaction ID", "Date", "Trade Partner", "Event", "Items Given", "Items Received", "Outgoing Item Count", "Incoming Item Count", "Market Value Out", "Market Value In", "Agreed Value Out", "Trade-Time Market Value In", "Cash Paid", "Cash Received", "Trade Gain/Loss", "Ownership Summary", "Trade Gain Ownership", "Status", "Notes"];
 
   const unifiedSaleRecords: SalesRecord[] = transactions.filter((row) => row.transactionType === "sale").flatMap((transaction) => transaction.items.filter((item) => item.direction === "outgoing").map((item) => ({
     id: item.createdSalesRecordId || item.id, financialTransactionId: transaction.id, financialTransactionItemId: item.id,
@@ -352,7 +383,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       gonzaloProfit, thiagoProfit, sharedProfit, summary.overallEstimatedResult
     ];
   });
-  const dailyHeaders = ["Date", "Number of Sales", "Items Sold", "Cash Sales", "Digital Sales", "Gross Sales Revenue", "Cost Basis of Sold Items", "Realized Gross Profit", "Inventory Purchased", "Business Expenses", "Table Fees", "Trade Count", "Trade Value In", "Trade Value Out", "Cash Received from Trades", "Cash Paid in Trades", "Estimated Trade Gain/Loss", "Net Cash Flow", "Gonzalo Profit", "Thiago Profit", "Shared Profit", "Overall Daily Result"];
+  const dailyHeaders = ["Date", "Number of Sales", "Items Sold", "Cash Sales", "Digital Sales", "Sales Revenue", "Cost Basis of Sold Items", "Realized Sale Profit", "Inventory Purchased", "Business Expenses", "Table Fees", "Trade Count", "Trade Value In", "Trade Value Out", "Cash Received from Trades", "Cash Paid in Trades", "Trade Gain/Loss", "Net Cash Flow", "Gonzalo Profit", "Thiago Profit", "Shared Profit", "Overall Daily Result"];
 
   const ownerRows = input.workers.map((worker) => {
     const ownedItems = transactions.flatMap((row) => row.items).filter((item) => item.ownershipShares.some((share) => share.workerId === worker.id));

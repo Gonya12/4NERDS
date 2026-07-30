@@ -1,5 +1,6 @@
-import type { BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord } from "../types/models";
+import type { BusinessExpense, BusinessExpenseCategory, Event, InventoryPurchase, InventoryStatus, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, SalesRecord, TradeTransaction } from "../types/models";
 import { roundMoney } from "./paymentMath";
+import { tradeSummary } from "./tradeMath";
 
 export const pokemonCategoryLabels: Record<PokemonProductCategory, string> = {
   raw_card: "Raw Card",
@@ -119,15 +120,27 @@ export function inventoryStatusForQuantity(quantity: number, quantitySold: numbe
   return quantitySold >= quantity ? "sold" : "partially_sold";
 }
 
-export function financialOverview(sales: SalesRecord[], purchases: InventoryPurchase[], expenses: BusinessExpense[], events: Event[]) {
+export function financialOverview(sales: SalesRecord[], purchases: InventoryPurchase[], expenses: BusinessExpense[], events: Event[], trades: TradeTransaction[] = []) {
   const purchasesWithoutLinkedSales = purchases.filter((purchase) => !sales.some((sale) => sale.inventoryPurchaseId === purchase.id));
   const directInventoryRevenue = purchasesWithoutLinkedSales.reduce((sum, purchase) => sum + inventoryQuantitySummary(purchase, sales).realizedRevenue, 0);
   const directInventoryCost = purchasesWithoutLinkedSales.reduce((sum, purchase) => sum + inventoryQuantitySummary(purchase, sales).realizedCost, 0);
   const revenue = roundMoney(sales.reduce((sum, sale) => sum + Number(sale.soldPrice || 0), 0) + directInventoryRevenue);
   const costOfGoodsSold = roundMoney(sales.reduce((sum, sale) => sum + Number(sale.boughtPrice || 0), 0) + directInventoryCost);
   const grossProfit = roundMoney(revenue - costOfGoodsSold);
+  const realizedSaleProfit = grossProfit;
+  const realizedTradeGain = roundMoney(trades
+    .filter((trade) => trade.status === "completed" && (trade.transactionType === "trade" || trade.transactionType === "cash_trade"))
+    .reduce((sum, trade) => sum + tradeSummary(trade).tradeGainLoss, 0));
   const inventoryInvestment = roundMoney(purchases.reduce((sum, purchase) => sum + Number(purchase.totalCost || 0), 0));
   const unsoldInventoryCost = roundMoney(purchases.reduce((sum, purchase) => sum + inventoryQuantitySummary(purchase, sales).unsoldCost, 0));
+  const currentInventory = purchases.filter((purchase) => purchase.status === "in_stock" || purchase.status === "partially_sold");
+  const currentInventoryMarketValue = roundMoney(currentInventory.reduce((sum, purchase) => {
+    const remainingRatio = Math.max(0, purchase.quantity - purchase.quantitySold) / Math.max(1, purchase.quantity);
+    return sum + Number(purchase.marketValue || 0) * remainingRatio;
+  }, 0));
+  const currentInventoryCostBasis = roundMoney(currentInventory.reduce((sum, purchase) =>
+    sum + inventoryQuantitySummary(purchase, sales).unsoldCost, 0));
+  const unrealizedInventoryGain = roundMoney(currentInventoryMarketValue - currentInventoryCostBasis);
   const eventCostMap = new Map(events.map((event) => [event.id, selectedEventCost(event)]));
   const eventTableCosts = roundMoney(events.reduce((sum, event) => sum + selectedEventCost(event), 0));
   const duplicateTableExpenses = expenses.filter((expense) => expense.category === "event_table_fee" && expense.eventId && Number(eventCostMap.get(expense.eventId) || 0) > 0);
@@ -135,8 +148,13 @@ export function financialOverview(sales: SalesRecord[], purchases: InventoryPurc
     const duplicatesEventCost = expense.category === "event_table_fee" && expense.eventId && Number(eventCostMap.get(expense.eventId) || 0) > 0;
     return sum + (duplicatesEventCost ? 0 : Number(expense.amount || 0));
   }, 0));
-  const netProfit = roundMoney(grossProfit - eventTableCosts - operatingExpenses);
+  const netProfit = roundMoney(realizedSaleProfit + realizedTradeGain - eventTableCosts - operatingExpenses);
   const itemsSold = sales.reduce((sum, sale) => sum + Number(sale.quantity || 1), 0) + purchasesWithoutLinkedSales.reduce((sum, purchase) => sum + inventoryQuantitySummary(purchase, sales).quantitySold, 0);
   const itemsInStock = purchases.reduce((sum, purchase) => sum + inventoryQuantitySummary(purchase, sales).quantityRemaining, 0);
-  return { revenue, costOfGoodsSold, grossProfit, inventoryInvestment, unsoldInventoryCost, eventTableCosts, operatingExpenses, netProfit, itemsSold, itemsInStock, duplicateTableExpenses };
+  return {
+    revenue, costOfGoodsSold, grossProfit, realizedSaleProfit, realizedTradeGain,
+    inventoryInvestment, unsoldInventoryCost, currentInventoryMarketValue,
+    currentInventoryCostBasis, unrealizedInventoryGain, eventTableCosts,
+    operatingExpenses, netProfit, itemsSold, itemsInStock, duplicateTableExpenses
+  };
 }

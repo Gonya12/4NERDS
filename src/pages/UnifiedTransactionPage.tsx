@@ -597,8 +597,8 @@ export function UnifiedTransactionPage() {
               setEditing(item);
               updateItem(item);
             })}</label>
-            <label><span className="text-xs font-black">{transaction.transactionType === "sale" ? "Sold price" : "Bought price"}</span>{moneyInput(transaction.transactionType === "sale" ? editing.soldPrice : editing.boughtPrice, (value) => {
-              const item = transaction.transactionType === "sale" ? { ...editing, soldPrice: value } : { ...editing, boughtPrice: value, costBasis: value };
+            <label><span className="text-xs font-black">{transaction.transactionType === "sale" ? "Sold price" : "Cash paid"}</span>{moneyInput(transaction.transactionType === "sale" ? editing.soldPrice : editing.boughtPrice, (value) => {
+              const item = transaction.transactionType === "sale" ? { ...editing, soldPrice: value } : { ...editing, boughtPrice: value };
               setEditing(item);
               updateItem(item);
             })}</label>
