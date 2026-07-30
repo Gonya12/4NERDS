@@ -6,6 +6,7 @@ import { CardScanPanel } from "../components/sales/CardScanPanel";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { IncomingBatchPricing } from "../components/sales/IncomingBatchPricing";
 import { TransactionItemPricing } from "../components/sales/TransactionItemPricing";
+import { TransactionPurchaseReview } from "../components/sales/TransactionPurchaseReview";
 import { TransactionSaleReview } from "../components/sales/TransactionSaleReview";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
 import { ConfirmDialog, LoadingOverlay, ProgressSteps, ResponsiveModal, Toast, type ProgressStep } from "../components/sales/SalesDashboardPrimitives";
@@ -22,6 +23,10 @@ import {
   normalizeTransactionForApplication,
   transactionTypeDeveloperDebug
 } from "../services/database/financialTransactionType";
+import {
+  createLocalTransactionDraft,
+  migrateLocalTransactionDraft
+} from "../services/database/transactionDraft";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
@@ -29,7 +34,14 @@ import type { BusinessExpenseCategory, CardCondition, CardGame, CardLanguage, Ev
 import { formatMoney } from "../utils/paymentMath";
 import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
 import { expenseCategoryLabels, pokemonCategoryLabels, purchaseSourceLabels } from "../utils/salesControl";
-import { allocateTransactionTotal, hasKnownHistoricalCostBasis, missingHistoricalCostBasisItems, transactionReview, type AllocationMethod } from "../utils/transactionMath";
+import {
+  allocateTransactionTotal,
+  hasKnownHistoricalCostBasis,
+  missingHistoricalCostBasisItems,
+  purchaseAccountingValidationError,
+  transactionReview,
+  type AllocationMethod
+} from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 import { getAutoLinkEventForSale } from "../utils/saleEventLinking";
 
@@ -41,11 +53,9 @@ const saveSteps: ProgressStep[] = [
   { id: "inventory", label: "Updating inventory & ownership" },
   { id: "finalizing", label: "Finalizing records" }
 ];
-type LocalTransactionDraft = { transaction: TradeTransaction; step: number; savedAt: string };
 function readLocalTransactionDraft(key: string) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(key) || "null") as LocalTransactionDraft | null;
-    return parsed?.transaction?.id ? parsed : undefined;
+    return migrateLocalTransactionDraft(JSON.parse(localStorage.getItem(key) || "null"));
   } catch {
     return undefined;
   }
@@ -258,7 +268,7 @@ export function UnifiedTransactionPage() {
     if (draftAvailable || !hasUnsavedDraft || transaction.status !== "draft") return;
     const timer = window.setTimeout(() => {
       try {
-        localStorage.setItem(draftKey, JSON.stringify({ transaction, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+        localStorage.setItem(draftKey, JSON.stringify(createLocalTransactionDraft(transaction, step)));
       } catch {
         setToast({ message: "This draft is too large for local recovery, but you can still save it to Supabase.", tone: "warning" });
       }
@@ -330,6 +340,12 @@ export function UnifiedTransactionPage() {
       setStep(2);
       return;
     }
+    const purchaseAccountingError = purchaseAccountingValidationError(transaction);
+    if (purchaseAccountingError) {
+      setMessage(purchaseAccountingError);
+      setStep(2);
+      return;
+    }
     if (transaction.transactionType !== "expense" && relevant.some((item) => !ownershipIsValid(item))) { setMessage("Every item must have ownership totaling 100%."); return; }
     if (transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009) { setMessage("Allocate the complete bundle total before saving."); return; }
     setBusy(true);
@@ -356,7 +372,7 @@ export function UnifiedTransactionPage() {
     setBusy(true); setSaveStage("transaction");
     try {
       await saveTrade(transaction);
-      localStorage.setItem(draftKey, JSON.stringify({ transaction, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+      localStorage.setItem(draftKey, JSON.stringify(createLocalTransactionDraft(transaction, step)));
       setDraftSaveError("");
       setDraftSaveDebug("");
       setToast({ message: "Draft saved. You can safely return to it later.", tone: "success" });
@@ -387,7 +403,7 @@ export function UnifiedTransactionPage() {
         setSaveComplete(true);
         navigate("/sales", { replace: true });
       } else {
-        localStorage.setItem(draftKey, JSON.stringify({ transaction: persisted, step, savedAt: new Date().toISOString() } satisfies LocalTransactionDraft));
+        localStorage.setItem(draftKey, JSON.stringify(createLocalTransactionDraft(persisted, step)));
         setToast({ message: "Payment saved to the existing transaction. No duplicate draft was created.", tone: "success" });
       }
     } catch (error) {
@@ -509,14 +525,16 @@ export function UnifiedTransactionPage() {
       {transaction.transactionType === "purchase" && transaction.itemMode === "multiple" ? <IncomingBatchPricing items={transaction.items} mode="purchase" onApply={(items) => setTransaction({ ...transaction, items })} /> : null}
       <div className="space-y-2">{transaction.items.map((item) => <article key={item.id} className="surface-card grid gap-3 p-3 sm:grid-cols-[4rem_1fr_auto] sm:items-center">
         {item.imageUrl || transaction.generalImageUrl ? <img src={item.imageUrl || transaction.generalImageUrl} alt="" className="size-16 rounded-xl object-contain" /> : <div className="grid size-16 place-items-center rounded-xl bg-slate-100 text-slate-400"><PackagePlus size={20} /></div>}
-        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><b className="truncate">{item.itemName || "Details pending"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${item.direction === "outgoing" ? "bg-orange-100 text-orange-700" : item.direction === "incoming" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>{item.direction}</span>{item.cardGame ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black text-violet-700">{item.cardGame === "one_piece" ? "ONE PIECE" : item.cardLanguage === "ja" ? "POKÉMON · JA" : "POKÉMON · EN"}</span> : null}</div><div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 sm:grid-cols-4"><span>Qty <b className="text-slate-700">{item.quantity}</b></span><span>Market <b className="text-slate-700">{formatMoney(item.marketValue)}</b></span><span>Basis <b className="text-slate-700">{formatMoney(item.historicalCostBasis || item.allocatedCostBasis)}</b></span><span>{transaction.transactionType === "sale" ? "Sold" : "Cost"} <b className="text-slate-700">{formatMoney(transaction.transactionType === "sale" ? item.soldPrice || 0 : item.boughtPrice || 0)}</b></span></div><p className="mt-1 truncate text-xs text-slate-500">{item.cardCode || item.collectorNumber ? `#${item.cardCode || item.collectorNumber} · ` : ""}{item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><b className="truncate">{item.itemName || "Details pending"}</b><span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${item.direction === "outgoing" ? "bg-orange-100 text-orange-700" : item.direction === "incoming" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>{item.direction}</span>{item.cardGame ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black text-violet-700">{item.cardGame === "one_piece" ? "ONE PIECE" : item.cardLanguage === "ja" ? "POKÉMON · JA" : "POKÉMON · EN"}</span> : null}</div><div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 sm:grid-cols-4"><span>Qty <b className="text-slate-700">{item.quantity}</b></span><span>Market <b className="text-slate-700">{formatMoney(item.marketValue)}</b></span><span>Basis <b className="text-slate-700">{formatMoney(item.direction === "outgoing" ? item.historicalCostBasis : item.costBasis)}</b></span><span>{transaction.transactionType === "sale" ? "Sold" : "Cost"} <b className="text-slate-700">{formatMoney(transaction.transactionType === "sale" ? item.soldPrice || 0 : item.boughtPrice || 0)}</b></span></div><p className="mt-1 truncate text-xs text-slate-500">{item.cardCode || item.collectorNumber ? `#${item.cardCode || item.collectorNumber} · ` : ""}{item.ownershipShares.map((share) => `${workers.find((row) => row.id === share.workerId)?.name || "Owner"} ${share.ownershipPercentage}%`).join(", ") || "Ownership unassigned"}</p></div>
         <div className="flex items-center justify-end gap-1"><button type="button" onClick={() => setEditing(item)} className="min-h-10 rounded-lg bg-violet-100 px-3 text-xs font-black text-violet-700">Edit</button><button type="button" onClick={() => { const duplicateId = crypto.randomUUID(); const duplicate = { ...item, id: duplicateId, inventoryPurchaseId: undefined, zeroCostBasisConfirmed: false, images: item.images?.map((image) => ({ ...image, id: crypto.randomUUID(), transactionItemId: duplicateId })) }; setTransaction({ ...transaction, items: [...transaction.items, duplicate] }); }} aria-label={`Duplicate ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-slate-100"><Copy size={15} /></button><button type="button" onClick={() => setTransaction({ ...transaction, items: transaction.items.filter((row) => row.id !== item.id) })} aria-label={`Remove ${item.itemName || "item"}`} className="grid size-10 place-items-center rounded-lg bg-rose-50 text-rose-600"><Trash2 size={15} /></button></div>
       </article>)}</div>
     </section> : null}
 
     {step === 2 ? transaction.transactionType === "sale"
       ? <TransactionSaleReview transaction={transaction} workers={workers} onEditCostBasis={setEditing} />
-      : <section className="space-y-3"><div className="surface-card p-4"><p className="eyebrow">Transaction Review</p><h2 className="text-xl font-black">{typeLabel} · {transaction.items.length} item{transaction.items.length === 1 ? "" : "s"}</h2><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Cash received", 0],["Cash paid", transaction.transactionType === "purchase" ? review.bought : Number(transaction.bundleTotal || 0)],["Cost basis", review.basis],["Gross profit", review.grossProfit ?? 0]].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">{label}</small><b>{formatMoney(Number(value))}</b></div>)}</div>{transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009 ? <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Bundle allocation is off by {formatMoney(review.bundleDifference)}.</p> : null}{transaction.items.some((item) => transaction.transactionType !== "expense" && !ownershipIsValid(item)) ? <p className="mt-2 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">One or more item ownership splits do not total 100%.</p> : null}</div></section>
+      : transaction.transactionType === "purchase"
+        ? <TransactionPurchaseReview transaction={transaction} workers={workers} onEditItem={setEditing} />
+        : <section className="surface-card p-4"><p className="eyebrow">Business Cost Review</p><h2 className="text-xl font-black">{transaction.items.length} cost item{transaction.items.length === 1 ? "" : "s"}</h2><div className="mt-3 grid grid-cols-2 gap-2"><div className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">Cash paid</small><b>{formatMoney(Number(transaction.bundleTotal || transaction.cashPaid || 0))}</b></div><div className="rounded-xl bg-slate-100 p-3"><small className="block text-slate-500">Category</small><b>{transaction.expenseCategory ? expenseCategoryLabels[transaction.expenseCategory] : "General expense"}</b></div></div></section>
       : null}
 
     <ResponsiveModal
@@ -572,10 +590,15 @@ export function UnifiedTransactionPage() {
               updateItem(item);
             })}</label>
             <label><span className="text-xs font-black">{transaction.transactionType === "sale" ? "Sold price" : "Bought price"}</span>{moneyInput(transaction.transactionType === "sale" ? editing.soldPrice : editing.boughtPrice, (value) => {
-              const item = transaction.transactionType === "sale" ? { ...editing, soldPrice: value } : { ...editing, boughtPrice: value, allocatedCostBasis: value };
+              const item = transaction.transactionType === "sale" ? { ...editing, soldPrice: value } : { ...editing, boughtPrice: value, costBasis: value };
               setEditing(item);
               updateItem(item);
             })}</label>
+            {transaction.transactionType === "purchase" ? <label><span className="text-xs font-black">Item cost basis</span>{moneyInput(editing.costBasis, (costBasis) => {
+              const item = { ...editing, costBasis };
+              setEditing(item);
+              updateItem(item);
+            })}<small className="block text-slate-500">Defaults to the actual bought price. Change only when allocating a lot total.</small></label> : null}
             {transaction.transactionType === "sale" ? <div className="space-y-2">
               <label><span className="text-xs font-black">Original Cost Basis</span>
                 {editing.inventoryPurchaseId && hasKnownHistoricalCostBasis(editing) && editing.historicalCostBasis > 0
@@ -629,13 +652,13 @@ export function UnifiedTransactionPage() {
             }} className={input} /></label>
           </div>
           <TransactionItemPricing item={editing} context={transaction.transactionType === "sale" ? "sale" : "purchase"} onChange={(item) => { setEditing(item); updateItem(item); }} />
-          <OwnershipEditor workers={workers} shares={editing.ownershipShares} totalCost={transaction.transactionType === "sale" ? editing.historicalCostBasis : Number(editing.boughtPrice || 0)} onChange={(ownershipShares: OwnershipShare[]) => {
+          <OwnershipEditor workers={workers} shares={editing.ownershipShares} totalCost={transaction.transactionType === "sale" ? editing.historicalCostBasis : editing.costBasis} onChange={(ownershipShares: OwnershipShare[]) => {
             const item = { ...editing, ownershipShares };
             setEditing(item);
             updateItem(item);
           }} />
         </> : <label><span className="text-xs font-black">Amount</span>{moneyInput(editing.boughtPrice, (boughtPrice) => {
-          const item = { ...editing, boughtPrice, allocatedCostBasis: boughtPrice };
+          const item = { ...editing, boughtPrice, costBasis: boughtPrice };
           setEditing(item);
           setTransaction((current) => {
             const items = current.items.map((value) => value.id === item.id ? item : value);

@@ -5,7 +5,12 @@ import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership, saveSaleOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
-import { missingHistoricalCostBasisItems, transactionReview } from "../../utils/transactionMath";
+import {
+  missingHistoricalCostBasisItems,
+  purchaseAccountingValidationError,
+  transactionReview,
+  withAllocatedOwnershipCostBasis
+} from "../../utils/transactionMath";
 import { roundMoney } from "../../utils/paymentMath";
 import { buildFinancialTransactionPayload } from "./financialTransactionPayload";
 import {
@@ -18,6 +23,7 @@ import {
 } from "./databasePayloads";
 import { ownershipValidationError } from "../../utils/tradeMath";
 import { prepareTransactionForCompletion } from "./transactionReliability";
+import { migrateLocalTransactionDraft } from "./transactionDraft";
 import {
   mapTransactionTypeToApplicationValue,
   mapTransactionTypeToDatabaseValue,
@@ -51,12 +57,12 @@ type TransactionRow = {
 type ItemRow = {
   id: string; transaction_id: string; inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
   prior_inventory_purchase_id?: string | null; direction: TradeItem["direction"]; item_name: string; item_type: TradeItem["itemType"];
-  quantity: number; market_value: number; agreed_trade_value: number; historical_cost_basis: number; allocated_cost_basis: number;
-  cash_allocation?: number | null; image_url?: string | null; image_path?: string | null; back_image_url?: string | null; back_image_path?: string | null;
+  quantity: number; market_value: number; agreed_trade_value: number; cost_basis: number;
+  allocated_cash_amount?: number | null; image_url?: string | null; image_path?: string | null; back_image_url?: string | null; back_image_path?: string | null;
   collector_number?: string | null; card_set?: string | null; pokemon_tcg_card_id?: string | null; card_condition?: TradeItem["cardCondition"] | null;
   sticker_price?: number | null; grading_company?: string | null; grade?: string | null; certificate_number?: string | null;
   notes?: string | null; created_at: string; updated_at: string;
-  trade_percentage?: number | null; sold_price?: number | null; bought_price?: number | null;
+  trade_percentage?: number | null; sold_price?: number | null; purchase_price?: number | null;
   created_sales_record_id?: string | null; created_business_expense_id?: string | null;
   zero_cost_basis_confirmed?: boolean | null;
   card_set_id?: string | null; card_set_code?: string | null; card_rarity?: string | null; card_game?: TradeItem["cardGame"] | null; card_language?: string | null;
@@ -136,9 +142,10 @@ const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem =>
   createdInventoryPurchaseId: row.created_inventory_purchase_id || undefined, priorInventoryPurchaseId: row.prior_inventory_purchase_id || undefined,
   direction: row.direction, itemName: row.item_name, itemType: row.item_type, quantity: Number(row.quantity || 1),
   marketValue: Number(row.market_value || 0), agreedTradeValue: Number(row.agreed_trade_value || 0),
-  historicalCostBasis: Number(row.historical_cost_basis || 0), zeroCostBasisConfirmed: row.zero_cost_basis_confirmed === true,
-  allocatedCostBasis: Number(row.allocated_cost_basis || 0),
-  cashAllocation: row.cash_allocation == null ? undefined : Number(row.cash_allocation), imageUrl: row.image_url || undefined,
+  historicalCostBasis: row.direction === "outgoing" ? Number(row.cost_basis || 0) : 0,
+  zeroCostBasisConfirmed: row.zero_cost_basis_confirmed === true,
+  costBasis: Number(row.cost_basis || 0),
+  cashAllocation: row.allocated_cash_amount == null ? undefined : Number(row.allocated_cash_amount), imageUrl: row.image_url || undefined,
   imagePath: row.image_path || undefined, backImageUrl: row.back_image_url || undefined, backImagePath: row.back_image_path || undefined,
   collectorNumber: row.collector_number || undefined, cardSet: row.card_set || undefined, cardSetId: row.card_set_id || undefined,
   cardSetCode: row.card_set_code || undefined, cardRarity: row.card_rarity || undefined, cardGame: row.card_game || undefined, cardLanguage: row.card_language || undefined,
@@ -154,7 +161,7 @@ const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem =>
   gradingCompany: row.grading_company || undefined, grade: row.grade || undefined, certificateNumber: row.certificate_number || undefined,
   notes: row.notes || undefined, ownershipShares: shares, createdAt: row.created_at, updatedAt: row.updated_at
   , tradePercentage: row.trade_percentage == null ? undefined : Number(row.trade_percentage),
-  soldPrice: row.sold_price == null ? undefined : Number(row.sold_price), boughtPrice: row.bought_price == null ? undefined : Number(row.bought_price),
+  soldPrice: row.sold_price == null ? undefined : Number(row.sold_price), boughtPrice: row.purchase_price == null ? undefined : Number(row.purchase_price),
   createdSalesRecordId: row.created_sales_record_id || undefined, createdBusinessExpenseId: row.created_business_expense_id || undefined
 });
 
@@ -165,11 +172,17 @@ export function blankTrade(): TradeTransaction {
 
 export function blankTradeItem(tradeId: string, direction: TradeItem["direction"]): TradeItem {
   const timestamp = nowIso();
-  return { id: id("trade-item"), tradeTransactionId: tradeId, direction, itemName: "", itemType: "raw_card", quantity: 1, marketValue: 0, agreedTradeValue: 0, historicalCostBasis: 0, allocatedCostBasis: 0, ownershipShares: [], createdAt: timestamp, updatedAt: timestamp };
+  return { id: id("trade-item"), tradeTransactionId: tradeId, direction, itemName: "", itemType: "raw_card", quantity: 1, marketValue: 0, agreedTradeValue: 0, historicalCostBasis: 0, costBasis: 0, ownershipShares: [], createdAt: timestamp, updatedAt: timestamp };
 }
 
 function normalizeStoredTransaction(transaction: TradeTransaction) {
-  return normalizeTransactionForApplication(transaction);
+  const migrated = migrateLocalTransactionDraft({
+    version: 1,
+    transaction,
+    step: 0,
+    savedAt: transaction.updatedAt
+  });
+  return normalizeTransactionForApplication(migrated?.transaction || transaction);
 }
 
 export function getCachedTrades() {
@@ -408,7 +421,15 @@ export async function saveTrade(input: TradeTransaction, options?: {
   syncOwnership?: boolean;
 }) {
   const normalizedInput = normalizeTransactionForApplication(input);
-  const trade = { ...normalizedInput, updatedAt: nowIso(), items: normalizedInput.items.map((item) => ({ ...item, tradeTransactionId: normalizedInput.id, updatedAt: nowIso() })) };
+  const trade = {
+    ...normalizedInput,
+    updatedAt: nowIso(),
+    items: normalizedInput.items.map((item) => withAllocatedOwnershipCostBasis({
+      ...item,
+      tradeTransactionId: normalizedInput.id,
+      updatedAt: nowIso()
+    }))
+  };
   if (!isSupabaseConfigured || !supabase) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
     write(localKey, values); write(cacheKey, values); return trade;
@@ -586,7 +607,7 @@ async function claimOutgoingInventory(
 function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partial<InventoryPurchase> {
   return {
     id: item.createdInventoryPurchaseId, itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0,
-    purchaseDate: trade.tradeDate, totalCost: item.allocatedCostBasis, marketValue: item.marketValue, purchaseSource: "trade",
+    purchaseDate: trade.tradeDate, totalCost: item.costBasis, marketValue: item.marketValue, purchaseSource: "trade",
     seller: trade.tradePartner, eventId: trade.eventId, purchasedByWorkerId: trade.enteredByWorkerId, status: "in_stock",
     isRawCard: item.itemType === "raw_card", cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
     cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardGame: item.cardGame, cardLanguage: item.cardLanguage,
@@ -650,6 +671,8 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   if (normalizedInput.status !== "draft") throw new Error("Only a draft transaction can be completed.");
   const missingBasis = missingHistoricalCostBasisItems(normalizedInput);
   if (missingBasis.length) throw new Error(`Cost basis required for: ${missingBasis.map((item) => item.itemName || "Unnamed item").join(", ")}.`);
+  const purchaseAccountingError = purchaseAccountingValidationError(normalizedInput);
+  if (purchaseAccountingError) throw new Error(purchaseAccountingError);
   validateTransactionOwnership(normalizedInput);
   const timestamp = nowIso();
   let transaction = prepareTransactionForCompletion(normalizedInput);
@@ -699,11 +722,11 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
     if (!items.length) throw new Error("Add at least one purchased item.");
     onProgress?.("inventory");
     if (transaction.keepAsBundle && items.length > 1) {
-      const totalCost = items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0);
+      const totalCost = items.reduce((sum, item) => sum + Number(item.costBasis || 0), 0);
       const totalMarketValue = items.reduce((sum, item) => sum + Number(item.marketValue || 0), 0);
       const ownership = new Map<string, number>();
       items.forEach((item) => {
-        const weight = totalCost > 0 ? Number(item.boughtPrice || item.allocatedCostBasis || 0) / totalCost : 1 / items.length;
+        const weight = totalCost > 0 ? Number(item.costBasis || 0) / totalCost : 1 / items.length;
         item.ownershipShares.forEach((share) => ownership.set(share.workerId, (ownership.get(share.workerId) || 0) + share.ownershipPercentage * weight));
       });
       const ownershipShares = Array.from(ownership, ([workerId, ownershipPercentage]) => ({
@@ -730,7 +753,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
       const saved = await saveInventoryPurchase({
         id: item.createdInventoryPurchaseId,
         itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
-        totalCost: item.boughtPrice || item.allocatedCostBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
+        totalCost: item.costBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
         purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
         purchasedByWorkerId: transaction.paidByWorkerId, notes: item.notes || transaction.notes, status: "in_stock",
         cardName: item.itemName, collectorNumber: item.collectorNumber, cardSet: item.cardSet, pokemonTcgCardId: item.pokemonTcgCardId,
@@ -751,7 +774,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         await saveInventoryOwnership(saved.id, item.ownershipShares);
       }
     }
-    transaction.cashPaid = transaction.items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0);
+    transaction.cashPaid = transaction.items.reduce((sum, item) => sum + Number(item.costBasis || 0), 0);
   } else {
     const amount = transaction.bundleTotal ?? transaction.cashPaid;
     const expense = await saveBusinessExpense({

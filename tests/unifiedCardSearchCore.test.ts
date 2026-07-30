@@ -89,7 +89,7 @@ function item(overrides: Partial<TradeItem>): TradeItem {
     marketValue: 10,
     agreedTradeValue: 10,
     historicalCostBasis: 0,
-    allocatedCostBasis: 0,
+    costBasis: 0,
     ownershipShares: [],
     createdAt: now,
     updatedAt: now,

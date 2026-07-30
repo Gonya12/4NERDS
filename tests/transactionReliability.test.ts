@@ -5,11 +5,21 @@ import type { TradeItem, TradeTransaction } from "../src/types/models.ts";
 import {
   buildTransactionImagePayload,
   buildTransactionItemPayload,
+  buildTransactionOwnershipPayload,
   buildTransactionPaymentPayload,
   buildTransactionPaymentPayloads
 } from "../src/services/database/databasePayloads.ts";
 import { prepareTransactionForCompletion } from "../src/services/database/transactionReliability.ts";
+import {
+  allocateOwnershipCostBasis,
+  allocateTransactionTotal,
+  purchaseAccountingValidationError
+} from "../src/utils/transactionMath.ts";
 import { ownershipValidationError } from "../src/utils/tradeMath.ts";
+import {
+  LOCAL_TRANSACTION_DRAFT_VERSION,
+  migrateLocalTransactionDraft
+} from "../src/services/database/transactionDraft.ts";
 
 const timestamp = "2026-07-29T12:00:00.000Z";
 
@@ -24,7 +34,7 @@ function item(id: string, direction: TradeItem["direction"]): TradeItem {
     marketValue: 10,
     agreedTradeValue: 10,
     historicalCostBasis: 4,
-    allocatedCostBasis: 4,
+    costBasis: 4,
     ownershipShares: [{ workerId: "20000000-0000-4000-8000-000000000000", ownershipPercentage: 100 }],
     createdAt: timestamp,
     updatedAt: timestamp
@@ -97,7 +107,92 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   assert.equal(payload.tcgplayer_url, source.tcgplayerUrl);
   assert.deepEqual(payload.tcgplayer_pricing, source.tcgplayerPricing);
   assert.equal(payload.target_buy_price, 8.64);
+  assert.equal(payload.cost_basis, source.historicalCostBasis);
+  assert.equal("allocated_cost_basis" in payload, false);
+  assert.equal("historical_cost_basis" in payload, false);
+  assert.equal("bought_price" in payload, false);
+  assert.equal("cash_allocation" in payload, false);
   assert.equal("entry_mode" in payload, false);
+});
+
+test("single purchase stores item cost separately from its owner allocation", () => {
+  const purchaseItem = {
+    ...item("30000000-0000-4000-8000-000000000017", "incoming"),
+    boughtPrice: 80,
+    costBasis: 80
+  };
+  const itemPayload = buildTransactionItemPayload(purchaseItem);
+  const [share] = allocateOwnershipCostBasis(purchaseItem.ownershipShares, purchaseItem.costBasis);
+  const ownershipPayload = buildTransactionOwnershipPayload(purchaseItem.id, share, timestamp);
+  assert.equal(itemPayload.purchase_price, 80);
+  assert.equal(itemPayload.cost_basis, 80);
+  assert.equal("allocated_cost_basis" in itemPayload, false);
+  assert.equal(ownershipPayload.allocated_cost_basis, 80);
+});
+
+test("50/50 ownership allocation totals the item cost basis exactly", () => {
+  const shares = allocateOwnershipCostBasis([
+    { workerId: "gonzalo", ownershipPercentage: 50 },
+    { workerId: "thiago", ownershipPercentage: 50 }
+  ], 100);
+  assert.deepEqual(shares.map((share) => share.allocatedCostBasis), [50, 50]);
+  assert.equal(shares.reduce((sum, share) => sum + Number(share.allocatedCostBasis), 0), 100);
+});
+
+test("lot purchase item costs and owner allocations total the final lot price", () => {
+  const items = allocateTransactionTotal([
+    { ...item("lot-a", "incoming"), itemName: "A", marketValue: 100 },
+    { ...item("lot-b", "incoming"), itemName: "B", marketValue: 80 },
+    { ...item("lot-c", "incoming"), itemName: "C", marketValue: 70 }
+  ], 200, "market", "boughtPrice");
+  const lot = {
+    ...transaction("purchase", items),
+    pricingMode: "bundle_total" as const,
+    bundleTotal: 200
+  };
+  assert.equal(items.reduce((sum, row) => sum + row.costBasis, 0), 200);
+  assert.equal(items.reduce((sum, row) => sum + Number(row.boughtPrice), 0), 200);
+  assert.equal(purchaseAccountingValidationError(lot), "");
+  for (const row of items) {
+    const ownerTotal = allocateOwnershipCostBasis(row.ownershipShares, row.costBasis)
+      .reduce((sum, share) => sum + Number(share.allocatedCostBasis), 0);
+    assert.equal(ownerTotal, row.costBasis);
+  }
+});
+
+test("legacy purchase draft migrates obsolete item cost without touching images or owner allocations", () => {
+  const migrated = migrateLocalTransactionDraft({
+    version: 1,
+    step: 2,
+    savedAt: timestamp,
+    transaction: {
+      ...transaction("purchase", []),
+      items: [{
+        ...item("legacy-purchase", "incoming"),
+        costBasis: undefined,
+        allocated_cost_basis: 80,
+        images: [{
+          id: "image-1",
+          transactionId: "10000000-0000-4000-8000-000000000000",
+          transactionItemId: "legacy-purchase",
+          imageType: "front",
+          imageUrl: "blob:preserved",
+          sortOrder: 0
+        }],
+        ownershipShares: [{
+          workerId: "thiago",
+          ownershipPercentage: 100,
+          allocatedCostBasis: 80
+        }]
+      }]
+    }
+  });
+  assert.equal(migrated?.version, LOCAL_TRANSACTION_DRAFT_VERSION);
+  assert.equal(migrated?.transaction.items[0].costBasis, 80);
+  assert.equal(migrated?.transaction.items[0].images?.[0].imageUrl, "blob:preserved");
+  assert.equal(migrated?.transaction.items[0].ownershipShares[0].allocatedCostBasis, 80);
+  assert.equal("allocated_cost_basis" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("allocatedCostBasis" in (migrated?.transaction.items[0] || {}), false);
 });
 
 test("ownership validation rejects duplicates and accepts one exact 100 percent share", () => {
@@ -115,6 +210,11 @@ test("ownership validation rejects duplicates and accepts one exact 100 percent 
 
 test("reconciliation migration is additive and uses only canonical transaction tables", () => {
   const sql = readFileSync(new URL("../supabase/migrations/20260729120000_unified_transaction_reconciliation.sql", import.meta.url), "utf8");
+  const bootstrap = readFileSync(new URL("../unified-multi-item-transactions.sql", import.meta.url), "utf8");
+  const itemTableSql = sql.split("create table if not exists public.financial_transaction_items")[1]
+    ?.split("create table if not exists public.transaction_item_ownership_shares")[0] || "";
+  const bootstrapItemTableSql = bootstrap.split("create table if not exists public.financial_transaction_items")[1]
+    ?.split("create table if not exists public.transaction_item_ownership_shares")[0] || "";
   assert.doesNotMatch(sql, /\b(drop\s+table|truncate\s+table|drop\s+column)\b/i);
   assert.doesNotMatch(sql, /\b(add\s+column\s+(?:if\s+not\s+exists\s+)?entry_mode|create\s+table\s+(?:if\s+not\s+exists\s+)?public\.(?:trade_transactions|trade_items|sales_transactions|purchase_transactions|multi_sale_items))\b/i);
   for (const table of [
@@ -128,6 +228,13 @@ test("reconciliation migration is additive and uses only canonical transaction t
   ]) {
     assert.match(sql, new RegExp(`public\\.${table}\\b`));
   }
+  assert.match(itemTableSql, /\bcost_basis\s+numeric\b/);
+  assert.match(itemTableSql, /\bpurchase_price\s+numeric\b/);
+  assert.match(itemTableSql, /\ballocated_cash_amount\s+numeric\b/);
+  assert.doesNotMatch(itemTableSql, /\ballocated_cost_basis\b/);
+  assert.doesNotMatch(itemTableSql, /\bhistorical_cost_basis\b|\bbought_price\b|\bcash_allocation\b/);
+  assert.match(bootstrapItemTableSql, /\bcost_basis\s+numeric\b/);
+  assert.doesNotMatch(bootstrapItemTableSql, /\ballocated_cost_basis\b|\bhistorical_cost_basis\b|\bbought_price\b|\bcash_allocation\b/);
   assert.match(sql, /notify\s+pgrst,\s*'reload schema'/i);
 });
 

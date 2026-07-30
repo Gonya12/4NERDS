@@ -67,7 +67,8 @@ const itemHeaders = [
   "Card Game", "Card Language", "Data Provider", "Provider Card ID", "Card Code", "Pokémon TCG Card ID",
   "Collector Number", "Set", "Rarity", "Condition", "Grading Company", "Grade",
   "Certificate Number", "Owner Gonzalo %", "Owner Thiago %", "Other Ownership", "Ownership Breakdown",
-  "Market Value", "Trade Percentage", "Agreed Trade Value", "Bought Price", "Cost Basis", "Sold Price",
+  "Market Value", "Trade Percentage", "Agreed Trade Value", "Purchase Price", "Item Cost Basis",
+  "Gonzalo Allocated Cost", "Thiago Allocated Cost", "Sold Price",
   "Allocated Cash Amount", "Gross Profit", "Market Price Source", "Market Price Currency",
   "Provider Price Variant", "Provider Market Price", "Product URL",
   "Event", "Image URL", "Notes"
@@ -102,6 +103,15 @@ function shareValue(item: TradeItem, workers: Worker[], name: string) {
 
 function ownershipBreakdown(item: TradeItem, workers: Worker[]) {
   return item.ownershipShares.map((share) => `${workerName(workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; ");
+}
+
+function ownerAllocatedCost(item: TradeItem, workers: Worker[], name: string) {
+  const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.costBasis;
+  return roundMoney(item.ownershipShares
+    .filter((share) => workerName(workers, share.workerId).toLowerCase().includes(name))
+    .reduce((sum, share) => sum + Number(
+      share.allocatedCostBasis ?? basis * share.ownershipPercentage / 100
+    ), 0));
 }
 
 function cardMetadataMatches(
@@ -174,13 +184,14 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     const review = transactionReview(transaction);
     const summary = tradeSummary(transaction);
     const parts = dateParts(transaction.tradeDate);
-    const operatingExpense = transaction.transactionType === "expense" ? Number(transaction.bundleTotal || transaction.items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0)) : 0;
+    const operatingExpense = transaction.transactionType === "expense" ? Number(transaction.bundleTotal || transaction.items.reduce((sum, item) => sum + Number(item.costBasis || 0), 0)) : 0;
     return [
       transaction.id, parts.date, parts.time, transaction.transactionType,
       transaction.purchaseSource || transaction.expenseCategory || "", transaction.status, transaction.itemMode, transaction.items.length,
       transaction.tradePartner || "", eventName(input.events, transaction.eventId), transaction.eventDayId || "", transaction.paymentMethod || "",
       transaction.cashReceived, transaction.cashPaid, transaction.bundleTotal ?? "", transaction.pricingMode,
-      summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed, transaction.transactionType === "sale" && !review.basisComplete ? "" : review.basis,
+      summary.incomingMarket, summary.outgoingMarket, summary.incomingAgreed, summary.outgoingAgreed,
+      transaction.transactionType === "purchase" ? review.purchaseCostBasis : transaction.transactionType === "sale" && !review.basisComplete ? "" : review.basis,
       transaction.transactionType === "sale" ? review.grossProfit ?? "" : "", ["trade", "cash_trade"].includes(transaction.transactionType) ? summary.estimatedGainLoss : "",
       operatingExpense || "", workerName(input.workers, transaction.enteredByWorkerId), workerName(input.workers, transaction.paidByWorkerId), transaction.notes || "",
       transaction.createdAt, transaction.updatedAt
@@ -192,7 +203,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   });
   legacyPurchases.filter((purchase) => filters.recordType !== "inventory").forEach((purchase) => {
     const parts = dateParts(purchase.purchaseDate);
-    transactionRows.push([purchase.id, parts.date, parts.time, "purchase", purchase.purchaseSource || "legacy-compatible", purchase.status, "single", 1, purchase.seller || "", eventName(input.events, purchase.eventId), "", "", "", purchase.totalCost, "", "individual", purchase.marketValue ?? "", "", purchase.agreedTradeValue ?? "", "", "", "", "", "", "", workerName(input.workers, purchase.purchasedByWorkerId), purchase.notes || "", purchase.createdAt, purchase.updatedAt]);
+    transactionRows.push([purchase.id, parts.date, parts.time, "purchase", purchase.purchaseSource || "legacy-compatible", purchase.status, "single", 1, purchase.seller || "", eventName(input.events, purchase.eventId), "", "", "", purchase.totalCost, "", "individual", purchase.marketValue ?? "", "", purchase.agreedTradeValue ?? "", "", purchase.totalCost, "", "", "", "", workerName(input.workers, purchase.purchasedByWorkerId), purchase.notes || "", purchase.createdAt, purchase.updatedAt]);
   });
   legacyExpenses.forEach((expense) => {
     const parts = dateParts(expense.expenseDate);
@@ -206,7 +217,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     .map((item) => {
     const inventory = inventoryById.get(item.inventoryPurchaseId || item.createdInventoryPurchaseId || "");
     const basisKnown = item.direction !== "outgoing" || hasKnownHistoricalCostBasis(item);
-    const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.allocatedCostBasis;
+    const basis = item.direction === "outgoing" ? item.historicalCostBasis : item.costBasis;
     return [
       transaction.id, item.id, transaction.tradeDate, transaction.transactionType, item.direction, item.itemName, pokemonCategoryLabels[item.itemType],
       item.quantity, item.inventoryPurchaseId || item.createdInventoryPurchaseId || "", inventory?.status || "", inventory?.acquisitionMethod || (item.direction === "incoming" ? transaction.transactionType : ""),
@@ -219,7 +230,8 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
       item.grade || inventory?.grade || "", item.certificateNumber || inventory?.certificateNumber || "", shareValue(item, input.workers, "gonzalo"),
       shareValue(item, input.workers, "thiago"), item.ownershipShares.filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
       ownershipBreakdown(item, input.workers), item.marketValue, item.tradePercentage ?? "", item.agreedTradeValue, item.boughtPrice ?? "",
-      basisKnown ? basis : "", item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null || !basisKnown ? "" : roundMoney(item.soldPrice - basis),
+      basisKnown ? basis : "", ownerAllocatedCost(item, input.workers, "gonzalo"), ownerAllocatedCost(item, input.workers, "thiago"),
+      item.soldPrice ?? "", item.cashAllocation ?? "", item.soldPrice == null || !basisKnown ? "" : roundMoney(item.soldPrice - basis),
       item.marketPriceSource || inventory?.marketPriceSource || "", item.marketPriceCurrency || inventory?.marketPriceCurrency || "",
       item.marketPriceVariant || inventory?.marketPriceVariant || "", item.marketValue || inventory?.marketValue || "",
       item.tcgplayerUrl || inventory?.tcgplayerUrl || "", eventName(input.events, transaction.eventId),
@@ -235,7 +247,10 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
     (sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("thiago")).reduce((sum, share) => sum + share.ownershipPercentage, 0),
     (sale.ownershipShares || []).filter((share) => !["gonzalo", "thiago"].some((name) => workerName(input.workers, share.workerId).toLowerCase().includes(name))).reduce((sum, share) => sum + share.ownershipPercentage, 0),
     (sale.ownershipShares || []).map((share) => `${workerName(input.workers, share.workerId) || share.workerId} ${share.ownershipPercentage}%`).join("; "),
-    sale.marketValue ?? "", "", "", "", sale.boughtPrice ?? "", sale.soldPrice ?? "", "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)),
+    sale.marketValue ?? "", "", "", "", sale.boughtPrice ?? "",
+    roundMoney((sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("gonzalo")).reduce((sum, share) => sum + Number(sale.boughtPrice || 0) * share.ownershipPercentage / 100, 0)),
+    roundMoney((sale.ownershipShares || []).filter((share) => workerName(input.workers, share.workerId).toLowerCase().includes("thiago")).reduce((sum, share) => sum + Number(sale.boughtPrice || 0) * share.ownershipPercentage / 100, 0)),
+    sale.soldPrice ?? "", "", roundMoney(Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)),
     sale.marketPriceSource || "", sale.marketPriceCurrency || "", sale.marketPriceVariant || "", sale.marketValue ?? "",
     sale.tcgplayerUrl || "", eventName(input.events, sale.eventId), sale.imageUrl || "", sale.notes || ""
   ]));
@@ -258,7 +273,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   const linkedExpenseIds = new Set(legacyExpenses.map((row) => row.financialTransactionId).filter(Boolean));
   const canonicalExpenses = transactions.filter((row) => row.transactionType === "expense" && !linkedExpenseIds.has(row.id)).map((transaction): BusinessExpense => ({
     id: transaction.id, expenseDate: transaction.tradeDate,
-    amount: Number(transaction.bundleTotal || transaction.items.reduce((sum, item) => sum + Number(item.boughtPrice || item.allocatedCostBasis || 0), 0)),
+    amount: Number(transaction.bundleTotal || transaction.items.reduce((sum, item) => sum + Number(item.costBasis || 0), 0)),
     category: transaction.expenseCategory || "other", description: transaction.items.map((item) => item.itemName).filter(Boolean).join("; ") || "Business expense",
     eventId: transaction.eventId, paidByWorkerId: transaction.paidByWorkerId, vendor: transaction.tradePartner,
     receiptImageUrl: transaction.proofImageUrl || transaction.generalImageUrl, notes: transaction.notes,
@@ -298,7 +313,7 @@ export function buildFinancialExportData(input: FinancialExportInput, filters: F
   const unifiedPurchaseRecords: InventoryPurchase[] = transactions.filter((row) => row.transactionType === "purchase").flatMap((transaction) => transaction.items.filter((item) => item.direction === "incoming").map((item) => ({
     id: item.createdInventoryPurchaseId || item.id, financialTransactionId: transaction.id, financialTransactionItemId: item.id,
     itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
-    totalCost: Number(item.boughtPrice || item.allocatedCostBasis || 0), marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
+    totalCost: Number(item.costBasis || 0), marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
     cardGame: item.cardGame, cardLanguage: item.cardLanguage, dataProvider: item.dataProvider, providerCardId: item.providerCardId,
     cardCode: item.cardCode, collectorNumber: item.collectorNumber, cardSet: item.cardSet,
     marketPriceSource: item.marketPriceSource, marketPriceCurrency: item.marketPriceCurrency,

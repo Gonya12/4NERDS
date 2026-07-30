@@ -6,7 +6,7 @@ import { allocateBasis, ownershipIsValid, tradeSummary } from "../src/utils/trad
 const item = (direction: "outgoing" | "incoming", name: string, agreed: number, market: number, basis: number): TradeItem => ({
   id: crypto.randomUUID(), tradeTransactionId: "00000000-0000-0000-0000-000000000001", direction,
   itemName: name, itemType: "raw_card", quantity: 1, marketValue: market, agreedTradeValue: agreed,
-  historicalCostBasis: direction === "outgoing" ? basis : 0, allocatedCostBasis: direction === "incoming" ? basis : 0,
+  historicalCostBasis: direction === "outgoing" ? basis : 0, costBasis: direction === "incoming" ? basis : 0,
   ownershipShares: [{ workerId: "00000000-0000-0000-0000-000000000002", ownershipPercentage: 100 }],
   createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
 });
@@ -33,7 +33,7 @@ test("cash adjustment is counted once as trade cash", () => {
 test("multi-item basis allocation totals exactly with rounding", () => {
   const incoming = [item("incoming", "A", 20, 20, 0), item("incoming", "B", 30, 30, 0), item("incoming", "C", 50, 50, 0)];
   const allocated = allocateBasis(73.37, incoming, "market");
-  assert.equal(allocated.reduce((sum, row) => sum + row.allocatedCostBasis, 0), 73.37);
+  assert.equal(allocated.reduce((sum, row) => sum + row.costBasis, 0), 73.37);
 });
 
 test("ownership requires exactly one hundred percent", () => {

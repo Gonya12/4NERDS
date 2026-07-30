@@ -297,7 +297,7 @@ export interface TradeItem {
   agreedTradeValue: number;
   historicalCostBasis: number;
   zeroCostBasisConfirmed?: boolean;
-  allocatedCostBasis: number;
+  costBasis: number;
   cashAllocation?: number;
   tradePercentage?: number;
   soldPrice?: number;

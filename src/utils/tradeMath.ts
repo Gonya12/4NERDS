@@ -2,7 +2,7 @@ import type { TradeItem, TradeTransaction } from "../types/models";
 
 const roundMoney = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
-const total = (items: TradeItem[], key: "marketValue" | "agreedTradeValue" | "historicalCostBasis" | "allocatedCostBasis") =>
+const total = (items: TradeItem[], key: "marketValue" | "agreedTradeValue" | "historicalCostBasis" | "costBasis") =>
   roundMoney(items.reduce((sum, item) => sum + Number(item[key] || 0), 0));
 
 export function tradeSummary(trade: Pick<TradeTransaction, "items" | "cashPaid" | "cashReceived">) {
@@ -13,7 +13,7 @@ export function tradeSummary(trade: Pick<TradeTransaction, "items" | "cashPaid" 
   const outgoingCostBasis = total(outgoing, "historicalCostBasis");
   const incomingMarket = total(incoming, "marketValue");
   const incomingAgreed = total(incoming, "agreedTradeValue");
-  const incomingCostBasis = total(incoming, "allocatedCostBasis");
+  const incomingCostBasis = total(incoming, "costBasis");
   const cashPaid = roundMoney(Number(trade.cashPaid || 0));
   const cashReceived = roundMoney(Number(trade.cashReceived || 0));
   const agreedDifference = roundMoney(incomingAgreed + cashReceived - outgoingAgreed - cashPaid);
@@ -37,7 +37,7 @@ export function allocateBasis(totalBasis: number, items: TradeItem[], method: "m
       ? roundMoney(totalBasis - allocated)
       : roundMoney(totalBasis * (weightTotal ? Math.max(0, weights[index]) / weightTotal : 1 / Math.max(1, items.length)));
     allocated = roundMoney(allocated + value);
-    return { ...item, allocatedCostBasis: value };
+    return { ...item, costBasis: value };
   });
 }
 

@@ -66,12 +66,11 @@ export type FinancialTransactionItemRow = {
   market_value: number;
   agreed_trade_value: number;
   trade_percentage: number | null;
-  historical_cost_basis: number;
+  cost_basis: number;
   zero_cost_basis_confirmed: boolean;
-  allocated_cost_basis: number;
   sold_price: number | null;
-  bought_price: number | null;
-  cash_allocation: number | null;
+  purchase_price: number | null;
+  allocated_cash_amount: number | null;
   image_url: string | null;
   image_path: string | null;
   back_image_url: string | null;

@@ -7,7 +7,7 @@ const now = "2026-07-29T12:00:00.000Z";
 const item = (name: string, market: number, basis: number, owner = "gonzalo"): TradeItem => ({
   id: crypto.randomUUID(), tradeTransactionId: crypto.randomUUID(), direction: "outgoing", itemName: name,
   itemType: "raw_card", quantity: 1, marketValue: market, agreedTradeValue: 0, historicalCostBasis: basis,
-  allocatedCostBasis: 0, ownershipShares: [{ workerId: owner, ownershipPercentage: 100 }], createdAt: now, updatedAt: now
+  costBasis: 0, ownershipShares: [{ workerId: owner, ownershipPercentage: 100 }], createdAt: now, updatedAt: now
 });
 const transaction = (items: TradeItem[]): TradeTransaction => ({
   id: crypto.randomUUID(), tradeDate: now, transactionType: "sale", itemMode: "multiple", pricingMode: "bundle_total",
@@ -56,7 +56,7 @@ test("zero cost basis is accepted only after explicit confirmation", () => {
 });
 
 test("purchase payer and item owner produce an unsettled balance suggestion", () => {
-  const incoming = { ...item("Lot card", 100, 0, "gonzalo"), direction: "incoming" as const, boughtPrice: 100 };
+  const incoming = { ...item("Lot card", 100, 0, "gonzalo"), direction: "incoming" as const, boughtPrice: 100, costBasis: 100 };
   const purchase: TradeTransaction = { ...transaction([incoming]), transactionType: "purchase", paidByWorkerId: "thiago" };
   const review = transactionReview(purchase);
   assert.deepEqual(review.internalBalances, [{ owedByWorkerId: "gonzalo", owedToWorkerId: "thiago", amount: 100 }]);
@@ -64,7 +64,7 @@ test("purchase payer and item owner produce an unsettled balance suggestion", ()
 
 test("daily summary excludes trade market value from cash revenue", () => {
   const outgoing = { ...item("A", 100, 40), agreedTradeValue: 80 };
-  const incoming = { ...item("B", 100, 0), direction: "incoming" as const, agreedTradeValue: 80, allocatedCostBasis: 40 };
+  const incoming = { ...item("B", 100, 0), direction: "incoming" as const, agreedTradeValue: 80, costBasis: 40 };
   const trade: TradeTransaction = { ...transaction([outgoing, incoming]), transactionType: "cash_trade", status: "completed", cashReceived: 50, bundleTotal: undefined };
   const summary = dailyFinancialSummary("2026-07-29", [], [], [], [trade]);
   assert.equal(summary.cashSales, 0);

@@ -1,8 +1,66 @@
-import type { BusinessExpense, InventoryPurchase, SalesRecord, TradeItem, TradeTransaction } from "../types/models";
+import type { BusinessExpense, InventoryPurchase, SalesRecord, TradeItem, TradeItemOwnershipShare, TradeTransaction } from "../types/models";
 
 const roundMoney = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 export type AllocationMethod = "market" | "equal" | "cost" | "custom";
+
+export function itemCostBasis(item: TradeItem) {
+  return roundMoney(item.direction === "outgoing" ? Number(item.historicalCostBasis || 0) : Number(item.costBasis || 0));
+}
+
+export function allocateOwnershipCostBasis(
+  shares: TradeItemOwnershipShare[],
+  costBasis: number
+): TradeItemOwnershipShare[] {
+  let allocated = 0;
+  return shares.map((share, index) => {
+    const amount = index === shares.length - 1
+      ? roundMoney(costBasis - allocated)
+      : roundMoney(costBasis * Number(share.ownershipPercentage || 0) / 100);
+    allocated = roundMoney(allocated + amount);
+    return { ...share, allocatedCostBasis: amount };
+  });
+}
+
+export function withAllocatedOwnershipCostBasis(item: TradeItem): TradeItem {
+  return {
+    ...item,
+    ownershipShares: allocateOwnershipCostBasis(item.ownershipShares, itemCostBasis(item))
+  };
+}
+
+export function purchaseAccountingValidationError(transaction: TradeTransaction) {
+  if (transaction.transactionType !== "purchase") return "";
+  const items = transaction.items.filter((item) => item.direction === "incoming");
+  if (!items.length) return "Add at least one purchased item.";
+  if (!transaction.id?.trim()) return "Save the transaction draft before completing the purchase.";
+  const itemWithoutId = items.find((item) => !item.id?.trim());
+  if (itemWithoutId) return `${itemWithoutId.itemName || "A purchased item"} must be saved before ownership is assigned.`;
+  const missingPurchasePrice = items.find((item) => !Number.isFinite(Number(item.boughtPrice)) || Number(item.boughtPrice) <= 0);
+  if (missingPurchasePrice) return `Purchase price required for: ${missingPurchasePrice.itemName || "Unnamed item"}.`;
+  const missingCostBasis = items.find((item) => !Number.isFinite(Number(item.costBasis)) || Number(item.costBasis) <= 0);
+  if (missingCostBasis) return `Cost basis required for: ${missingCostBasis.itemName || "Unnamed item"}.`;
+  const purchaseTotal = roundMoney(items.reduce((sum, item) => sum + Number(item.boughtPrice || 0), 0));
+  const costBasisTotal = roundMoney(items.reduce((sum, item) => sum + Number(item.costBasis || 0), 0));
+  const transactionAmount = transaction.pricingMode === "bundle_total"
+    ? roundMoney(Number(transaction.bundleTotal || 0))
+    : purchaseTotal;
+  if (transactionAmount <= 0) return "Enter the actual purchase amount.";
+  if (Math.abs(purchaseTotal - transactionAmount) > 0.009) {
+    return `Item purchase prices must total ${transactionAmount.toFixed(2)}.`;
+  }
+  if (Math.abs(costBasisTotal - transactionAmount) > 0.009) {
+    return `Item cost bases must total the transaction amount of ${transactionAmount.toFixed(2)}.`;
+  }
+  for (const item of items) {
+    const shares = allocateOwnershipCostBasis(item.ownershipShares, item.costBasis);
+    const ownerTotal = roundMoney(shares.reduce((sum, share) => sum + Number(share.allocatedCostBasis || 0), 0));
+    if (Math.abs(ownerTotal - Number(item.costBasis)) > 0.009) {
+      return `Owner allocated costs for ${item.itemName || "Unnamed item"} must total its item cost basis.`;
+    }
+  }
+  return "";
+}
 
 export function hasKnownHistoricalCostBasis(item: TradeItem) {
   const basis = Number(item.historicalCostBasis);
@@ -24,7 +82,7 @@ export function allocateTransactionTotal(items: TradeItem[], total: number, meth
       ? roundMoney(total - used)
       : roundMoney(total * (weightTotal ? Math.max(0, weights[index]) / weightTotal : 1 / Math.max(1, items.length)));
     used = roundMoney(used + allocated);
-    return { ...item, [field]: allocated, ...(field === "boughtPrice" ? { allocatedCostBasis: allocated } : {}) };
+    return { ...item, [field]: allocated, ...(field === "boughtPrice" ? { costBasis: allocated } : {}) };
   });
 }
 
@@ -33,6 +91,9 @@ export function transactionReview(transaction: TradeTransaction) {
   const incoming = transaction.items.filter((item) => item.direction === "incoming");
   const sold = roundMoney(outgoing.reduce((sum, item) => sum + Number(item.soldPrice || 0), 0));
   const bought = roundMoney(incoming.reduce((sum, item) => sum + Number(item.boughtPrice || 0), 0));
+  const purchaseCostBasis = roundMoney(incoming.reduce((sum, item) => sum + Number(item.costBasis || 0), 0));
+  const marketValue = roundMoney(incoming.reduce((sum, item) => sum + Number(item.marketValue || 0), 0));
+  const potentialMargin = roundMoney(marketValue - purchaseCostBasis);
   const missingCostBasisItems = missingHistoricalCostBasisItems(transaction);
   const basisComplete = missingCostBasisItems.length === 0;
   const basis = roundMoney(outgoing.reduce((sum, item) => sum + (hasKnownHistoricalCostBasis(item) ? Number(item.historicalCostBasis) : 0), 0));
@@ -50,11 +111,26 @@ export function transactionReview(transaction: TradeTransaction) {
       if (share.workerId === transaction.paidByWorkerId) return;
       const key = `${share.workerId}:${transaction.paidByWorkerId}`;
       const current = internalBalances.get(key) || { owedByWorkerId: share.workerId, owedToWorkerId: transaction.paidByWorkerId!, amount: 0 };
-      current.amount = roundMoney(current.amount + Number(item.boughtPrice || item.allocatedCostBasis || 0) * share.ownershipPercentage / 100);
+      current.amount = roundMoney(current.amount + Number(item.costBasis || 0) * share.ownershipPercentage / 100);
       internalBalances.set(key, current);
     }));
   }
-  return { outgoing, incoming, sold, bought, basis, basisComplete, missingCostBasisItems, grossProfit, ownerProfit, bundleDifference, internalBalances: Array.from(internalBalances.values()) };
+  return {
+    outgoing,
+    incoming,
+    sold,
+    bought,
+    basis,
+    purchaseCostBasis,
+    marketValue,
+    potentialMargin,
+    basisComplete,
+    missingCostBasisItems,
+    grossProfit,
+    ownerProfit,
+    bundleDifference,
+    internalBalances: Array.from(internalBalances.values())
+  };
 }
 
 export function dailyFinancialSummary(date: string, sales: SalesRecord[], purchases: InventoryPurchase[], expenses: BusinessExpense[], transactions: TradeTransaction[]) {

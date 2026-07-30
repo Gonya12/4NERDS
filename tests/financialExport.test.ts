@@ -46,3 +46,17 @@ test("CSV and XLSX shared item schemas include provider-neutral card metadata", 
     assert.ok(source.includes(`"${header}"`), `${header} column is required`);
   }
 });
+
+test("item exports distinguish item cost basis from owner cost allocations", () => {
+  const source = readFileSync(new URL("../src/services/sales/financialExportService.ts", import.meta.url), "utf8");
+  for (const header of [
+    "Purchase Price",
+    "Item Cost Basis",
+    "Gonzalo Allocated Cost",
+    "Thiago Allocated Cost",
+    "Ownership Breakdown",
+  ]) {
+    assert.ok(source.includes(`"${header}"`), `${header} column is required`);
+  }
+  assert.ok(!source.includes('"Allocated Cost Basis"'));
+});

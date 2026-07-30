@@ -7,7 +7,7 @@ import type { TradeItem } from "../src/types/models.ts";
 const item: TradeItem = {
   id: "item-1", tradeTransactionId: "transaction-1", direction: "incoming", itemName: "Manual name",
   itemType: "raw_card", quantity: 1, marketValue: 42, agreedTradeValue: 0, historicalCostBasis: 19,
-  allocatedCostBasis: 0, ownershipShares: [{ id: "share-1", workerId: "worker-1", ownershipPercentage: 100 }],
+  costBasis: 0, ownershipShares: [{ id: "share-1", workerId: "worker-1", ownershipPercentage: 100 }],
   createdAt: "2026-07-29T00:00:00.000Z", updatedAt: "2026-07-29T00:00:00.000Z",
 };
 
