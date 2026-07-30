@@ -15,6 +15,11 @@ function removeUndefinedFields<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
 }
 
+function nullableUuid(value?: string) {
+  const normalized = value?.trim();
+  return normalized || null;
+}
+
 export type FinancialTransactionItemPayload = FinancialTransactionItemRow;
 
 export function buildTransactionItemPayload(item: TradeItem): FinancialTransactionItemPayload {
@@ -27,8 +32,8 @@ export function buildTransactionItemPayload(item: TradeItem): FinancialTransacti
     id: item.id,
     transaction_id: item.tradeTransactionId,
     direction: item.direction,
-    inventory_purchase_id: item.inventoryPurchaseId || null,
-    created_inventory_purchase_id: item.createdInventoryPurchaseId || null,
+    source_inventory_purchase_id: item.direction === "outgoing" ? nullableUuid(item.inventoryPurchaseId) : null,
+    created_inventory_purchase_id: item.direction === "incoming" ? nullableUuid(item.createdInventoryPurchaseId) : null,
     created_sales_record_id: item.createdSalesRecordId || null,
     created_business_expense_id: item.createdBusinessExpenseId || null,
     prior_inventory_purchase_id: item.priorInventoryPurchaseId || null,
@@ -73,6 +78,7 @@ export function buildTransactionItemPayload(item: TradeItem): FinancialTransacti
     cost_basis_is_estimate: item.costBasisIsEstimate === true,
     card_condition: item.cardCondition || null,
     sticker_price: item.stickerPrice ?? null,
+    sticker_condition: item.stickerCondition || null,
     grading_company: item.gradingCompany || null,
     grade: item.grade || null,
     certificate_number: item.certificateNumber || null,

@@ -61,7 +61,7 @@ export function applyCardSuggestionToItem(item: TradeItem, suggestion: CardScanS
       : suggestion.dataProvider ? undefined : suggestion.pokemonTcgCardId || item.pokemonTcgCardId,
     officialCardImageUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.officialImageUrl || item.officialCardImageUrl,
     tcgplayerUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerUrl || suggestion.tcgplayerPricing?.url || item.tcgplayerUrl,
-    cardCondition: suggestion.condition || item.cardCondition,
+    stickerCondition: suggestion.condition || item.stickerCondition,
     stickerPrice: suggestion.stickerPrice ?? item.stickerPrice,
     gradingCompany: suggestion.gradingCompany || item.gradingCompany,
     grade: suggestion.grade || item.grade,

@@ -2,7 +2,7 @@ import {
   ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, Copy, Link2,
   PackagePlus, RefreshCcw, RotateCcw, Save, Search, Trash2, Upload, X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ErrorState } from "../components/ErrorState";
 import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
@@ -21,7 +21,7 @@ import {
   normalizeTransactionForApplication,
   transactionTypeDeveloperDebug
 } from "../services/database/financialTransactionType";
-import { migrateLocalTransactionDraft } from "../services/database/transactionDraft";
+import { migrateLocalTransactionDraft, sanitizeTransactionInventoryLinks } from "../services/database/transactionDraft";
 import { getCachedInventoryPurchases, listInventoryPurchases } from "../services/database/inventoryPurchaseRepository";
 import { listOwnershipShares } from "../services/database/ownershipRepository";
 import { listWorkers } from "../services/database/workerRepository";
@@ -62,7 +62,7 @@ function localInput(value: string) {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
-function money(value: number, onChange: (value: number) => void) {
+function money(value: number | undefined, onChange: (value: number) => void) {
   return <input type="number" min="0" step="0.01" value={value || ""} onChange={(event) => onChange(Math.max(0, Number(event.target.value || 0)))} className={inputClass} />;
 }
 function statusClass(status: TradeTransaction["status"]) {
@@ -101,6 +101,7 @@ export function TradePage() {
   }>();
   const [recoverableDraft, setRecoverableDraft] = useState<LocalTradeDraft | undefined>(() => readLocalTradeDraft());
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
+  const completionInFlight = useRef(false);
 
   useEffect(() => {
     if (searchParams.get("new") && import.meta.env.DEV) console.info("[transaction-flow] editor mounted", { type: searchParams.get("new"), mode: searchParams.get("items") || "multiple" });
@@ -216,6 +217,8 @@ export function TradePage() {
     const incoming = editor.items.filter((item) => item.direction === "incoming");
     if (incoming.some((item) => !ownershipIsValid(item))) { setMessage("Assign ownership totaling 100% to every incoming item."); setStep(4); return; }
     if (incoming.some((item) => !item.itemName.trim())) { setMessage("Every incoming item needs a name."); setStep(2); return; }
+    if (completionInFlight.current) return;
+    completionInFlight.current = true;
     setPaymentRetry(undefined);
     setSaving(true); setMessage(""); setSaveComplete(false); setSaveStage("transaction");
     try {
@@ -232,7 +235,7 @@ export function TradePage() {
       setSaveDebug(transactionTypeDeveloperDebug(caught) || "");
       if (isTransactionPaymentSaveError(caught)) setPaymentRetry({ error: caught, operation: "complete" });
     }
-    finally { setSaving(false); setSaveStage(undefined); setSaveComplete(false); }
+    finally { completionInFlight.current = false; setSaving(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function retryPaymentOnly() {
     if (!paymentRetry) return;
@@ -289,7 +292,10 @@ export function TradePage() {
         <p className="text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(recoverableDraft.savedAt).toLocaleString()}.</p>
         <div className="mt-2 flex gap-2"><button type="button" onClick={() => {
           try {
-            setEditor(normalizeTransactionForApplication(recoverableDraft.trade));
+            setEditor(sanitizeTransactionInventoryLinks(
+              normalizeTransactionForApplication(recoverableDraft.trade),
+              inventory.map((row) => row.id)
+            ));
             setStep(recoverableDraft.step);
             setRecoverableDraft(undefined);
             setSaveDebug("");
@@ -485,7 +491,8 @@ function TradeEditor(props: EditorProps) {
       marketPriceUpdatedAt: purchase.marketPriceUpdatedAt, marketPriceCheckedAt: purchase.marketPriceCheckedAt,
       tcgplayerPricing: pricingFromInventory(purchase), targetBuyPercentage: purchase.buyPercentage,
       targetBuyPrice: purchase.targetBuyPrice, cardSelectionSource: "inventory" as const,
-      cardCondition: purchase.cardCondition, gradingCompany: purchase.gradingCompany, grade: purchase.grade,
+      cardCondition: purchase.cardCondition, stickerPrice: purchase.stickerPrice, stickerCondition: purchase.cardCondition,
+      gradingCompany: purchase.gradingCompany, grade: purchase.grade,
       certificateNumber: purchase.certificateNumber, ownershipShares: purchase.ownershipShares || []
     };
     update({ items: [...trade.items, item] });
@@ -574,7 +581,7 @@ function TradeEditor(props: EditorProps) {
     >
       {editingItem ? <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Card game</span><select value={editingItem.cardGame || "other"} onChange={(event) => { const cardGame = event.target.value as CardGame; const cardLanguage: CardLanguage = cardGame === "pokemon" ? "en" : cardGame === "one_piece" ? "en" : "unknown"; const item = { ...editingItem, cardGame, cardLanguage, dataProvider: "manual" as const, providerCardId: undefined, pokemonTcgCardId: undefined, cardCode: undefined, officialCardImageUrl: undefined, tcgplayerUrl: undefined, marketPriceSource: "Manual", marketPriceVariant: undefined, marketPriceUpdatedAt: undefined, marketPriceCheckedAt: undefined, tcgplayerPricing: undefined }; setEditingItem(item); updateItem(item); }} className={inputClass}><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option><option value="other">Other / Manual</option></select></label>{editingItem.cardGame !== "one_piece" && editingItem.cardGame !== "other" && editingItem.cardGame != null ? <label><span className="text-xs font-black">Printing language</span><select value={editingItem.cardLanguage === "ja" ? "ja" : "en"} onChange={(event) => { const cardLanguage = event.target.value as Extract<CardLanguage, "en" | "ja">; const item = { ...editingItem, cardGame: "pokemon" as const, cardLanguage, dataProvider: "manual" as const, providerCardId: undefined, pokemonTcgCardId: undefined, officialCardImageUrl: undefined, tcgplayerUrl: undefined, marketPriceSource: "Manual", marketPriceVariant: undefined, marketPriceUpdatedAt: undefined, marketPriceCheckedAt: undefined, tcgplayerPricing: undefined }; setEditingItem(item); updateItem(item); }} className={inputClass}><option value="en">English</option><option value="ja">Japanese / 日本語</option></select></label> : <div className="self-end rounded-xl bg-slate-100 p-3 text-xs font-bold">{editingItem.cardGame === "one_piece" ? "English · search with OPTCG API" : "Manual metadata"}</div>}</div>
-      <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Item name</span><input value={editingItem.itemName} onChange={(event) => { const item = { ...editingItem, itemName: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Item type</span><select value={editingItem.itemType} onChange={(event) => { const item = { ...editingItem, itemType: event.target.value as PokemonProductCategory }; setEditingItem(item); updateItem(item); }} className={inputClass}>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Quantity</span><input type="number" min="1" value={editingItem.quantity} onChange={(event) => { const item = { ...editingItem, quantity: Math.max(1, Number(event.target.value)) }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Collector number</span><input value={editingItem.collectorNumber || ""} onChange={(event) => { const item = { ...editingItem, collectorNumber: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Set</span><input value={editingItem.cardSet || ""} onChange={(event) => { const item = { ...editingItem, cardSet: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Market Value</span>{money(editingItem.marketValue, (marketValue) => { const item = { ...editingItem, marketValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "incoming" ? "Accepted Trade Value" : "Agreed Trade Value"}</span>{money(editingItem.agreedTradeValue, (agreedTradeValue) => { const item = { ...editingItem, agreedTradeValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "outgoing" ? "Original Cost Basis" : "Item Cost Basis"}</span>{editingItem.direction === "outgoing" && editingItem.inventoryPurchaseId ? <><input type="number" value={editingItem.historicalCostBasis} readOnly className={`${inputClass} bg-slate-100`} /><small className="block text-slate-500">Historical cost basis loaded from inventory</small></> : money(editingItem.direction === "outgoing" ? editingItem.historicalCostBasis : editingItem.costBasis, (value) => { const item = editingItem.direction === "outgoing" ? { ...editingItem, historicalCostBasis: value } : { ...editingItem, costBasis: value }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Grading company</span><input value={editingItem.gradingCompany || ""} onChange={(event) => { const item = { ...editingItem, gradingCompany: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Grade / certificate</span><input value={[editingItem.grade, editingItem.certificateNumber].filter(Boolean).join(" / ")} onChange={(event) => { const [grade, certificateNumber] = event.target.value.split("/").map((value) => value.trim()); const item = { ...editingItem, grade, certificateNumber }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label></div>
+      <div className="grid gap-3 sm:grid-cols-2"><label><span className="text-xs font-black">Item name</span><input value={editingItem.itemName} onChange={(event) => { const item = { ...editingItem, itemName: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Item type</span><select value={editingItem.itemType} onChange={(event) => { const item = { ...editingItem, itemType: event.target.value as PokemonProductCategory }; setEditingItem(item); updateItem(item); }} className={inputClass}>{Object.entries(pokemonCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span className="text-xs font-black">Quantity</span><input type="number" min="1" value={editingItem.quantity} onChange={(event) => { const item = { ...editingItem, quantity: Math.max(1, Number(event.target.value)) }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Collector number</span><input value={editingItem.collectorNumber || ""} onChange={(event) => { const item = { ...editingItem, collectorNumber: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Set</span><input value={editingItem.cardSet || ""} onChange={(event) => { const item = { ...editingItem, cardSet: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Market Value</span>{money(editingItem.marketValue, (marketValue) => { const item = { ...editingItem, marketValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "incoming" ? "Accepted Trade Value" : "Agreed Trade Value"}</span>{money(editingItem.agreedTradeValue, (agreedTradeValue) => { const item = { ...editingItem, agreedTradeValue }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">{editingItem.direction === "outgoing" ? "Original Cost Basis" : "Item Cost Basis"}</span>{editingItem.direction === "outgoing" && editingItem.inventoryPurchaseId ? <><input type="number" value={editingItem.historicalCostBasis} readOnly className={`${inputClass} bg-slate-100`} /><small className="block text-slate-500">Historical cost basis loaded from inventory</small></> : money(editingItem.direction === "outgoing" ? editingItem.historicalCostBasis : editingItem.costBasis, (value) => { const item = editingItem.direction === "outgoing" ? { ...editingItem, historicalCostBasis: value } : { ...editingItem, costBasis: value }; setEditingItem(item); updateItem(item); })}</label><label><span className="text-xs font-black">Visible sticker condition</span><input value={editingItem.stickerCondition || ""} onChange={(event) => { const item = { ...editingItem, stickerCondition: (event.target.value || undefined) as TradeItem["stickerCondition"] }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Visible sticker price</span>{money(editingItem.stickerPrice, (stickerPrice) => { const item = { ...editingItem, stickerPrice }; setEditingItem(item); updateItem(item); })}<small className="block text-slate-500">Reference only; accounting values change only in their own fields.</small></label><label><span className="text-xs font-black">Grading company</span><input value={editingItem.gradingCompany || ""} onChange={(event) => { const item = { ...editingItem, gradingCompany: event.target.value }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label><label><span className="text-xs font-black">Grade / certificate</span><input value={[editingItem.grade, editingItem.certificateNumber].filter(Boolean).join(" / ")} onChange={(event) => { const [grade, certificateNumber] = event.target.value.split("/").map((value) => value.trim()); const item = { ...editingItem, grade, certificateNumber }; setEditingItem(item); updateItem(item); }} className={inputClass} /></label></div>
       <TransactionItemPricing item={editingItem} context={editingItem.direction === "incoming" ? "trade-incoming" : "trade-outgoing"} onChange={(item) => { setEditingItem(item); updateItem(item); }} />
       <ImageAttachmentField
         label="Item front / detail photos"

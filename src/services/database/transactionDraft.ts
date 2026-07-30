@@ -1,6 +1,6 @@
 import type { TradeItem, TradeTransaction } from "../../types/models";
 
-export const LOCAL_TRANSACTION_DRAFT_VERSION = 3;
+export const LOCAL_TRANSACTION_DRAFT_VERSION = 4;
 
 export type LocalTransactionDraft = {
   version: number;
@@ -15,6 +15,14 @@ type LegacyTransactionItem = Partial<TradeItem> & {
   set_name?: unknown;
   card_set?: unknown;
   setName?: unknown;
+  sticker_price?: unknown;
+  asking_price?: unknown;
+  visible_sticker_price?: unknown;
+  askingPrice?: unknown;
+  visibleStickerPrice?: unknown;
+  sticker_condition?: unknown;
+  visible_sticker_condition?: unknown;
+  visibleStickerCondition?: unknown;
 };
 
 function migrateItem(item: LegacyTransactionItem): TradeItem {
@@ -24,6 +32,14 @@ function migrateItem(item: LegacyTransactionItem): TradeItem {
     set_name: canonicalSetName,
     card_set: legacyCardSet,
     setName: legacyCamelCaseSetName,
+    sticker_price: canonicalStickerPrice,
+    asking_price: legacyAskingPrice,
+    visible_sticker_price: legacyVisibleStickerPrice,
+    askingPrice: legacyCamelCaseAskingPrice,
+    visibleStickerPrice: legacyCamelCaseVisibleStickerPrice,
+    sticker_condition: canonicalStickerCondition,
+    visible_sticker_condition: legacyVisibleStickerCondition,
+    visibleStickerCondition: legacyCamelCaseVisibleStickerCondition,
     ...current
   } = item;
   const hasCurrentCostBasis = current.costBasis !== undefined && current.costBasis !== null;
@@ -41,9 +57,26 @@ function migrateItem(item: LegacyTransactionItem): TradeItem {
     ?? legacyCamelCaseSetName
     ?? ""
   ).trim();
+  const stickerPriceValue = Number(
+    current.stickerPrice
+    ?? canonicalStickerPrice
+    ?? legacyAskingPrice
+    ?? legacyVisibleStickerPrice
+    ?? legacyCamelCaseAskingPrice
+    ?? legacyCamelCaseVisibleStickerPrice
+  );
+  const stickerCondition = String(
+    current.stickerCondition
+    ?? canonicalStickerCondition
+    ?? legacyVisibleStickerCondition
+    ?? legacyCamelCaseVisibleStickerCondition
+    ?? ""
+  ).trim();
   return {
     ...current,
     cardSet: cardSet || undefined,
+    stickerPrice: Number.isFinite(stickerPriceValue) && stickerPriceValue >= 0 ? stickerPriceValue : undefined,
+    stickerCondition: stickerCondition || undefined,
     costBasis: hasCurrentCostBasis && Number.isFinite(existingCostBasis)
       ? existingCostBasis
       : Number.isFinite(migratedCostBasis) ? migratedCostBasis : 0
@@ -65,6 +98,27 @@ export function migrateLocalTransactionDraft(value: unknown): LocalTransactionDr
     transaction,
     step: Math.max(0, Number(draft.step) || 0),
     savedAt: String(draft.savedAt || new Date().toISOString())
+  };
+}
+
+export function sanitizeTransactionInventoryLinks(
+  transaction: TradeTransaction,
+  existingInventoryIds: Iterable<string>
+): TradeTransaction {
+  const existing = new Set(existingInventoryIds);
+  return {
+    ...transaction,
+    items: transaction.items.map((item) => ({
+      ...item,
+      inventoryPurchaseId: item.direction === "outgoing" && item.inventoryPurchaseId && existing.has(item.inventoryPurchaseId)
+        ? item.inventoryPurchaseId
+        : undefined,
+      createdInventoryPurchaseId: item.direction === "incoming"
+        && item.createdInventoryPurchaseId
+        && existing.has(item.createdInventoryPurchaseId)
+        ? item.createdInventoryPurchaseId
+        : undefined
+    }))
   };
 }
 

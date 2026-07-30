@@ -40,6 +40,8 @@ test("CSV and XLSX shared item schemas include provider-neutral card metadata", 
     "Card Code",
     "Collector Number",
     "Set Name",
+    "Sticker Price",
+    "Sticker Condition",
     "Market Price Source",
     "Market Price Currency",
   ]) {

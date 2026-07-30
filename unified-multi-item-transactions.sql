@@ -32,7 +32,7 @@ create table if not exists public.financial_transaction_items (
   id uuid primary key,
   transaction_id uuid not null references public.financial_transactions(id) on delete cascade,
   direction text not null check (direction in ('outgoing','incoming','expense')),
-  inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
+  source_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
   created_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
   created_sales_record_id uuid references public.sales_records(id) on delete set null,
   created_business_expense_id uuid references public.business_expenses(id) on delete set null,
@@ -57,6 +57,7 @@ create table if not exists public.financial_transaction_items (
   pokemon_tcg_card_id text,
   card_condition text,
   sticker_price numeric(12,2),
+  sticker_condition text,
   grading_company text,
   grade text,
   certificate_number text,
@@ -153,7 +154,7 @@ create index if not exists idx_financial_transactions_type_date on public.financ
 create index if not exists idx_financial_transactions_status on public.financial_transactions(status);
 create index if not exists idx_financial_transactions_event on public.financial_transactions(event_id);
 create index if not exists idx_financial_transaction_items_transaction on public.financial_transaction_items(transaction_id);
-create index if not exists idx_financial_transaction_items_inventory on public.financial_transaction_items(inventory_purchase_id);
+create index if not exists idx_financial_transaction_items_source_inventory on public.financial_transaction_items(source_inventory_purchase_id);
 create index if not exists idx_financial_transaction_items_name on public.financial_transaction_items(item_name);
 create unique index if not exists uq_transaction_item_owner on public.transaction_item_ownership_shares(transaction_item_id, worker_id);
 create unique index if not exists uq_transaction_payment_direction_method on public.transaction_payments(transaction_id, direction, payment_method);

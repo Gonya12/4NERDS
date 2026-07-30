@@ -14,7 +14,7 @@ function suggestionForItem(item: TradeItem): CardScanSuggestion {
   return {
     suggestedType: item.itemType === "graded_card" ? "graded_card" : "raw_card",
     cardName: item.itemName || null, collectorNumber: item.collectorNumber || null, cardSet: item.cardSet || null,
-    language: item.cardLanguage || null, condition: item.cardCondition || null, stickerPrice: item.stickerPrice ?? null,
+    language: item.cardLanguage || null, condition: item.stickerCondition || null, stickerPrice: item.stickerPrice ?? null,
     cardGame: item.cardGame, cardLanguage: item.cardLanguage === "ja" ? "ja" : item.cardLanguage === "unknown" ? "unknown" : "en",
     dataProvider: item.dataProvider, providerCardId: item.providerCardId, cardCode: item.cardCode,
     marketPriceCurrency: item.marketPriceCurrency,

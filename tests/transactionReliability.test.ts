@@ -18,7 +18,8 @@ import {
 import { ownershipValidationError } from "../src/utils/tradeMath.ts";
 import {
   LOCAL_TRANSACTION_DRAFT_VERSION,
-  migrateLocalTransactionDraft
+  migrateLocalTransactionDraft,
+  sanitizeTransactionInventoryLinks
 } from "../src/services/database/transactionDraft.ts";
 
 const timestamp = "2026-07-29T12:00:00.000Z";
@@ -57,7 +58,7 @@ function transaction(type: TradeTransaction["transactionType"], items: TradeItem
   };
 }
 
-test("completion materialization IDs are deterministic and survive Retry", () => {
+test("completion preparation never preallocates an inventory foreign key", () => {
   const sale = prepareTransactionForCompletion(transaction("sale", [item("30000000-0000-4000-8000-000000000001", "outgoing")]));
   assert.equal(sale.items[0].createdSalesRecordId, sale.items[0].id);
   assert.deepEqual(prepareTransactionForCompletion(sale), sale);
@@ -66,8 +67,9 @@ test("completion materialization IDs are deterministic and survive Retry", () =>
     item("30000000-0000-4000-8000-000000000002", "incoming"),
     item("30000000-0000-4000-8000-000000000003", "incoming")
   ]));
-  assert.equal(purchase.items[0].createdInventoryPurchaseId, purchase.items[0].id);
-  assert.equal(purchase.items[1].createdInventoryPurchaseId, purchase.items[1].id);
+  assert.equal(purchase.items[0].createdInventoryPurchaseId, undefined);
+  assert.equal(purchase.items[1].createdInventoryPurchaseId, undefined);
+  assert.equal(buildTransactionItemPayload(purchase.items[0]).created_inventory_purchase_id, null);
 
   const lot = prepareTransactionForCompletion({
     ...transaction("purchase", [
@@ -76,8 +78,17 @@ test("completion materialization IDs are deterministic and survive Retry", () =>
     ]),
     keepAsBundle: true
   });
-  assert.equal(lot.items[0].createdInventoryPurchaseId, lot.items[1].createdInventoryPurchaseId);
+  assert.equal(lot.items[0].createdInventoryPurchaseId, undefined);
+  assert.equal(lot.items[1].createdInventoryPurchaseId, undefined);
   assert.deepEqual(prepareTransactionForCompletion(lot), lot);
+
+  const trade = prepareTransactionForCompletion(transaction("trade", [
+    { ...item("30000000-0000-4000-8000-000000000018", "incoming"), inventoryPurchaseId: "stale-source" },
+    { ...item("30000000-0000-4000-8000-000000000019", "outgoing"), createdInventoryPurchaseId: "stale-created" }
+  ]));
+  assert.equal(trade.items[0].inventoryPurchaseId, undefined);
+  assert.equal(trade.items[0].createdInventoryPurchaseId, undefined);
+  assert.equal(trade.items[1].createdInventoryPurchaseId, undefined);
 
   const expense = prepareTransactionForCompletion(transaction("expense", [item("30000000-0000-4000-8000-000000000006", "expense")]));
   assert.equal(expense.items[0].createdBusinessExpenseId, expense.items[0].id);
@@ -92,6 +103,12 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
     cardSetCode: "PAR",
     cardRarity: "Illustration Rare",
     cardLanguage: "English",
+    stickerPrice: 29.99,
+    stickerCondition: "Near Mint / NM" as const,
+    soldPrice: 20,
+    boughtPrice: 8,
+    historicalCostBasis: 4,
+    costBasis: 4,
     pokemonTcgCardId: "sv4-200",
     officialCardImageUrl: "https://images.example/card.png",
     tcgplayerUrl: "https://www.tcgplayer.com/product/1",
@@ -106,6 +123,11 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   assert.equal(payload.zero_cost_basis_confirmed, true);
   assert.equal(payload.set_name, source.cardSet);
   assert.equal(payload.card_set, source.cardSet);
+  assert.equal(payload.sticker_price, 29.99);
+  assert.equal(payload.sticker_condition, "Near Mint / NM");
+  assert.equal(payload.sold_price, 20);
+  assert.equal(payload.purchase_price, 8);
+  assert.equal(payload.cost_basis, 4);
   assert.equal(payload.card_set_id, "sv4");
   assert.equal(payload.tcgplayer_url, source.tcgplayerUrl);
   assert.deepEqual(payload.tcgplayer_pricing, source.tcgplayerPricing);
@@ -117,6 +139,24 @@ test("item payload allowlist persists cost confirmation and Pokemon pricing fiel
   assert.equal("cash_allocation" in payload, false);
   assert.equal("entry_mode" in payload, false);
   assert.equal(Object.values(payload).includes(undefined), false);
+});
+
+test("item payload uses directional inventory links and normalizes empty UUIDs to null", () => {
+  const outgoing = buildTransactionItemPayload({
+    ...item("30000000-0000-4000-8000-000000000020", "outgoing"),
+    inventoryPurchaseId: "40000000-0000-4000-8000-000000000001",
+    createdInventoryPurchaseId: "50000000-0000-4000-8000-000000000001"
+  });
+  assert.equal(outgoing.source_inventory_purchase_id, "40000000-0000-4000-8000-000000000001");
+  assert.equal(outgoing.created_inventory_purchase_id, null);
+
+  const incoming = buildTransactionItemPayload({
+    ...item("30000000-0000-4000-8000-000000000021", "incoming"),
+    inventoryPurchaseId: "40000000-0000-4000-8000-000000000002",
+    createdInventoryPurchaseId: " "
+  });
+  assert.equal(incoming.source_inventory_purchase_id, null);
+  assert.equal(incoming.created_inventory_purchase_id, null);
 });
 
 test("legacy card repositories prefer set_name and explicitly dual-write the compatibility column", () => {
@@ -193,6 +233,9 @@ test("legacy purchase draft migrates obsolete item cost without touching images 
         card_set: "Compatibility Set",
         set_name: "Canonical Set",
         setName: "Old Camel Set",
+        asking_price: "27.50",
+        visible_sticker_price: 31,
+        visible_sticker_condition: "Lightly Played / LP",
         images: [{
           id: "image-1",
           transactionId: "10000000-0000-4000-8000-000000000000",
@@ -212,6 +255,9 @@ test("legacy purchase draft migrates obsolete item cost without touching images 
   assert.equal(migrated?.version, LOCAL_TRANSACTION_DRAFT_VERSION);
   assert.equal(migrated?.transaction.items[0].costBasis, 80);
   assert.equal(migrated?.transaction.items[0].cardSet, "Canonical Set");
+  assert.equal(migrated?.transaction.items[0].stickerPrice, 27.5);
+  assert.equal(migrated?.transaction.items[0].stickerCondition, "Lightly Played / LP");
+  assert.equal(migrated?.transaction.items[0].boughtPrice, undefined);
   assert.equal(migrated?.transaction.items[0].images?.[0].imageUrl, "blob:preserved");
   assert.equal(migrated?.transaction.items[0].ownershipShares[0].allocatedCostBasis, 80);
   assert.equal("allocated_cost_basis" in (migrated?.transaction.items[0] || {}), false);
@@ -219,6 +265,48 @@ test("legacy purchase draft migrates obsolete item cost without touching images 
   assert.equal("set_name" in (migrated?.transaction.items[0] || {}), false);
   assert.equal("card_set" in (migrated?.transaction.items[0] || {}), false);
   assert.equal("setName" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("asking_price" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("visible_sticker_price" in (migrated?.transaction.items[0] || {}), false);
+  assert.equal("visible_sticker_condition" in (migrated?.transaction.items[0] || {}), false);
+});
+
+test("Dragonite-EX draft clears a stale created inventory link without losing form data", () => {
+  const draft = migrateLocalTransactionDraft({
+    version: 1,
+    step: 2,
+    savedAt: timestamp,
+    transaction: {
+      ...transaction("purchase", []),
+      tradePartner: "Private seller",
+      notes: "Dragonite-EX collection purchase",
+      items: [{
+        ...item("30000000-0000-4000-8000-000000000022", "incoming"),
+        itemName: "Dragonite-EX",
+        createdInventoryPurchaseId: "40000000-0000-4000-8000-000000000099",
+        boughtPrice: 40,
+        costBasis: 40,
+        cardSet: "Furious Fists",
+        images: [{
+          id: "image-dragonite",
+          transactionId: "10000000-0000-4000-8000-000000000000",
+          transactionItemId: "30000000-0000-4000-8000-000000000022",
+          imageType: "front",
+          imageUrl: "blob:dragonite",
+          sortOrder: 0
+        }]
+      }]
+    }
+  });
+  assert.ok(draft);
+  const restored = sanitizeTransactionInventoryLinks(draft.transaction, []);
+  assert.equal(restored.items[0].createdInventoryPurchaseId, undefined);
+  assert.equal(restored.items[0].itemName, "Dragonite-EX");
+  assert.equal(restored.items[0].boughtPrice, 40);
+  assert.equal(restored.items[0].costBasis, 40);
+  assert.equal(restored.items[0].cardSet, "Furious Fists");
+  assert.equal(restored.items[0].images?.[0].imageUrl, "blob:dragonite");
+  assert.equal(restored.items[0].ownershipShares[0].workerId, "20000000-0000-4000-8000-000000000000");
+  assert.equal(restored.notes, "Dragonite-EX collection purchase");
 });
 
 test("ownership validation rejects duplicates and accepts one exact 100 percent share", () => {
@@ -256,12 +344,30 @@ test("reconciliation migration is additive and uses only canonical transaction t
   }
   assert.match(itemTableSql, /\bcost_basis\s+numeric\b/);
   assert.match(itemTableSql, /\bpurchase_price\s+numeric\b/);
+  assert.match(itemTableSql, /\bsticker_price\s+numeric\b/);
+  assert.match(itemTableSql, /\bsticker_condition\s+text\b/);
   assert.match(itemTableSql, /\ballocated_cash_amount\s+numeric\b/);
   assert.doesNotMatch(itemTableSql, /\ballocated_cost_basis\b/);
   assert.doesNotMatch(itemTableSql, /\bhistorical_cost_basis\b|\bbought_price\b|\bcash_allocation\b/);
   assert.match(bootstrapItemTableSql, /\bcost_basis\s+numeric\b/);
+  assert.match(bootstrapItemTableSql, /\bsticker_price\s+numeric\b/);
+  assert.match(bootstrapItemTableSql, /\bsticker_condition\s+text\b/);
   assert.doesNotMatch(bootstrapItemTableSql, /\ballocated_cost_basis\b|\bhistorical_cost_basis\b|\bbought_price\b|\bcash_allocation\b/);
   assert.match(sql, /notify\s+pgrst,\s*'reload schema'/i);
+});
+
+test("incoming inventory is created before the transaction item FK and ownership are saved", () => {
+  const repository = readFileSync(new URL("../src/services/database/tradeRepository.ts", import.meta.url), "utf8");
+  const reliability = readFileSync(new URL("../src/services/database/transactionReliability.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(reliability, /createdInventoryPurchaseId\s*\|\|=\s*item\.id/);
+  assert.match(repository, /saveInventoryPurchase\([\s\S]*?linkCreatedInventoryPurchase\([\s\S]*?saveInventoryOwnership\(/);
+  assert.match(repository, /financial_transaction_item_id[\s\S]*?limit\(1\)/);
+  assert.match(repository, /created_inventory_purchase_id:\s*inventoryPurchaseId/);
+  assert.match(repository, /\.upsert\(itemPayloads\)\.select\("id"\)/);
+  for (const page of ["UnifiedTransactionPage.tsx", "TradePage.tsx"]) {
+    const source = readFileSync(new URL(`../src/pages/${page}`, import.meta.url), "utf8");
+    assert.match(source, /completionInFlight\.current/);
+  }
 });
 
 test("transaction image payload is allowlisted and leaves timestamps to the database", () => {

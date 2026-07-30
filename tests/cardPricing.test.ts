@@ -39,6 +39,26 @@ test("selected finish determines market while preserving accounting and ownershi
   assert.equal(next.targetBuyPrice, 75);
 });
 
+test("visible sticker metadata never becomes an accounting amount automatically", () => {
+  const next = applyCardSuggestionToItem({
+    ...item,
+    soldPrice: 35,
+    boughtPrice: 11,
+    costBasis: 9,
+  }, {
+    ...suggestion,
+    condition: "Near Mint / NM",
+    stickerPrice: 125,
+    tcgplayerPricing: undefined,
+  }, "scanner");
+  assert.equal(next.stickerPrice, 125);
+  assert.equal(next.stickerCondition, "Near Mint / NM");
+  assert.equal(next.soldPrice, 35);
+  assert.equal(next.boughtPrice, 11);
+  assert.equal(next.costBasis, 9);
+  assert.equal(next.historicalCostBasis, 19);
+});
+
 test("unpriced card preserves editable market value instead of inserting zero", () => {
   const next = applyCardSuggestionToItem(item, {
     ...suggestion,

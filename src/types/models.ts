@@ -334,6 +334,7 @@ export interface TradeItem {
   costBasisIsEstimate?: boolean;
   cardCondition?: CardCondition;
   stickerPrice?: number;
+  stickerCondition?: CardCondition;
   gradingCompany?: string;
   grade?: string;
   certificateNumber?: string;

@@ -61,7 +61,7 @@ Artwork embeddings are not practical for this PWA today. A useful implementation
 
 ## Database fields preserved and extended
 
-`card_name`, `collector_number`, canonical `set_name` (`card_set` is temporarily dual-written for compatibility), `card_language`, `card_condition`, `sticker_price`, `grading_company`, `grade`, `certificate_number`, `front_image_url`, `front_image_path`, `back_image_url`, `back_image_path`, `scan_confidence`, `scan_status`, `image_hash`, `scan_result`, `market_price_source`, `market_price_variant`, `market_price_updated_at`, and `market_price_checked_at`.
+`card_name`, `collector_number`, canonical `set_name` (`card_set` is temporarily dual-written for compatibility), `card_language`, `card_condition`, canonical visible-tag fields `sticker_price` and `sticker_condition`, `grading_company`, `grade`, `certificate_number`, `front_image_url`, `front_image_path`, `back_image_url`, `back_image_path`, `scan_confidence`, `scan_status`, `image_hash`, `scan_result`, `market_price_source`, `market_price_variant`, `market_price_updated_at`, and `market_price_checked_at`. Sticker metadata is informational and never becomes purchase price, sold price, or cost basis automatically.
 
 Manual search adds `card_set_id`, `card_set_code`, `card_rarity`, `pokemon_tcg_card_id`, `official_card_image_url`, and `tcgplayer_url` to inventory. Sales receive the same card identity plus TCGplayer provenance. Run `manual-card-search-schema-sync.sql` once; it is additive and repeatable. Repositories fall back to the prior schema until that migration is applied.
 

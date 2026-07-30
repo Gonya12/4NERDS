@@ -32,7 +32,7 @@ create table if not exists public.financial_transaction_items (
   id uuid primary key,
   transaction_id uuid not null references public.financial_transactions(id) on delete cascade,
   direction text not null,
-  inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
+  source_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
   created_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null,
   created_sales_record_id uuid references public.sales_records(id) on delete set null,
   created_business_expense_id uuid references public.business_expenses(id) on delete set null,
@@ -73,6 +73,7 @@ create table if not exists public.financial_transaction_items (
   cost_basis_is_estimate boolean not null default false,
   card_condition text,
   sticker_price numeric(12,2),
+  sticker_condition text,
   grading_company text,
   grade text,
   certificate_number text,
@@ -227,7 +228,6 @@ end $$;
 
 -- Current canonical item fields used by the application.
 alter table public.financial_transaction_items add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;
-alter table public.financial_transaction_items add column if not exists inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null;
 alter table public.financial_transaction_items add column if not exists created_inventory_purchase_id uuid references public.inventory_purchases(id) on delete set null;
 alter table public.financial_transaction_items add column if not exists created_sales_record_id uuid references public.sales_records(id) on delete set null;
 alter table public.financial_transaction_items add column if not exists created_business_expense_id uuid references public.business_expenses(id) on delete set null;
@@ -250,6 +250,8 @@ alter table public.financial_transaction_items add column if not exists target_b
 alter table public.financial_transaction_items add column if not exists target_buy_price numeric(12,2);
 alter table public.financial_transaction_items add column if not exists card_selection_source text;
 alter table public.financial_transaction_items add column if not exists cost_basis_is_estimate boolean not null default false;
+alter table public.financial_transaction_items add column if not exists sticker_price numeric(12,2);
+alter table public.financial_transaction_items add column if not exists sticker_condition text;
 
 alter table public.transaction_images add column if not exists transaction_id uuid references public.financial_transactions(id) on delete cascade;
 alter table public.transaction_images add column if not exists transaction_item_id uuid references public.financial_transaction_items(id) on delete cascade;
@@ -323,7 +325,7 @@ create index if not exists idx_financial_transactions_status on public.financial
 create index if not exists idx_financial_transactions_event on public.financial_transactions(event_id);
 create index if not exists idx_financial_transactions_event_day on public.financial_transactions(event_day_id);
 create index if not exists idx_financial_transaction_items_transaction on public.financial_transaction_items(transaction_id);
-create index if not exists idx_financial_transaction_items_inventory on public.financial_transaction_items(inventory_purchase_id);
+create index if not exists idx_financial_transaction_items_source_inventory on public.financial_transaction_items(source_inventory_purchase_id);
 create index if not exists idx_transaction_item_ownership_item on public.transaction_item_ownership_shares(transaction_item_id);
 create index if not exists idx_transaction_payments_transaction on public.transaction_payments(transaction_id);
 create index if not exists idx_transaction_internal_balances_transaction on public.transaction_internal_balances(transaction_id);

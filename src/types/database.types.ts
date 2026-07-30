@@ -55,7 +55,7 @@ export type FinancialTransactionItemRow = {
   id: string;
   transaction_id: string;
   direction: "outgoing" | "incoming" | "expense";
-  inventory_purchase_id: string | null;
+  source_inventory_purchase_id: string | null;
   created_inventory_purchase_id: string | null;
   created_sales_record_id: string | null;
   created_business_expense_id: string | null;
@@ -101,6 +101,7 @@ export type FinancialTransactionItemRow = {
   cost_basis_is_estimate: boolean;
   card_condition: string | null;
   sticker_price: number | null;
+  sticker_condition: string | null;
   grading_company: string | null;
   grade: string | null;
   certificate_number: string | null;

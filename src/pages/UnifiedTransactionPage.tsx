@@ -25,7 +25,8 @@ import {
 } from "../services/database/financialTransactionType";
 import {
   createLocalTransactionDraft,
-  migrateLocalTransactionDraft
+  migrateLocalTransactionDraft,
+  sanitizeTransactionInventoryLinks
 } from "../services/database/transactionDraft";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
@@ -105,6 +106,7 @@ export function UnifiedTransactionPage() {
   const [allocation, setAllocation] = useState<AllocationMethod>("market");
   const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
   const autoLinkAttemptedForDate = useRef("");
+  const completionInFlight = useRef(false);
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
   const workflowTitle = transaction.itemMode === "multiple"
@@ -302,7 +304,8 @@ export function UnifiedTransactionPage() {
       marketPriceUpdatedAt: purchase.marketPriceUpdatedAt, marketPriceCheckedAt: purchase.marketPriceCheckedAt,
       tcgplayerPricing: pricingFromInventory(purchase), targetBuyPercentage: purchase.buyPercentage,
       targetBuyPrice: purchase.targetBuyPrice, cardSelectionSource: "inventory",
-      cardCondition: purchase.cardCondition, gradingCompany: purchase.gradingCompany, grade: purchase.grade,
+      cardCondition: purchase.cardCondition, stickerPrice: purchase.stickerPrice, stickerCondition: purchase.cardCondition,
+      gradingCompany: purchase.gradingCompany, grade: purchase.grade,
       certificateNumber: purchase.certificateNumber, ownershipShares: purchase.ownershipShares || []
     };
     setTransaction((row) => ({ ...row, items: row.itemMode === "single" ? [item] : [...row.items, item] }));
@@ -348,6 +351,8 @@ export function UnifiedTransactionPage() {
     }
     if (transaction.transactionType !== "expense" && relevant.some((item) => !ownershipIsValid(item))) { setMessage("Every item must have ownership totaling 100%."); return; }
     if (transaction.pricingMode === "bundle_total" && Math.abs(review.bundleDifference) > .009) { setMessage("Allocate the complete bundle total before saving."); return; }
+    if (completionInFlight.current) return;
+    completionInFlight.current = true;
     setBusy(true);
     setSaveComplete(false);
     setSaveStage("transaction");
@@ -365,7 +370,7 @@ export function UnifiedTransactionPage() {
         setDraftSaveError("");
       }
     }
-    finally { setBusy(false); setSaveStage(undefined); setSaveComplete(false); }
+    finally { completionInFlight.current = false; setBusy(false); setSaveStage(undefined); setSaveComplete(false); }
   }
   async function saveDraft() {
     setPaymentRetry(undefined);
@@ -454,7 +459,10 @@ export function UnifiedTransactionPage() {
       <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">Saved locally {new Date(savedLocalDraft.savedAt).toLocaleString()}.</p>
       <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => {
         try {
-          setTransaction(normalizeTransactionForApplication(savedLocalDraft.transaction));
+          setTransaction(sanitizeTransactionInventoryLinks(
+            normalizeTransactionForApplication(savedLocalDraft.transaction),
+            inventory.map((row) => row.id)
+          ));
           setStep(savedLocalDraft.step);
           setDraftAvailable(false);
           setDraftSaveDebug("");
@@ -645,11 +653,21 @@ export function UnifiedTransactionPage() {
               setEditing(item);
               updateItem(item);
             }} className={input} /></label>
-            <label><span className="text-xs font-black">Condition</span><input value={editing.cardCondition || ""} onChange={(event) => {
+            <label><span className="text-xs font-black">Card condition</span><input value={editing.cardCondition || ""} onChange={(event) => {
               const item = { ...editing, cardCondition: (event.target.value || undefined) as CardCondition | undefined };
               setEditing(item);
               updateItem(item);
             }} className={input} /></label>
+            <label><span className="text-xs font-black">Visible sticker condition</span><input value={editing.stickerCondition || ""} onChange={(event) => {
+              const item = { ...editing, stickerCondition: (event.target.value || undefined) as CardCondition | undefined };
+              setEditing(item);
+              updateItem(item);
+            }} className={input} /></label>
+            <label><span className="text-xs font-black">Visible sticker price</span>{moneyInput(editing.stickerPrice, (stickerPrice) => {
+              const item = { ...editing, stickerPrice };
+              setEditing(item);
+              updateItem(item);
+            })}<small className="block text-slate-500">Reference only. It does not change bought, sold, or cost-basis values.</small></label>
           </div>
           <TransactionItemPricing item={editing} context={transaction.transactionType === "sale" ? "sale" : "purchase"} onChange={(item) => { setEditing(item); updateItem(item); }} />
           <OwnershipEditor workers={workers} shares={editing.ownershipShares} totalCost={transaction.transactionType === "sale" ? editing.historicalCostBasis : editing.costBasis} onChange={(ownershipShares: OwnershipShare[]) => {

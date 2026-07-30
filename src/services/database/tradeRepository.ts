@@ -1,7 +1,7 @@
 import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction, TransactionImageAttachment, TransactionImageType } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
-import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
+import { getCachedInventoryPurchases, saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership, saveSaleOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
 import { saveBusinessExpense } from "./businessExpenseRepository";
@@ -23,7 +23,7 @@ import {
 } from "./databasePayloads";
 import { ownershipValidationError } from "../../utils/tradeMath";
 import { prepareTransactionForCompletion } from "./transactionReliability";
-import { migrateLocalTransactionDraft } from "./transactionDraft";
+import { migrateLocalTransactionDraft, sanitizeTransactionInventoryLinks } from "./transactionDraft";
 import {
   mapTransactionTypeToApplicationValue,
   mapTransactionTypeToDatabaseValue,
@@ -55,12 +55,13 @@ type TransactionRow = {
   paid_by_worker_id?: string | null; keep_as_bundle?: boolean | null;
 };
 type ItemRow = {
-  id: string; transaction_id: string; inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
+  id: string; transaction_id: string; source_inventory_purchase_id?: string | null; created_inventory_purchase_id?: string | null;
   prior_inventory_purchase_id?: string | null; direction: TradeItem["direction"]; item_name: string; item_type: TradeItem["itemType"];
   quantity: number; market_value: number; agreed_trade_value: number; cost_basis: number;
   allocated_cash_amount?: number | null; image_url?: string | null; image_path?: string | null; back_image_url?: string | null; back_image_path?: string | null;
   collector_number?: string | null; set_name?: string | null; card_set?: string | null; pokemon_tcg_card_id?: string | null; card_condition?: TradeItem["cardCondition"] | null;
-  sticker_price?: number | null; grading_company?: string | null; grade?: string | null; certificate_number?: string | null;
+  sticker_price?: number | null; sticker_condition?: TradeItem["stickerCondition"] | null;
+  grading_company?: string | null; grade?: string | null; certificate_number?: string | null;
   notes?: string | null; created_at: string; updated_at: string;
   trade_percentage?: number | null; sold_price?: number | null; purchase_price?: number | null;
   created_sales_record_id?: string | null; created_business_expense_id?: string | null;
@@ -109,6 +110,101 @@ function isMissingColumnError(error?: { code?: string; message?: string } | null
   ));
 }
 
+type InventoryLinkRow = {
+  id: string;
+  financial_transaction_id?: string | null;
+  financial_transaction_item_id?: string | null;
+};
+
+async function sanitizeInventoryLinksForSave(transaction: TradeTransaction): Promise<TradeTransaction> {
+  if (!isSupabaseConfigured || !supabase) {
+    return sanitizeTransactionInventoryLinks(transaction, getCachedInventoryPurchases().map((row) => row.id));
+  }
+  const candidateIds = Array.from(new Set(transaction.items.flatMap((item) => [
+    item.inventoryPurchaseId?.trim(),
+    item.createdInventoryPurchaseId?.trim()
+  ]).filter(Boolean) as string[]));
+  if (!candidateIds.length) return sanitizeTransactionInventoryLinks(transaction, []);
+
+  const result = await supabase
+    .from("inventory_purchases")
+    .select("id,financial_transaction_id,financial_transaction_item_id")
+    .in("id", candidateIds);
+  let rows = (result.data || []) as InventoryLinkRow[];
+  if (isMissingColumnError(result.error)) {
+    const fallback = await supabase.from("inventory_purchases").select("id").in("id", candidateIds);
+    if (fallback.error) throw new Error(fallback.error.message);
+    rows = (fallback.data || []) as InventoryLinkRow[];
+  } else if (result.error) {
+    throw new Error(result.error.message);
+  }
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return {
+    ...transaction,
+    items: transaction.items.map((item) => {
+      const source = item.inventoryPurchaseId ? byId.get(item.inventoryPurchaseId) : undefined;
+      const created = item.createdInventoryPurchaseId ? byId.get(item.createdInventoryPurchaseId) : undefined;
+      const createdBelongsToItem = Boolean(created && (
+        !created.financial_transaction_item_id
+        || created.financial_transaction_item_id === item.id
+        || created.financial_transaction_id === transaction.id
+      ));
+      return {
+        ...item,
+        inventoryPurchaseId: item.direction === "outgoing" && source ? source.id : undefined,
+        createdInventoryPurchaseId: item.direction === "incoming" && createdBelongsToItem ? created?.id : undefined
+      };
+    })
+  };
+}
+
+async function findCreatedInventoryPurchaseId(
+  transactionId: string,
+  transactionItemIds: string[],
+  candidateId?: string
+) {
+  if (!isSupabaseConfigured || !supabase) {
+    return getCachedInventoryPurchases().find((row) =>
+      row.id === candidateId
+      || (row.financialTransactionId === transactionId && transactionItemIds.includes(row.financialTransactionItemId || ""))
+    )?.id;
+  }
+  if (candidateId) {
+    const candidate = await supabase.from("inventory_purchases").select("id").eq("id", candidateId).maybeSingle();
+    if (candidate.error) throw new Error(candidate.error.message);
+    if (candidate.data?.id) return candidate.data.id as string;
+  }
+  const existing = await supabase
+    .from("inventory_purchases")
+    .select("id,financial_transaction_item_id")
+    .eq("financial_transaction_id", transactionId)
+    .in("financial_transaction_item_id", transactionItemIds)
+    .limit(1);
+  if (existing.error) throw new Error(existing.error.message);
+  return existing.data?.[0]?.id as string | undefined;
+}
+
+async function linkCreatedInventoryPurchase(
+  transactionId: string,
+  item: TradeItem,
+  inventoryPurchaseId: string
+) {
+  item.inventoryPurchaseId = undefined;
+  item.createdInventoryPurchaseId = inventoryPurchaseId;
+  if (!isSupabaseConfigured || !supabase) return;
+  const linked = await supabase
+    .from("financial_transaction_items")
+    .update({
+      source_inventory_purchase_id: null,
+      created_inventory_purchase_id: inventoryPurchaseId
+    })
+    .eq("id", item.id)
+    .eq("transaction_id", transactionId)
+    .select("id")
+    .single();
+  if (linked.error) throw new Error(linked.error.message);
+}
+
 function withoutReconciliationItemColumns(payload: ReturnType<typeof buildTransactionItemPayload>) {
   const {
     zero_cost_basis_confirmed: _zeroCostBasisConfirmed,
@@ -132,13 +228,14 @@ function withoutReconciliationItemColumns(payload: ReturnType<typeof buildTransa
     target_buy_price: _targetBuyPrice,
     card_selection_source: _cardSelectionSource,
     cost_basis_is_estimate: _costBasisIsEstimate,
+    sticker_condition: _stickerCondition,
     ...legacy
   } = payload;
   return legacy;
 }
 
 const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem => ({
-  id: row.id, tradeTransactionId: row.transaction_id, inventoryPurchaseId: row.inventory_purchase_id || undefined,
+  id: row.id, tradeTransactionId: row.transaction_id, inventoryPurchaseId: row.source_inventory_purchase_id || undefined,
   createdInventoryPurchaseId: row.created_inventory_purchase_id || undefined, priorInventoryPurchaseId: row.prior_inventory_purchase_id || undefined,
   direction: row.direction, itemName: row.item_name, itemType: row.item_type, quantity: Number(row.quantity || 1),
   marketValue: Number(row.market_value || 0), agreedTradeValue: Number(row.agreed_trade_value || 0),
@@ -158,6 +255,7 @@ const fromItem = (row: ItemRow, shares: TradeItemOwnershipShare[]): TradeItem =>
   targetBuyPrice: row.target_buy_price == null ? undefined : Number(row.target_buy_price),
   cardSelectionSource: row.card_selection_source || undefined, costBasisIsEstimate: row.cost_basis_is_estimate === true,
   cardCondition: row.card_condition || undefined, stickerPrice: row.sticker_price == null ? undefined : Number(row.sticker_price),
+  stickerCondition: row.sticker_condition || undefined,
   gradingCompany: row.grading_company || undefined, grade: row.grade || undefined, certificateNumber: row.certificate_number || undefined,
   notes: row.notes || undefined, ownershipShares: shares, createdAt: row.created_at, updatedAt: row.updated_at
   , tradePercentage: row.trade_percentage == null ? undefined : Number(row.trade_percentage),
@@ -421,7 +519,7 @@ export async function saveTrade(input: TradeTransaction, options?: {
   syncOwnership?: boolean;
 }) {
   const normalizedInput = normalizeTransactionForApplication(input);
-  const trade = {
+  const trade = await sanitizeInventoryLinksForSave({
     ...normalizedInput,
     updatedAt: nowIso(),
     items: normalizedInput.items.map((item) => withAllocatedOwnershipCostBasis({
@@ -429,7 +527,7 @@ export async function saveTrade(input: TradeTransaction, options?: {
       tradeTransactionId: normalizedInput.id,
       updatedAt: nowIso()
     }))
-  };
+  });
   if (!isSupabaseConfigured || !supabase) {
     const values = [trade, ...read<TradeTransaction>(localKey).filter((row) => row.id !== trade.id)];
     write(localKey, values); write(cacheKey, values); return trade;
@@ -458,11 +556,14 @@ export async function saveTrade(input: TradeTransaction, options?: {
         backImagePath: item.backImagePath || transactionImagePath(item.backImageUrl)
       })
     );
-    let itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads);
+    let itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads).select("id");
     if (isMissingColumnError(itemResult.error)) {
-      itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads.map(withoutReconciliationItemColumns));
+      itemResult = await supabase.from("financial_transaction_items").upsert(itemPayloads.map(withoutReconciliationItemColumns)).select("id");
     }
     if (itemResult.error) throw new Error(itemResult.error.message);
+    const savedItemIds = new Set((itemResult.data || []).map((row) => row.id));
+    const missingItem = persistedTrade.items.find((item) => !savedItemIds.has(item.id));
+    if (missingItem) throw new Error(`The transaction item "${missingItem.itemName || missingItem.id}" was not saved.`);
   }
   if (options?.syncImages !== false) {
   const transactionImages = persistedTrade.images?.length
@@ -638,7 +739,7 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   const timestamp = nowIso();
   let trade = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
-  await saveTrade(trade, { syncPayments: false });
+  trade = await saveTrade(trade, { syncPayments: false });
   onProgress?.("inventory");
   await claimOutgoingInventory(trade, inventory, "traded_out");
   for (const item of trade.items.filter((row) => row.direction === "outgoing")) {
@@ -649,7 +750,9 @@ export async function completeTrade(input: TradeTransaction, inventory: Inventor
   const created: InventoryPurchase[] = [];
   onProgress?.("ownership");
   for (const item of trade.items.filter((row) => row.direction === "incoming")) {
-    const saved = await saveInventoryPurchase(inventoryFromIncoming(item, trade));
+    const existingId = await findCreatedInventoryPurchaseId(trade.id, [item.id], item.createdInventoryPurchaseId);
+    const saved = await saveInventoryPurchase({ ...inventoryFromIncoming(item, trade), id: existingId });
+    await linkCreatedInventoryPurchase(trade.id, item, saved.id);
     if (item.ownershipShares.length) await saveInventoryOwnership(saved.id, item.ownershipShares);
     created.push({ ...saved, ownershipShares: item.ownershipShares });
   }
@@ -677,7 +780,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
   const timestamp = nowIso();
   let transaction = prepareTransactionForCompletion(normalizedInput);
   onProgress?.("transaction");
-  await saveTrade(transaction, { syncPayments: false });
+  transaction = await saveTrade(transaction, { syncPayments: false });
   onProgress?.("items");
   if (transaction.transactionType === "sale") {
     const items = transaction.items.filter((item) => item.direction === "outgoing");
@@ -732,8 +835,13 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
       const ownershipShares = Array.from(ownership, ([workerId, ownershipPercentage]) => ({
         id: id("ownership"), workerId, ownershipPercentage: roundMoney(ownershipPercentage)
       }));
+      const existingId = await findCreatedInventoryPurchaseId(
+        transaction.id,
+        items.map((item) => item.id),
+        items.find((item) => item.createdInventoryPurchaseId)?.createdInventoryPurchaseId
+      );
       const saved = await saveInventoryPurchase({
-        id: items[0].createdInventoryPurchaseId,
+        id: existingId,
         itemName: transaction.tradePartner ? `Lot from ${transaction.tradePartner}` : items.map((item) => item.itemName).filter(Boolean).slice(0, 3).join(" + ") || "Inventory lot",
         category: items.every((item) => item.itemType === items[0].itemType) ? items[0].itemType : "other_pokemon_product",
         quantity: items.reduce((sum, item) => sum + Number(item.quantity || 1), 0), quantitySold: 0, purchaseDate: transaction.tradeDate,
@@ -744,14 +852,15 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         imagePath: transaction.generalImagePath || items.find((item) => item.imagePath)?.imagePath,
         acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: items[0].id
       });
-      items.forEach((item) => { item.createdInventoryPurchaseId = saved.id; });
+      for (const item of items) await linkCreatedInventoryPurchase(transaction.id, item, saved.id);
       if (ownershipShares.length) {
         onProgress?.("ownership");
         await saveInventoryOwnership(saved.id, ownershipShares);
       }
     } else for (const item of items) {
+      const existingId = await findCreatedInventoryPurchaseId(transaction.id, [item.id], item.createdInventoryPurchaseId);
       const saved = await saveInventoryPurchase({
-        id: item.createdInventoryPurchaseId,
+        id: existingId,
         itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0, purchaseDate: transaction.tradeDate,
         totalCost: item.costBasis, marketValue: item.marketValue, isRawCard: item.itemType === "raw_card",
         purchaseSource: transaction.purchaseSource || "other", seller: transaction.tradePartner, eventId: transaction.eventId,
@@ -768,7 +877,7 @@ export async function completeFinancialTransaction(input: TradeTransaction, inve
         certificateNumber: item.certificateNumber, imageUrl: item.imageUrl || transaction.generalImageUrl, imagePath: item.imagePath,
         acquisitionMethod: "purchased", financialTransactionId: transaction.id, financialTransactionItemId: item.id
       });
-      item.createdInventoryPurchaseId = saved.id;
+      await linkCreatedInventoryPurchase(transaction.id, item, saved.id);
       if (item.ownershipShares.length) {
         onProgress?.("ownership");
         await saveInventoryOwnership(saved.id, item.ownershipShares);
