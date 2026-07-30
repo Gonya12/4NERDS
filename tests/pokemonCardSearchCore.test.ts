@@ -10,6 +10,10 @@ import {
   rankPokemonCardResults,
   suggestPokemonNameCorrection,
 } from "../supabase/functions/_shared/pokemonCardSearchCore.ts";
+import {
+  buildCardSearchRequest,
+  parseCompatibleCardSearchRequest,
+} from "../supabase/functions/_shared/cardSearchRequestContract.ts";
 
 test("normalizes punctuation, accents, whitespace, dashes, and special printed names", () => {
   assert.equal(normalizeCardSearchText("  Farfetch’d\t—  Flabébé\n"), "farfetchd flabebe");
@@ -128,6 +132,91 @@ test("invalid punctuation cannot create a raw query or crash parsing", () => {
   assert.ok(queries.every((query) => !query.query.includes("\n")));
 });
 
+test("canonical request builder preserves the visible query and rejects empty or invalid requests", () => {
+  assert.deepEqual(buildCardSearchRequest({
+    game: "pokemon",
+    language: "en",
+    query: "  Dragonite  ",
+    page: 1,
+    pageSize: 30,
+  }), {
+    game: "pokemon",
+    language: "en",
+    query: "Dragonite",
+    name: "Dragonite",
+    collectorNumber: null,
+    set: null,
+    page: 1,
+    pageSize: 30,
+  });
+  assert.deepEqual(buildCardSearchRequest({
+    game: "pokemon",
+    language: "en",
+    query: "",
+    collectorNumber: "067",
+  }), {
+    game: "pokemon",
+    language: "en",
+    query: "067",
+    name: null,
+    collectorNumber: "067",
+    set: null,
+    page: 1,
+    pageSize: 30,
+  });
+  assert.throws(() => buildCardSearchRequest({ game: "other", language: "unknown", query: "Dragonite" }), /game/i);
+  assert.throws(() => buildCardSearchRequest({ game: "pokemon", language: "en", query: "" }), /query|collector/i);
+});
+
+test("Edge compatibility parser accepts canonical and temporary legacy query fields", () => {
+  const expectedQuery = "Dragonite";
+  for (const field of ["query", "search", "searchQuery", "rawQuery", "q", "cardName", "name"]) {
+    const parsed = parseCompatibleCardSearchRequest({
+      game: "pokemon",
+      language: "en",
+      [field]: ` ${expectedQuery} `,
+    });
+    assert.equal(parsed.query, expectedQuery, field);
+  }
+  assert.equal(parseCompatibleCardSearchRequest({
+    game: "pokemon",
+    language: "en",
+    query: "",
+    collector_number: "067",
+  }).collectorNumber, "067");
+  assert.equal(parseCompatibleCardSearchRequest({
+    game: "pokemon",
+    language: "en",
+    query: "",
+    cardNumber: "149",
+  }).collectorNumber, "149");
+  assert.equal(parseCompatibleCardSearchRequest({
+    game: "pokemon",
+    language: "en",
+    query: "",
+    searchQuery: "Dragonite",
+  }).query, "Dragonite");
+  assert.equal(buildPokemonApiQueries(parseCardSearchQuery(
+    parseCompatibleCardSearchRequest({ game: "pokemon", language: "en", query: "Dragonite" }),
+  ))[0].query, "name:dragonite");
+});
+
+test("direct Edge request bodies A through E produce usable provider queries", () => {
+  const cases = [
+    [{ game: "pokemon", language: "en", query: "Dragonite" }, "name:dragonite"],
+    [{ game: "pokemon", language: "en", name: "Dragonite", query: "" }, "name:dragonite"],
+    [{ game: "pokemon", language: "en", query: "Dragonite 149" }, "name:dragonite number:149"],
+    [{ game: "pokemon", language: "en", query: "149" }, "number:149"],
+    [{ game: "pokemon", language: "en", query: "pika" }, "name:pika*"],
+  ] as const;
+  for (const [body, expectedProviderQuery] of cases) {
+    const request = parseCompatibleCardSearchRequest(body);
+    const parsed = parseCardSearchQuery(request);
+    assert.ok(parsed.originalName || parsed.collector, JSON.stringify(body));
+    assert.equal(buildPokemonApiQueries(parsed)[0].query, expectedProviderQuery);
+  }
+});
+
 test("client cancellation and Edge rate-limit contracts prevent stale or retry-loop behavior", () => {
   const hook = readFileSync(new URL("../src/hooks/usePokemonCardSearch.ts", import.meta.url), "utf8");
   const edge = readFileSync(new URL("../supabase/functions/pokemon-card-search/index.ts", import.meta.url), "utf8");
@@ -146,9 +235,12 @@ test("client cancellation and Edge rate-limit contracts prevent stale or retry-l
   assert.match(client, /payload\.results/);
   assert.match(client, /edgeFunctionReached/);
   assert.match(client, /providerResponseStatus/);
-  assert.match(client, /buildCanonicalCardSearchRequest/);
-  assert.match(client, /name:\s*input\.name\s*\|\|\s*parsed\.originalName\s*\|\|\s*null/);
-  assert.match(client, /collectorNumber:\s*input\.collectorNumber\s*\|\|\s*parsed\.collector\?\.normalized\s*\|\|\s*null/);
+  assert.match(client, /buildCardSearchRequest/);
+  assert.match(contract, /cardSearchRequestContract\.ts/);
+  assert.match(edge, /parseCompatibleCardSearchRequest/);
+  assert.match(edge, /receivedKeys/);
+  assert.match(edge, /providerQuery/);
+  assert.match(hook, /lastInput\.current\s*=\s*\{\s*\.\.\.input\s*\}/);
   assert.doesNotMatch(client, /Check the card search and try again/);
   assert.match(contract, /CARD_SEARCH_FUNCTION_NAME\s*=\s*"pokemon-card-search"/);
   assert.match(ui, /Developer Debug/);

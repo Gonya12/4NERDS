@@ -16,8 +16,12 @@ import {
   type UnifiedCardSearchInput,
 } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
-import { CARD_SEARCH_FUNCTION_NAME } from "./cardSearchContract";
-export { CARD_SEARCH_FUNCTION_NAME } from "./cardSearchContract";
+import {
+  buildCardSearchRequest,
+  CARD_SEARCH_FUNCTION_NAME,
+  type BuiltCardSearchRequest,
+} from "./cardSearchContract";
+export { buildCardSearchRequest, CARD_SEARCH_FUNCTION_NAME } from "./cardSearchContract";
 
 export type ScanConfidence = "high" | "medium" | "low";
 export type TcgplayerPriceVariant = {
@@ -44,20 +48,7 @@ export type ManualCardSearchInput = UnifiedCardSearchInput & {
   page?: number;
   pageSize?: number;
 };
-export type CanonicalCardSearchRequest = {
-  game: Exclude<CardGame, "other">;
-  language: Exclude<CardLanguage, "unknown">;
-  query: string;
-  name: string | null;
-  collectorNumber: string | null;
-  set: string | null;
-  page: number;
-  pageSize: number;
-  finish?: string;
-  cardType?: string;
-  disableCorrection?: boolean;
-  providerCardId?: string;
-};
+export type CanonicalCardSearchRequest = BuiltCardSearchRequest;
 export type ManualCardSearchPage = {
   matches: CardMatch[];
   page: number;
@@ -91,6 +82,11 @@ type UnifiedApiPayload = {
   edgeFunctionReached?: boolean;
   upstreamReached?: boolean;
   providerResponseStatus?: number;
+  receivedKeys?: string[];
+  queryPresent?: boolean;
+  normalizedQuery?: string;
+  providerQuery?: string;
+  resultCount?: number;
 };
 
 export type PokemonCardSearchErrorCode =
@@ -117,6 +113,11 @@ export type CardSearchDiagnostics = {
   errorCode: PokemonCardSearchErrorCode | string;
   providerErrorCode?: string;
   providerMessage?: string;
+  receivedKeys?: string[];
+  queryPresent?: boolean;
+  normalizedQuery?: string;
+  providerQuery?: string;
+  resultCount?: number;
 };
 
 export class PokemonCardSearchError extends Error {
@@ -154,6 +155,11 @@ export function cardSearchDeveloperDebug(error: unknown) {
     retryAfterSeconds: error.retryAfterSeconds ?? null,
     requestId: error.diagnostics.requestId ?? null,
     providerMessage: error.diagnostics.providerMessage ?? null,
+    receivedKeys: error.diagnostics.receivedKeys ?? [],
+    queryPresent: error.diagnostics.queryPresent ?? null,
+    normalizedQuery: error.diagnostics.normalizedQuery ?? null,
+    providerQuery: error.diagnostics.providerQuery ?? null,
+    resultCount: error.diagnostics.resultCount ?? null,
   }, null, 2);
 }
 
@@ -254,31 +260,6 @@ function writeCache(key: string, value: ManualCardSearchPage) {
   }
 }
 
-export function buildCanonicalCardSearchRequest(input: ManualCardSearchInput): CanonicalCardSearchRequest {
-  const game = normalizeCardGame(input.game);
-  const canonicalGame = game === "one_piece" ? "one_piece" : "pokemon";
-  const language = normalizeCardLanguage(input.language, canonicalGame);
-  const canonicalLanguage = language === "ja" ? "ja" : "en";
-  const page = Math.max(1, Math.floor(input.page || 1));
-  const pageSize = Math.min(30, Math.max(1, Math.floor(input.pageSize || 30)));
-  const query = String(input.query || [input.name, input.collectorNumber].filter(Boolean).join(" ")).trim();
-  const parsed = parseCardSearchQuery({ ...input, query });
-  return {
-    game: canonicalGame,
-    language: canonicalLanguage,
-    query,
-    name: input.name || parsed.originalName || null,
-    collectorNumber: input.collectorNumber || parsed.collector?.normalized || null,
-    set: input.set || null,
-    page,
-    pageSize,
-    ...(canonicalGame === "pokemon" && canonicalLanguage === "en" && input.finish ? { finish: input.finish } : {}),
-    ...(input.cardType ? { cardType: input.cardType } : {}),
-    ...(input.disableCorrection ? { disableCorrection: true } : {}),
-    ...(input.providerCardId ? { providerCardId: input.providerCardId } : {}),
-  };
-}
-
 function providerCodeFor(input: ManualCardSearchInput): CardDataProvider {
   const game = normalizeCardGame(input.game);
   const language = normalizeCardLanguage(input.language, game);
@@ -318,6 +299,11 @@ function friendlyError(
     requestId: payload.requestId,
     providerMessage,
     providerErrorCode: payload.code,
+    receivedKeys: payload.receivedKeys,
+    queryPresent: payload.queryPresent,
+    normalizedQuery: payload.normalizedQuery,
+    providerQuery: payload.providerQuery,
+    resultCount: payload.resultCount,
   };
   if (status === 429) {
     return new PokemonCardSearchError(
@@ -367,11 +353,12 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
       baseDiagnostics(request),
     );
   }
-  const parsed = parseCardSearchQuery(request);
+  const payloadRequest = buildCardSearchRequest(request);
+  const parsed = parseCardSearchQuery(payloadRequest);
   devSearchLog("request", {
     selectedGame: normalizeCardGame(request.game),
     selectedLanguage: normalizeCardLanguage(request.language, normalizeCardGame(request.game)),
-    rawInput: request.query,
+    rawInput: payloadRequest.query,
     normalizedInput: parsed.normalizedQuery,
     parsedCardName: parsed.name || null,
     parsedCollectorNumber: parsed.collector?.normalized || null,
@@ -391,7 +378,7 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
         apikey: supabasePublishableKey,
         Authorization: `Bearer ${supabasePublishableKey}`,
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(payloadRequest),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => null) as UnifiedApiPayload | null;
@@ -465,7 +452,7 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
       provider: "manual" as const,
     });
   }
-  const request = buildCanonicalCardSearchRequest(input);
+  const request = buildCardSearchRequest(input);
   const page = request.page;
   const pageSize = request.pageSize;
   const cacheKey = JSON.stringify({

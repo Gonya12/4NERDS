@@ -24,7 +24,7 @@ export function usePokemonCardSearch() {
     const nextController = new AbortController();
     controller.current = nextController;
     const currentRequest = ++requestId.current;
-    lastInput.current = input;
+    lastInput.current = { ...input };
     setLoading(true);
     setError(undefined);
     try {

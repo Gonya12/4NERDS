@@ -440,11 +440,16 @@ export function buildPokemonApiQueries(input: CardSearchInput | ParsedCardSearch
     ? escapePokemonLuceneValue(normalizedBase.slice(0, Math.min(4, normalizedBase.length)))
     : "";
 
-  // Short names work best as a bounded provider wildcard. Keep exact and broader
-  // fallbacks close behind it so a single rejected Lucene expression is harmless.
+  // Short prefixes work best as a bounded wildcard. Complete names use an exact
+  // provider query first, with the wildcard immediately behind as a safe fallback.
   if (!number && !set && simpleName) {
-    add("name prefix", [`name:${escapePokemonLuceneValue(simpleName)}*`]);
-    add("exact normalized name", [unquoted("name", simpleName)]);
+    if (simpleName.length <= 4) {
+      add("name prefix", [`name:${escapePokemonLuceneValue(simpleName)}*`]);
+      add("exact normalized name", [unquoted("name", simpleName)]);
+    } else {
+      add("exact normalized name", [unquoted("name", simpleName)]);
+      add("name prefix", [`name:${escapePokemonLuceneValue(simpleName)}*`]);
+    }
   }
 
   for (const name of nameVariants) {

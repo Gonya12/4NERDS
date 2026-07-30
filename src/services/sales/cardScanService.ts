@@ -18,7 +18,6 @@ import {
 } from "./cardScanParsing";
 import {
   cardProviderLabel,
-  CARD_SEARCH_FUNCTION_NAME,
   fetchPokemonCardById,
   pricingFromUnifiedCard,
   searchPokemonCards,

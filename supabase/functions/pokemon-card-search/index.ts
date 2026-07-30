@@ -20,6 +20,10 @@ import {
   type UnifiedCardPriceVariant,
   type UnifiedCardSearchInput,
 } from "../_shared/unifiedCardSearchCore.ts";
+import {
+  parseCompatibleCardSearchRequest,
+  type CardSearchRequestWithOptions,
+} from "../_shared/cardSearchRequestContract.ts";
 
 const pokemonCardsUrl = "https://api.pokemontcg.io/v2/cards";
 const tcgdexUrl = "https://api.tcgdex.net/v2";
@@ -33,7 +37,7 @@ const corsHeaders = {
 };
 const edgeDebugEnabled = Deno.env.get("CARD_SEARCH_DEBUG") === "true";
 
-type SearchRequest = UnifiedCardSearchInput & { id?: string };
+type SearchRequest = CardSearchRequestWithOptions;
 type JsonRecord = Record<string, unknown>;
 type UpstreamResult = {
   payload: unknown;
@@ -80,6 +84,22 @@ function structuredError(
     status,
     retryAfter ? { "Retry-After": retryAfter, "Cache-Control": "no-store" } : { "Cache-Control": "no-store" },
   );
+}
+
+function debugFields(details: JsonRecord) {
+  return edgeDebugEnabled ? details : {};
+}
+
+async function withDebugFields(response: Response, details: JsonRecord) {
+  if (!edgeDebugEnabled) return response;
+  const payload = await response.clone().json().catch(() => ({}));
+  const headers = new Headers(response.headers);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  return new Response(JSON.stringify({ ...record(payload), ...details }), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function number(value: unknown) {
@@ -241,7 +261,7 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
   }
 
   const validation = manualCardSearchValidationError(input);
-  if (validation) return { error: structuredError("INVALID_QUERY", validation, 400) };
+  if (validation) return { error: structuredError("INVALID_QUERY_FORMAT", validation, 400) };
   const parsed = parseCardSearchQuery(input);
   const queries = buildPokemonApiQueries(parsed);
   const cards = new Map<string, RankablePokemonCard>();
@@ -430,7 +450,7 @@ async function searchJapanesePokemon(input: SearchRequest, page: number, pageSiz
     briefById.set(providerCardId, { id: providerCardId });
   } else {
     const validation = manualCardSearchValidationError(input);
-    if (validation) return { error: structuredError("INVALID_QUERY", validation, 400) };
+    if (validation) return { error: structuredError("INVALID_QUERY_FORMAT", validation, 400) };
     const endpoints: string[] = [];
     if (rawName) {
       const params = new URLSearchParams({ name: rawName });
@@ -557,7 +577,7 @@ async function searchOnePiece(input: SearchRequest, page: number, pageSize: numb
   const cardCode = extractOnePieceCardCode(input.collectorNumber || rawQuery);
   const searchName = String(input.name || onePieceSearchName(rawQuery) || input.cardType || "").trim();
   if (!cardCode && searchName.replace(/[^\p{L}\p{N}]/gu, "").length < 2 && !input.set) {
-    return { error: structuredError("INVALID_QUERY", "Enter a One Piece card name, code, set, character, or rarity.", 400) };
+    return { error: structuredError("INVALID_QUERY_FORMAT", "Enter a One Piece card name, code, set, character, or rarity.", 400) };
   }
   const found = new Map<string, OptcgCard>();
   const add = (value: unknown) => rows(value).forEach((row) => {
@@ -629,20 +649,23 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return respond(new Response(null, { status: 204, headers: corsHeaders }));
   if (request.method !== "POST") return respond(structuredError("METHOD_NOT_ALLOWED", "Method not allowed.", 405));
   let input: SearchRequest;
+  let receivedKeys: string[] = [];
   try {
     const body = await request.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return respond(structuredError("INVALID_REQUEST", "The request body must be a JSON object.", 400));
     }
-    input = body as SearchRequest;
+    const recordBody = body as JsonRecord;
+    receivedKeys = Object.keys(recordBody).sort();
+    input = parseCompatibleCardSearchRequest(recordBody);
   } catch {
     return respond(structuredError("INVALID_JSON", "A valid JSON request body is required.", 400));
   }
-  if (!["pokemon", "one_piece", "other"].includes(String(input.game || ""))) {
-    return respond(structuredError("INVALID_GAME", "game must be pokemon, one_piece, or other.", 400));
+  if (!["pokemon", "one_piece"].includes(String(input.game || ""))) {
+    return respond(structuredError("INVALID_GAME", "game must be pokemon or one_piece.", 400));
   }
-  if (!["en", "ja", "unknown"].includes(String(input.language || ""))) {
-    return respond(structuredError("INVALID_LANGUAGE", "language must be en, ja, or unknown.", 400));
+  if (!["en", "ja"].includes(String(input.language || ""))) {
+    return respond(structuredError("INVALID_LANGUAGE", "language must be en or ja.", 400));
   }
   const game = normalizeCardGame(input.game);
   const language = normalizeCardLanguage(input.language, game);
@@ -650,6 +673,29 @@ Deno.serve(async (request) => {
   const page = Math.min(100, Math.max(1, Math.floor(Number(input.page) || 1)));
   const pageSize = Math.min(30, Math.max(1, Math.floor(Number(input.pageSize) || 30)));
   const provider = game === "one_piece" ? "optcgapi" : language === "ja" ? "tcgdex" : "pokemontcg";
+  const queryPresent = Boolean(
+    input.query.trim()
+    || input.name?.trim()
+    || input.collectorNumber?.trim()
+    || input.set?.trim()
+    || input.providerCardId?.trim()
+    || input.id?.trim()
+  );
+  const initialProviderQuery = provider === "pokemontcg"
+    ? buildPokemonApiQueries(parsed)[0]?.query || ""
+    : parsed.normalizedQuery;
+  const requestDebug = {
+    receivedKeys,
+    queryPresent,
+    normalizedQuery: parsed.normalizedQuery,
+    providerQuery: initialProviderQuery,
+  };
+  if (!queryPresent) {
+    return respond(await withDebugFields(
+      structuredError("INVALID_QUERY", "Invalid or empty PokÃ©mon card query.", 400),
+      { ...requestDebug, upstreamReached: false, providerHttpStatus: null, resultCount: 0 },
+    ));
+  }
   edgeDebug("request", {
     requestId,
     selectedGame: game,
@@ -661,23 +707,6 @@ Deno.serve(async (request) => {
     selectedProvider: provider,
     edgeFunctionName: "pokemon-card-search",
   });
-  if (game === "other") {
-    return respond(json({
-      success: true,
-      provider: "manual",
-      query: "",
-      results: [],
-      page,
-      pageSize,
-      count: 0,
-      totalCount: 0,
-      hasMore: false,
-      warnings: ["Other / Manual items do not use an external card provider."],
-      requestId,
-      edgeFunctionReached: true,
-      upstreamReached: false,
-    }));
-  }
 
   try {
     const result = game === "one_piece"
@@ -696,7 +725,16 @@ Deno.serve(async (request) => {
       upstreamReached?: boolean;
       providerResponseStatus?: number;
     };
-    if (normalizedResult.error) return respond(normalizedResult.error);
+    if (normalizedResult.error) {
+      return respond(await withDebugFields(normalizedResult.error, {
+        ...requestDebug,
+        upstreamReached: normalizedResult.upstreamReached ?? false,
+        providerHttpStatus: normalizedResult.providerResponseStatus ?? null,
+        resultCount: 0,
+      }));
+    }
+    const resultCount = normalizedResult.matches?.length || 0;
+    const providerQuery = normalizedResult.query || initialProviderQuery;
     return respond(json({
       success: true,
       provider,
@@ -704,7 +742,7 @@ Deno.serve(async (request) => {
       results: normalizedResult.matches || [],
       page,
       pageSize,
-      count: normalizedResult.matches?.length || 0,
+      count: resultCount,
       totalCount: normalizedResult.totalCount || 0,
       hasMore: Boolean(normalizedResult.hasMore),
       warnings: normalizedResult.warnings || [],
@@ -713,6 +751,13 @@ Deno.serve(async (request) => {
       edgeFunctionReached: true,
       upstreamReached: normalizedResult.upstreamReached ?? true,
       providerResponseStatus: normalizedResult.providerResponseStatus ?? 200,
+      ...debugFields({
+        ...requestDebug,
+        normalizedQuery: parsed.normalizedQuery,
+        providerQuery,
+        providerHttpStatus: normalizedResult.providerResponseStatus ?? 200,
+        resultCount,
+      }),
     }, 200, { "Cache-Control": "public, max-age=120" }));
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
