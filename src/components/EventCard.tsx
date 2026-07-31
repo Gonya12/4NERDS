@@ -3,11 +3,10 @@ import { memo } from "react";
 import { Link } from "react-router-dom";
 import type { Event, Worker } from "../types/models";
 import { availabilitySummaryByWorker } from "../utils/availability";
-import { eventStage, eventStageAccentClasses, eventStageCardClasses, eventStageLabels } from "../utils/eventStage";
+import { deriveEventDisplayStatus, eventDisplayStatusAccentClasses, eventDisplayStatusCardClasses, eventDisplayStatusLabels } from "../utils/eventStage";
 import { checklistProgress } from "../utils/financeMath";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { shortScheduleSummary } from "../utils/eventSchedule";
-import { eventTimingStatus } from "../utils/eventStatus";
 import { EventImageFrame } from "./EventImageFrame";
 import { StatusChip } from "./StatusChip";
 
@@ -19,10 +18,9 @@ function workerNames(event: Event, workers: Worker[]) {
 function EventCardBase({ event, workers = [], compact = false }: { event: Event; workers?: Worker[]; compact?: boolean }) {
   const names = workerNames(event, workers);
   const availability = availabilitySummaryByWorker(event, workers);
-  const timing = eventTimingStatus(event.startDate);
   const payment = calculatePaymentSummary(event, workers);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  const stage = eventStage(event.eventStage);
+  const displayStatus = deriveEventDisplayStatus(event, workers);
   const checklist = checklistProgress(event);
   const paidPercent = payment.totalCost > 0 ? Math.min((payment.totalPaid / payment.totalCost) * 100, 100) : 0;
   const paymentStatus = payment.confirmedWorkerCount === 0
@@ -39,17 +37,16 @@ function EventCardBase({ event, workers = [], compact = false }: { event: Event;
     <Link
       to={`/events/${event.id}`}
       aria-label={`Open ${event.name}`}
-      className={`group relative block overflow-hidden rounded-panel border shadow-card backdrop-blur-sm transition duration-240 ease-premium hover:-translate-y-1 hover:shadow-elevated active:scale-[0.99] ${compact ? "p-3" : "p-3 sm:p-4"} ${eventStageCardClasses[stage]}`}
+      className={`group relative block overflow-hidden rounded-panel border shadow-card backdrop-blur-sm transition duration-240 ease-premium hover:-translate-y-1 hover:shadow-elevated active:scale-[0.99] ${compact ? "p-3" : "p-3 sm:p-4"} ${eventDisplayStatusCardClasses[displayStatus]}`}
     >
-      <span className={`absolute inset-y-0 left-0 w-1 ${eventStageAccentClasses[stage]}`} aria-hidden="true" />
+      <span className={`absolute inset-y-0 left-0 w-1 ${eventDisplayStatusAccentClasses[displayStatus]}`} aria-hidden="true" />
       <div className={!compact ? "sm:grid sm:grid-cols-[minmax(160px,220px)_minmax(0,1fr)] sm:gap-4" : ""}>
         <EventImageFrame imageUrl={event.imageUrl} initials={initials} className={compact ? "mb-3 aspect-[4/3] max-h-[280px]" : "mb-4 aspect-[4/5] max-h-[620px] sm:mb-0"} />
         <div className="min-w-0">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap gap-1.5">
-                <span className="status-pill bg-night-850 text-white dark:bg-slate-700">{timing}</span>
-                <span className={`status-pill text-white ${eventStageAccentClasses[stage]}`}>{eventStageLabels[stage]}</span>
+                <span className={`status-pill text-white ${eventDisplayStatusAccentClasses[displayStatus]}`}>{eventDisplayStatusLabels[displayStatus]}</span>
                 {event.importedFromCalendar ? <span className="status-pill bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200">Imported</span> : null}
                 <StatusChip value={event.registrationStatus} />
               </div>

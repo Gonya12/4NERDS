@@ -41,11 +41,10 @@ import {
   saveCalendarCandidate
 } from "../services/database/calendarFeedRepository";
 import { getCachedPlannerHomeEvents, listPlannerEventOptions, listWorkers } from "../services/planner/plannerRepository";
-import type { CalendarImportCandidate, Event, EventDay, EventStage, Worker } from "../types/models";
+import type { CalendarImportCandidate, Event, EventDay, Worker } from "../types/models";
 import { effectiveConfirmedWorkerIds, workersForDay } from "../utils/availability";
-import { isPaidOrConfirmedEvent, isPlannedEvent } from "../utils/eventCommitment";
 import { eventDays, formatEventDay } from "../utils/eventSchedule";
-import { eventStageAccentClasses, eventStageLabels } from "../utils/eventStage";
+import { deriveEventDisplayStatus, eventDisplayStatusAccentClasses, eventDisplayStatusLabels } from "../utils/eventStage";
 import { calculatePaymentSummary, formatMoney } from "../utils/paymentMath";
 import { actionCooldownRemainingSeconds, canRunAction, markActionRun, recordPageLoad } from "../utils/supabase";
 
@@ -275,8 +274,8 @@ function CalendarPill({ entry, workers }: { entry: CalendarEntry; workers: Worke
   if (entry.kind === "import") {
     return <p className="truncate rounded bg-cyan-500 px-1 py-0.5 text-[9px] font-black text-white sm:text-[10px]">{entry.candidate.title}</p>;
   }
-  const stage = stageForEntry(entry, workers);
-  return <p className={`truncate rounded px-1 py-0.5 text-[9px] font-black text-white sm:text-[10px] ${eventStageAccentClasses[stage]}`}>{entry.event.name}</p>;
+  const status = deriveEventDisplayStatus(entry.event, workers);
+  return <p className={`truncate rounded px-1 py-0.5 text-[9px] font-black text-white sm:text-[10px] ${eventDisplayStatusAccentClasses[status]}`}>{entry.event.name}</p>;
 }
 
 function DayDetails({ date, entries, workers, savingImportId, onSaveImport }: {
@@ -328,7 +327,7 @@ function AgendaCard({ entry, workers, saving, onSaveImport }: {
   }
 
   const { event, day } = entry;
-  const stage = stageForEntry(entry, workers);
+  const displayStatus = deriveEventDisplayStatus(event, workers);
   const payment = calculatePaymentSummary(event, workers);
   const confirmed = workersForDay(event, day.id, workers);
   const initials = event.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
@@ -337,7 +336,7 @@ function AgendaCard({ entry, workers, saving, onSaveImport }: {
       <EventImageFrame imageUrl={event.imageUrl} initials={initials} className="aspect-[4/5] max-h-32 sm:max-h-none" />
       <div className="min-w-0">
         <div className="flex flex-wrap gap-2">
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-black text-white ${eventStageAccentClasses[stage]}`}>{eventStageLabels[stage]}</span>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-black text-white ${eventDisplayStatusAccentClasses[displayStatus]}`}>{eventDisplayStatusLabels[displayStatus]}</span>
           {event.importedFromCalendar ? <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-black text-cyan-700 dark:bg-cyan-950 dark:text-cyan-200">Imported</span> : <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300">Manual</span>}
         </div>
         <h3 className="mt-2 text-lg font-black text-ink dark:text-white">{event.name}</h3>
@@ -366,16 +365,11 @@ function matchesFilter(entry: CalendarEntry, filter: CalendarFilter, workers: Wo
   }
   if (filter === "month") return date >= startOfMonth(today) && date <= endOfMonth(today);
   if (entry.kind === "import") return false;
-  if (filter === "planned") return date >= today && isPlannedEvent(entry.event, workers);
-  if (filter === "paid") return isPaidOrConfirmedEvent(entry.event, workers);
-  if (filter === "new") return (entry.event.eventStage || "new") === "new";
-  return entry.event.eventStage === "applied";
-}
-
-function stageForEntry(entry: SavedEntry, workers: Worker[]): EventStage {
-  if (parseLocalDate(entry.date) < startOfDay(new Date())) return "past";
-  if (isPaidOrConfirmedEvent(entry.event, workers)) return "paid";
-  return entry.event.eventStage || "new";
+  const displayStatus = deriveEventDisplayStatus(entry.event, workers);
+  if (filter === "planned") return date >= today && (displayStatus === "paid" || displayStatus === "applied");
+  if (filter === "paid") return displayStatus === "paid";
+  if (filter === "new") return displayStatus === "upcoming";
+  return displayStatus === "applied";
 }
 
 function pendingImports() {

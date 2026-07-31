@@ -67,7 +67,7 @@ export function ShareScheduleModal({ open, events, workers, loading = false, war
   return <ResponsiveModal
     open={open}
     title="Share Schedule"
-    description="Copy a simple group-chat message generated from your current paid and confirmed events."
+    description="Copy an editable group-chat message covering paid/confirmed and applied/reserved events."
     onClose={onClose}
     size="lg"
   >
@@ -84,7 +84,7 @@ export function ShareScheduleModal({ open, events, workers, loading = false, war
       </div> : null}
 
       {!rows.length ? <div className="rounded-2xl border border-dashed border-slate-600 bg-slate-950/60 p-7 text-center">
-        <p className="text-lg font-black text-white">There are currently no paid upcoming events.</p>
+        <p className="text-lg font-black text-white">There are currently no paid or applied upcoming events.</p>
       </div> : <>
         <label className="block">
           <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-slate-400">Message</span>
