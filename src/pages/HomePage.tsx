@@ -1,4 +1,4 @@
-import { CalendarDays, CalendarSync, Camera, CheckCircle2, ChevronDown, DollarSign, HelpCircle, Package, Plus, Settings, X } from "lucide-react";
+import { CalendarDays, CalendarSync, Camera, CheckCircle2, ChevronDown, DollarSign, HelpCircle, Package, Plus, Settings, Share2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
@@ -7,6 +7,7 @@ import { EventCard } from "../components/EventCard";
 import { InstallPrompt } from "../components/InstallPrompt";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { SkeletonEventCard } from "../components/SkeletonEventCard";
+import { ShareScheduleModal } from "../components/ShareScheduleModal";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import { getCachedPlannerHomeEvents, listPlannerHomeEvents, listWorkers } from "../services/planner/plannerRepository";
 import { appBuildTime, appVersion } from "../services/debug/debugLog";
@@ -38,6 +39,7 @@ export function HomePage() {
   const [syncMessage, setSyncMessage] = useState("");
   const [syncError, setSyncError] = useState("");
   const [showLegend, setShowLegend] = useState(false);
+  const [shareScheduleOpen, setShareScheduleOpen] = useState(false);
   const [plannedFilter, setPlannedFilter] = useState<PlannedFilter>("all");
 
   async function load(manual = false) {
@@ -180,7 +182,8 @@ export function HomePage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button onClick={() => setShowLegend(true)} className="btn-secondary min-h-10 rounded-full px-3 text-xs"><HelpCircle size={15} /> Legend</button>
+          <button onClick={() => setShareScheduleOpen(true)} className="btn-secondary min-h-10 rounded-full px-3 text-xs"><Share2 size={15} /> <span className="hidden sm:inline">Share Schedule</span></button>
+          <button onClick={() => setShowLegend(true)} className="btn-secondary min-h-10 rounded-full px-3 text-xs"><HelpCircle size={15} /> <span className="hidden sm:inline">Legend</span></button>
           <Link to="/settings" className="icon-button h-10 w-10 rounded-full" aria-label="Settings"><Settings size={18} /></Link>
         </div>
       </header>
@@ -207,7 +210,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <section aria-label="Quick actions" className="stagger-list grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+      <section aria-label="Quick actions" className="stagger-list grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
         <Link to="/events/new" className="group flex min-h-16 items-center gap-3 rounded-panel bg-gradient-to-br from-brand-500 to-brand-600 p-3 text-white shadow-glow transition duration-240 ease-premium hover:-translate-y-1 hover:brightness-105 active:scale-[0.98]">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><Plus size={20} /></span>
           <span className="text-sm font-black leading-tight">Add Event</span>
@@ -224,6 +227,10 @@ export function HomePage() {
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><CalendarSync size={20} /></span>
           <span className="text-sm font-black leading-tight">NJ Calendar</span>
         </Link>
+        <button type="button" onClick={() => setShareScheduleOpen(true)} className="group flex min-h-16 items-center gap-3 rounded-panel bg-gradient-to-br from-violet-500 to-fuchsia-700 p-3 text-left text-white shadow-card transition duration-240 ease-premium hover:-translate-y-1 hover:shadow-elevated active:scale-[0.98]">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15"><Share2 size={20} /></span>
+          <span className="text-sm font-black leading-tight">Share Schedule</span>
+        </button>
       </section>
 
       <section>
@@ -236,6 +243,7 @@ export function HomePage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => setShareScheduleOpen(true)} className="btn-secondary min-h-10 rounded-full px-3 text-xs"><Share2 size={14} /> Share</button>
             <button onClick={() => void load(true)} disabled={syncing} className="btn-secondary min-h-10 rounded-full px-3 text-xs">Sync</button>
             <Link to="/events" className="hidden text-sm font-bold text-coral sm:inline">Full Calendar</Link>
           </div>
@@ -303,6 +311,7 @@ export function HomePage() {
       <button onClick={() => navigate("/sales?mode=sale&initialMode=camera")} className="fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-glow transition duration-180 hover:-translate-y-1 hover:brightness-105 active:scale-95 lg:bottom-8 lg:right-8" aria-label="Quick add sale with camera">
         <Camera size={24} />
       </button>
+      <ShareScheduleModal open={shareScheduleOpen} events={events} workers={workers} loading={loading && events.length === 0} warning={syncError} onClose={() => setShareScheduleOpen(false)} />
       {showLegend ? (
         <div className="fixed inset-0 z-40 flex items-end bg-slate-950/50 p-4 backdrop-blur-sm lg:items-center lg:justify-center">
           <section role="dialog" aria-modal="true" aria-labelledby="legend-title" className="mx-auto w-full max-w-sm rounded-panel border border-slate-200 bg-white p-5 shadow-elevated dark:border-slate-800 dark:bg-night-850">

@@ -10,6 +10,7 @@ import {
   MapPin,
   RefreshCw,
   Save,
+  Share2,
   Users
 } from "lucide-react";
 import {
@@ -33,6 +34,7 @@ import { ErrorState } from "../components/ErrorState";
 import { EventImageFrame } from "../components/EventImageFrame";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { SkeletonCard } from "../components/SkeletonCard";
+import { ShareScheduleModal } from "../components/ShareScheduleModal";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
 import {
   listCalendarCandidates,
@@ -62,7 +64,10 @@ export function CalendarPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [imports, setImports] = useState<CalendarImportCandidate[]>(() => pendingImports());
   const [view, setView] = useState<CalendarView>("month");
-  const [filter, setFilter] = useState<CalendarFilter>(() => searchParams.get("filter") === "planned" ? "planned" : "all");
+  const [filter, setFilter] = useState<CalendarFilter>(() => {
+    const requested = searchParams.get("filter");
+    return requested === "planned" || requested === "paid" ? requested : "all";
+  });
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(startOfDay(new Date()));
   const [loading, setLoading] = useState(cached.length === 0);
@@ -70,6 +75,7 @@ export function CalendarPage() {
   const [savingImportId, setSavingImportId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [shareScheduleOpen, setShareScheduleOpen] = useState(false);
 
   async function load(manual = false) {
     recordPageLoad("Event Calendar");
@@ -99,7 +105,8 @@ export function CalendarPage() {
   useEffect(() => { void load(); }, []);
 
   useEffect(() => {
-    if (searchParams.get("filter") === "planned") setFilter("planned");
+    const requested = searchParams.get("filter");
+    if (requested === "planned" || requested === "paid") setFilter(requested);
   }, [searchParams]);
 
   const entries = useMemo<CalendarEntry[]>(() => [
@@ -166,7 +173,10 @@ export function CalendarPage() {
           <h1 className="text-3xl font-black text-ink dark:text-white">Event Calendar</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Paid, planned, manual, and imported events in one place.</p>
         </div>
-        <Link to="/nj-calendar" className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white"><CalendarSync size={17} /> <span className="hidden sm:inline">NJ Calendar</span></Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" onClick={() => setShareScheduleOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-violet-500 px-3 text-sm font-black text-white shadow-soft"><Share2 size={17} /> <span>Share Schedule</span></button>
+          <Link to="/nj-calendar" className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-ink shadow-soft dark:bg-slate-900 dark:text-white"><CalendarSync size={17} /> <span className="hidden sm:inline">NJ Calendar</span></Link>
+        </div>
       </header>
 
       <section className="sticky top-0 z-20 -mx-4 space-y-3 border-y border-slate-200 bg-paper/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:mx-0 lg:rounded-2xl lg:border">
@@ -256,6 +266,7 @@ export function CalendarPage() {
           </div>
         )
       ) : null}
+      <ShareScheduleModal open={shareScheduleOpen} events={events} workers={workers} loading={loading && events.length === 0} warning={error} onClose={() => setShareScheduleOpen(false)} />
     </div>
   );
 }
