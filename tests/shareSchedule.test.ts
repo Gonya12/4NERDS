@@ -1,22 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Event, EventDay, Worker } from "../src/types/models.ts";
-import { defaultScheduleOptions, generateScheduleMessage, selectConfirmedUpcomingSchedule } from "../src/utils/shareSchedule.ts";
+import type { Event, Worker } from "../src/types/models.ts";
+import { generateScheduleMessage, selectConfirmedUpcomingSchedule } from "../src/utils/shareSchedule.ts";
 
 const workers: Worker[] = [
-  { id: "gonzalo", name: "Gonzalo", active: true, createdAt: "2026-01-01", updatedAt: "2026-01-01" },
-  { id: "thiago", name: "Thiago", active: true, createdAt: "2026-01-01", updatedAt: "2026-01-01" }
+  { id: "gonzalo", name: "Gonzalo", active: true, createdAt: "2026-01-01", updatedAt: "2026-01-01" }
 ];
-
-function day(eventId: string, id: string, date: string, startTime = "10:00", endTime = "17:00"): EventDay {
-  return { id, eventId, date, startTime, endTime, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
-}
 
 function event(id: string, name: string, date: string, overrides: Partial<Event> = {}): Event {
   return {
     id,
     name,
     startDate: date,
+    startTime: "10:00",
+    endTime: "17:00",
+    city: "Parsippany",
+    state: "NJ",
     registrationStatus: "open",
     sourceType: "manual",
     confidence: "high",
@@ -39,46 +38,38 @@ function event(id: string, name: string, date: string, overrides: Partial<Event>
 test("includes only future events that satisfy the canonical paid-and-confirmed rule", () => {
   const rows = selectConfirmedUpcomingSchedule([
     event("paid", "Paid and confirmed", "2026-08-08"),
-    event("applied", "Applied only", "2026-08-09", { eventStage: "applied" }),
-    event("unpaid", "Confirmed but unpaid", "2026-08-10", { eventStage: "applied" }),
-    event("cancelled", "Cancelled", "2026-08-11", { status: "skipped" }),
+    event("applied", "Applied only", "2026-08-16", { eventStage: "applied" }),
+    event("cancelled", "Cancelled", "2026-08-22", { status: "skipped" }),
     event("past", "Past event", "2026-07-01")
-  ], workers, defaultScheduleOptions, new Date(2026, 6, 31, 12));
+  ], workers, new Date(2026, 6, 31, 12));
 
   assert.deepEqual(rows.map((row) => row.event.name), ["Paid and confirmed"]);
 });
 
-test("sorts chronologically and derives weekday names from real dates", () => {
+test("creates the natural editable group-chat message in chronological order", () => {
   const rows = selectConfirmedUpcomingSchedule([
-    event("later", "Later Show", "2026-08-22"),
-    event("next", "Next Show", "2026-08-08")
-  ], workers, defaultScheduleOptions, new Date(2026, 6, 31, 12));
-  const message = generateScheduleMessage(rows, workers, defaultScheduleOptions);
+    event("third", "Third Show", "2026-08-29"),
+    event("second", "Woodbridge Card Show", "2026-08-16", { startTime: "09:00", endTime: "16:00", venueName: "APA Hotel Woodbridge", city: "Iselin" }),
+    event("first", "Morris County Card Show", "2026-08-08")
+  ], workers, new Date(2026, 6, 31, 12));
+  const message = generateScheduleMessage(rows);
 
-  assert.ok(message.indexOf("Next Show") < message.indexOf("Later Show"));
-  assert.match(message, /Sat, Aug 8/);
-  assert.match(message, /Sat, Aug 22/);
+  assert.match(message, /^Hey guys, these are the next events we already have paid:/);
+  assert.match(message, /Our next event is on Saturday, August 8:\nMorris County Card Show\n10:00 AM–5:00 PM\nParsippany, NJ/);
+  assert.match(message, /The following event is on Sunday, August 16:\nWoodbridge Card Show\n9:00 AM–4:00 PM\nAPA Hotel Woodbridge, Iselin, NJ/);
+  assert.match(message, /After that, we have another event on Saturday, August 29:/);
+  assert.ok(message.indexOf("Morris County") < message.indexOf("Woodbridge"));
+  assert.match(message, /Please let me know which events you can work\.$/);
 });
 
-test("uses day-specific worker assignments for multi-day events", () => {
-  const multi = event("multi", "Weekend Expo", "2026-08-07", {
-    eventDays: [day("multi", "friday", "2026-08-07"), day("multi", "saturday", "2026-08-08")],
-    eventDayWorkers: [
-      { id: "a", eventId: "multi", eventDayId: "friday", workerId: "gonzalo", createdAt: "2026-01-01", updatedAt: "2026-01-01" },
-      { id: "b", eventId: "multi", eventDayId: "saturday", workerId: "thiago", createdAt: "2026-01-01", updatedAt: "2026-01-01" }
-    ]
-  });
-  const options = { ...defaultScheduleOptions, includeConfirmedWorkers: true };
-  const rows = selectConfirmedUpcomingSchedule([multi], workers, options, new Date(2026, 6, 31, 12));
-  const message = generateScheduleMessage(rows, workers, options);
+test("uses natural wording for one event", () => {
+  const rows = selectConfirmedUpcomingSchedule([event("one", "Only Show", "2026-08-08")], workers, new Date(2026, 6, 31, 12));
+  const message = generateScheduleMessage(rows);
 
-  assert.match(message, /Fri, Aug 7[\s\S]*Confirmed: Gonzalo[\s\S]*Sat, Aug 8[\s\S]*Confirmed: Thiago/);
+  assert.match(message, /Our next event is on Saturday, August 8:/);
+  assert.doesNotMatch(message, /following|After that|last currently/);
 });
 
-test("financial details stay off by default", () => {
-  const paid = event("fee", "Table Show", "2026-08-08", { eventCost: 100, paymentRecords: [] });
-  const rows = selectConfirmedUpcomingSchedule([paid], workers, defaultScheduleOptions, new Date(2026, 6, 31, 12));
-  const message = generateScheduleMessage(rows, workers, defaultScheduleOptions);
-
-  assert.doesNotMatch(message, /Event cost|Paid:|Still owed/);
+test("returns the required empty message when nothing qualifies", () => {
+  assert.equal(generateScheduleMessage([]), "There are currently no paid upcoming events.");
 });
