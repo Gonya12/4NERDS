@@ -31,6 +31,7 @@ import { formatMoney } from "../utils/paymentMath";
 import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
 import { pokemonCategoryLabels } from "../utils/salesControl";
 import { allocateIncomingTradeBasis, ownershipIsValid, tradeSummary } from "../utils/tradeMath";
+import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
 
 const inputClass = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-ink outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white";
 const steps = ["Trade information", "We Gave", "We Received", "Cash adjustment", "Ownership & cost", "Review & Complete"];
@@ -539,12 +540,12 @@ function TradeEditor(props: EditorProps) {
       <label className="sm:col-span-2"><span className="mb-1 block text-xs font-black">Notes</span><textarea value={trade.notes || ""} onChange={(event) => update({ notes: event.target.value })} rows={3} className={inputClass} /></label>
       <ImageAttachmentField
         label="General trade photos"
-        description="Add one group photo for the trade and reuse it on individual items without duplicate uploads."
+        description="Up to 20 transaction photos. Shared trade photos can be reused on individual items without duplicate uploads."
         attachments={generalImages}
         imageType="general"
         transactionId={trade.id}
         multiple
-        maxImages={5}
+        maxImages={TRANSACTION_PHOTO_LIMIT}
         onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["general"], images)}
         onBusyChange={onImageBusyChange}

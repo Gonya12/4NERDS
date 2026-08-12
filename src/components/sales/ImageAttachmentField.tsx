@@ -9,6 +9,7 @@ import {
   type ImageUploadStage
 } from "../../services/images/saleImageService";
 import type { TransactionImageAttachment, TransactionImageType } from "../../types/models";
+import { fitImagesWithinLimit } from "../../utils/transactionImages";
 import { ImageLightbox } from "./ImageLightbox";
 import { AppButton, ResponsiveModal } from "./SalesDashboardPrimitives";
 
@@ -134,7 +135,8 @@ export function ImageAttachmentField({
     file: File | undefined,
     targetId?: string,
     retryAttachmentId?: string,
-    resumeAttachment?: TransactionImageAttachment
+    resumeAttachment?: TransactionImageAttachment,
+    preserveMessage = false
   ) {
     if (file && !isSupportedSaleImage(file)) {
       setMessage(`${file.name || "That file"} is not an image.`);
@@ -155,7 +157,7 @@ export function ImageAttachmentField({
       resumeAttachment
     };
     setJobs((current) => [...current, job]);
-    setMessage("");
+    if (!preserveMessage) setMessage("");
     const slowTimer = window.setTimeout(() => updateJob(jobId, { slow: true }), 3_000);
     let timeoutTimer = 0;
     try {
@@ -201,13 +203,19 @@ export function ImageAttachmentField({
     const selected = Array.from(files);
     setReplaceId(undefined);
     if (!selected.length) return;
-    const room = targetId ? 1 : Math.max(0, maxImages - latestAttachments.current.length);
-    const accepted = selected.slice(0, multiple ? room : 1);
+    const selection = targetId
+      ? { accepted: selected.slice(0, 1), skippedCount: Math.max(0, selected.length - 1) }
+      : fitImagesWithinLimit(selected, latestAttachments.current.length, multiple ? maxImages : 1);
+    const accepted = selection.accepted;
     if (!accepted.length) {
-      setMessage(`This field allows up to ${maxImages} image${maxImages === 1 ? "" : "s"}.`);
+      setMessage(`No room remains. This field allows up to ${maxImages} image${maxImages === 1 ? "" : "s"}.`);
       return;
     }
-    for (const file of accepted) await uploadFile(file, targetId);
+    const selectionMessage = selection.skippedCount
+      ? `${accepted.length} image${accepted.length === 1 ? " was" : "s were"} accepted. ${selection.skippedCount} image${selection.skippedCount === 1 ? " was" : "s were"} skipped because only ${accepted.length} space${accepted.length === 1 ? " was" : "s were"} available.`
+      : "";
+    setMessage(selectionMessage);
+    for (const file of accepted) await uploadFile(file, targetId, undefined, undefined, true);
   }
 
   function chooseReplacement(id: string) {
@@ -376,9 +384,12 @@ export function ImageAttachmentField({
     tabIndex={0}
     aria-label={`${label} image attachment area`}
   >
-    <div>
-      <h3 className="text-sm font-black text-slate-950 dark:text-white">{label}</h3>
-      {description ? <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{description}</p> : null}
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h3 className="text-sm font-black text-slate-950 dark:text-white">{label}</h3>
+        {description ? <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{description}</p> : null}
+      </div>
+      <span className="shrink-0 rounded-full bg-violet-100 px-3 py-1 text-xs font-black text-violet-700 dark:bg-violet-950/50 dark:text-violet-200">{attachments.length} / {maxImages} photos</span>
     </div>
     <input
       ref={galleryRef}

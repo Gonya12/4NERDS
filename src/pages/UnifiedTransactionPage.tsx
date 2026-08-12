@@ -45,6 +45,7 @@ import {
 } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 import { getAutoLinkEventForSale } from "../utils/saleEventLinking";
+import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
 
 const input = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base outline-none focus:border-violet-500 dark:border-slate-700 dark:bg-slate-950";
 const moneyInput = (value: number | undefined, onChange: (value: number) => void) => <input type="number" min="0" step=".01" value={value || ""} onChange={(event) => onChange(Number(event.target.value || 0))} className={input} />;
@@ -494,12 +495,12 @@ export function UnifiedTransactionPage() {
       <label><span className="text-xs font-black">{transaction.transactionType === "sale" ? "Entered by" : "Who paid"}</span><select value={(transaction.transactionType === "sale" ? transaction.enteredByWorkerId : transaction.paidByWorkerId) || ""} onChange={(event) => setTransaction({ ...transaction, ...(transaction.transactionType === "sale" ? { enteredByWorkerId: event.target.value || undefined } : { paidByWorkerId: event.target.value || undefined }) })} className={input}><option value="">Unassigned</option>{workers.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
       <ImageAttachmentField
         label="Transaction photos"
-        description="Add a group photo for the entire transaction. It can be reused by individual items without uploading it again."
+        description="Up to 20 transaction photos. Shared photos can be reused by individual items without uploading them again."
         attachments={generalImages}
         imageType="general"
         transactionId={transaction.id}
         multiple
-        maxImages={5}
+        maxImages={TRANSACTION_PHOTO_LIMIT}
         onUpload={(file, imageType, onProgress, stableImageId, resumeAttachment) => uploadImage(file, imageType, onProgress, undefined, stableImageId, resumeAttachment)}
         onChange={(images) => changeTransactionImages(["general"], images)}
         onBusyChange={onImageBusyChange}
