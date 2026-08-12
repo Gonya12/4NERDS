@@ -226,7 +226,7 @@ export function StatusChip({ label, tone = "neutral", dot = true }: {
   return <span className={`transaction-status-chip status-${tone}`}>{dot ? <span className="size-1.5 rounded-full bg-current" aria-hidden="true" /> : null}{label}</span>;
 }
 
-export function ResponsiveModal({ open, title, description, onClose, onBack, restoreFocusRef, children, size = "md", dismissible = true }: {
+export function ResponsiveModal({ open, title, description, onClose, onBack, restoreFocusRef, children, size = "md", dismissible = true, swipeToDismiss = true, closeOnBackdrop = true, mobileEditor = false }: {
   open: boolean;
   title: string;
   description?: string;
@@ -236,11 +236,15 @@ export function ResponsiveModal({ open, title, description, onClose, onBack, res
   children: ReactNode;
   size?: "sm" | "md" | "lg";
   dismissible?: boolean;
+  swipeToDismiss?: boolean;
+  closeOnBackdrop?: boolean;
+  mobileEditor?: boolean;
 }) {
   const titleId = useId();
   const descriptionId = useId();
   const panelRef = useRef<HTMLElement>(null);
-  const touchStartY = useRef<number | undefined>(undefined);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const touchStart = useRef<{ x: number; y: number } | undefined>(undefined);
   const onCloseRef = useRef(onClose);
   const onBackRef = useRef(onBack);
   const historyEntryRef = useRef(false);
@@ -303,22 +307,34 @@ export function ResponsiveModal({ open, title, description, onClose, onBack, res
   }, [dismissible, open, requestClose, restoreFocusRef]);
 
   if (!open) return null;
-  const dialog = <div className="responsive-modal-backdrop" onMouseDown={(event) => { if (dismissible && event.target === event.currentTarget) requestClose(); }}>
+  const dialog = <div className="responsive-modal-backdrop" onMouseDown={(event) => { if (dismissible && closeOnBackdrop && event.target === event.currentTarget) requestClose(); }}>
     <section
       ref={panelRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
-      className={`responsive-modal-panel responsive-modal-${size}`}
-      onTouchStart={(event) => { touchStartY.current = event.touches[0]?.clientY; }}
-      onTouchEnd={(event) => {
-        const end = event.changedTouches[0]?.clientY;
-        if (dismissible && touchStartY.current !== undefined && end !== undefined && end - touchStartY.current > 72) requestClose();
-        touchStartY.current = undefined;
-      }}
+      className={`responsive-modal-panel responsive-modal-${size}${mobileEditor ? " responsive-modal-editor" : ""}`}
     >
-      <div className="modal-drag-indicator" aria-hidden="true" />
+      <div
+        className={`modal-drag-indicator${swipeToDismiss ? " is-interactive" : " is-decorative"}`}
+        aria-hidden="true"
+        onTouchStart={(event) => {
+          if (!dismissible || !swipeToDismiss || (bodyRef.current?.scrollTop ?? 0) > 0) return;
+          const touch = event.touches[0];
+          if (touch) touchStart.current = { x: touch.clientX, y: touch.clientY };
+        }}
+        onTouchEnd={(event) => {
+          const start = touchStart.current;
+          const end = event.changedTouches[0];
+          touchStart.current = undefined;
+          if (!dismissible || !swipeToDismiss || !start || !end || (bodyRef.current?.scrollTop ?? 0) > 0) return;
+          const deltaX = end.clientX - start.x;
+          const deltaY = end.clientY - start.y;
+          if (deltaY > 72 && deltaY > Math.abs(deltaX) * 1.25) requestClose();
+        }}
+        onTouchCancel={() => { touchStart.current = undefined; }}
+      />
       <div className="responsive-modal-header">
         <div>
           <p className="eyebrow">Sales Control</p>
@@ -327,7 +343,7 @@ export function ResponsiveModal({ open, title, description, onClose, onBack, res
         </div>
         {dismissible ? <AppButton type="button" variant="icon" onClick={requestClose} aria-label="Close dialog"><X size={19} /></AppButton> : null}
       </div>
-      <div className="mt-5">{children}</div>
+      <div ref={bodyRef} className="responsive-modal-body">{children}</div>
     </section>
   </div>;
   return createPortal(dialog, document.body);

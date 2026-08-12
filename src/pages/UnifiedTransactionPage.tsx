@@ -553,6 +553,9 @@ export function UnifiedTransactionPage() {
       onClose={() => { setEditing(undefined); setManualSearch(false); setScanFile(undefined); }}
       size="md"
       dismissible={!imageUploading}
+      swipeToDismiss={false}
+      closeOnBackdrop={false}
+      mobileEditor
     >
       {editing ? <div className="space-y-3">
         <label>

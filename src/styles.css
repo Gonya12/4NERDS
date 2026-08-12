@@ -309,7 +309,7 @@ input, select, textarea {
   }
 
   .responsive-modal-panel {
-    @apply min-w-0 w-full overflow-y-auto rounded-t-[1.75rem] border border-slate-700/80 bg-night-900 p-5 text-slate-100 shadow-2xl;
+    @apply flex min-w-0 w-full flex-col overflow-hidden rounded-t-[1.75rem] border border-slate-700/80 bg-night-900 p-5 text-slate-100 shadow-2xl;
     margin-bottom: calc(4.75rem + env(safe-area-inset-bottom));
     max-height: min(88dvh, calc(100dvh - 6.25rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
     padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
@@ -321,11 +321,27 @@ input, select, textarea {
   .responsive-modal-lg { max-width: 100%; }
 
   .responsive-modal-header {
-    @apply sticky -top-5 z-10 -mx-2 flex items-start justify-between gap-4 bg-night-900/95 px-2 pb-3 pt-1 backdrop-blur;
+    @apply z-10 -mx-2 flex shrink-0 items-start justify-between gap-4 bg-night-900/95 px-2 pb-3 pt-1 backdrop-blur;
   }
 
   .modal-drag-indicator {
-    @apply mx-auto mb-4 h-1 w-12 rounded-full bg-slate-600;
+    @apply mx-auto mb-4 h-1 w-12 shrink-0 rounded-full bg-slate-600;
+  }
+
+  .modal-drag-indicator.is-interactive {
+    touch-action: none;
+  }
+
+  .responsive-modal-body {
+    @apply mt-2 min-h-0 flex-1 overflow-y-auto overscroll-y-contain pt-3;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .responsive-modal-editor {
+    height: calc(100dvh - max(0.5rem, env(safe-area-inset-top)) - max(0.5rem, env(safe-area-inset-bottom)));
+    max-height: calc(100dvh - max(0.5rem, env(safe-area-inset-top)) - max(0.5rem, env(safe-area-inset-bottom)));
+    margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }
 
   @media (min-width: 768px) {
@@ -357,6 +373,16 @@ input, select, textarea {
 
     .responsive-modal-header {
       @apply static mx-0 bg-transparent p-0 backdrop-blur-none;
+    }
+
+    .responsive-modal-body {
+      @apply mt-5 p-0;
+    }
+
+    .responsive-modal-editor {
+      height: auto;
+      max-height: min(760px, calc(100dvh - 48px));
+      margin-bottom: 0;
     }
 
     .modal-drag-indicator {
