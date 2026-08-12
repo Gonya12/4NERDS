@@ -1041,8 +1041,15 @@ export function SalesControlPage() {
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Track sales, inventory, business costs, ownership, and trades from one fast workspace.</p>
           <p className="mt-2 text-xs font-bold text-slate-500">{lastRefreshed ? `Last refreshed ${lastRefreshed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : usingCachedData ? "Showing cached records while refreshing" : "Preparing live financial data"}</p>
         </div>
-        <AppButton onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; openTransactionFlow(); }} className="hidden shrink-0 lg:inline-flex lg:min-w-48"><Plus size={20} /> Add Transaction</AppButton>
+        <AppButton onClick={() => navigate("/sales/deals/new")} className="hidden shrink-0 bg-gradient-to-br from-violet-500 to-indigo-600 lg:inline-flex lg:min-w-48"><Plus size={20} /> New Deal</AppButton>
       </header>
+      <nav aria-label="Sales Control primary actions" className="dashboard-reveal grid grid-cols-2 gap-2 rounded-[1.35rem] border border-slate-200 bg-white p-2 shadow-card dark:border-slate-800 dark:bg-night-900 sm:grid-cols-5">
+        <button type="button" onClick={() => navigate("/sales/deals/new")} className="col-span-2 flex min-h-16 items-center justify-between rounded-xl bg-gradient-to-br from-violet-600 to-indigo-700 px-4 text-left font-black text-white shadow-lg sm:col-span-1"><span><small className="block text-[10px] uppercase tracking-wider text-violet-200">Primary action</small>New Deal</span><Plus size={22} /></button>
+        <button type="button" onClick={() => document.getElementById("sales-control-workspace")?.scrollIntoView({ behavior: "smooth" })} className="flex min-h-16 items-center justify-between rounded-xl bg-slate-50 px-3 text-left text-sm font-black dark:bg-slate-800">Inventory <PackagePlus size={19} className="text-sky-500" /></button>
+        <button type="button" onClick={() => navigate("/sales/trades")} className="flex min-h-16 items-center justify-between rounded-xl bg-slate-50 px-3 text-left text-sm font-black dark:bg-slate-800">Deals <Handshake size={19} className="text-violet-500" /></button>
+        <button type="button" onClick={() => document.getElementById("sales-control-workspace")?.scrollIntoView({ behavior: "smooth" })} className="flex min-h-16 items-center justify-between rounded-xl bg-slate-50 px-3 text-left text-sm font-black dark:bg-slate-800">Analytics <BadgeDollarSign size={19} className="text-emerald-500" /></button>
+        <button type="button" onClick={() => navigate("/sales/deals/new?event=current")} className="flex min-h-16 items-center justify-between rounded-xl bg-slate-50 px-3 text-left text-sm font-black dark:bg-slate-800">Event Sales <ScanLine size={19} className="text-orange-500" /></button>
+      </nav>
       <ResponsiveModal
         open={transactionFlow.stage !== "closed"}
         title={transactionFlow.stage === "choose_type" ? "What are you adding?" : transactionFlow.stage === "choose_subtype" ? "Purchased / Cost" : transactionFlow.stage === "error" ? "Transaction editor unavailable" : transactionFlow.stage === "opening" ? "Opening transaction" : "How many items?"}
@@ -1092,7 +1099,7 @@ export function SalesControlPage() {
       {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
       <Toast open={Boolean(message)} message={message} tone={/could not|failed|error|required|missing|invalid/i.test(message) ? "error" : "success"} onDismiss={() => setMessage("")} />
 
-      <div className="sales-dashboard-grid">
+      <div id="sales-control-workspace" className="sales-dashboard-grid scroll-mt-4">
         <div className="contents">
           <SalesAnalyticsPanel
             sales={sales}
@@ -1154,7 +1161,7 @@ export function SalesControlPage() {
         <Tooltip label="Quick camera sale">
           <button type="button" onClick={() => openSale(undefined, events, true)} aria-label="Quick camera sale" className="grid size-12 place-items-center rounded-2xl border border-slate-700 bg-slate-900 text-orange-300 shadow-xl active:scale-95"><Camera size={20} /></button>
         </Tooltip>
-        <FloatingActionButton label="Add transaction" onClick={(event) => { addTransactionTriggerRef.current = event.currentTarget; openTransactionFlow(); }}><Plus size={20} /> Add</FloatingActionButton>
+        <FloatingActionButton label="New Deal" onClick={() => navigate("/sales/deals/new")}><Plus size={20} /> New Deal</FloatingActionButton>
       </div>
 
       <ResponsiveModal

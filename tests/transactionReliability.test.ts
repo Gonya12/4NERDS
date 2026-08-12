@@ -478,6 +478,25 @@ test("payment rows cover purchases, sales, and both cash-trade directions withou
   );
 });
 
+test("split payments save one canonical row per direction and method", () => {
+  const transactionId = "10000000-0000-4000-8000-000000000000";
+  const rows = buildTransactionPaymentPayloads(transactionId, {
+    ...transaction("sale", []),
+    cashReceived: 30,
+    payments: [
+      { id: "p1", direction: "received", paymentMethod: "cash", amount: 10, paidAt: timestamp },
+      { id: "p2", direction: "received", paymentMethod: "venmo", amount: 15, paidAt: timestamp },
+      { id: "p3", direction: "received", paymentMethod: "cash", amount: 5, paidAt: timestamp },
+    ],
+  });
+  assert.deepEqual(rows.map((row) => [row.direction, row.payment_method, row.amount]), [
+    ["received", "cash", 15],
+    ["received", "venmo", 15],
+  ]);
+  assert.ok(rows.every((row) => row.transaction_id === transactionId));
+  assert.ok(rows.every((row) => !("worker_id" in row)));
+});
+
 test("transaction payment repository reads and writes only canonical payment columns", () => {
   const repository = readFileSync(new URL("../src/services/database/tradeRepository.ts", import.meta.url), "utf8");
   const preflight = readFileSync(new URL("../src/services/database/supabasePreflight.ts", import.meta.url), "utf8");
@@ -507,7 +526,8 @@ test("transaction payment repository reads and writes only canonical payment col
 test("payment retry UI calls only the dedicated payment operation", () => {
   const unified = readFileSync(new URL("../src/pages/UnifiedTransactionPage.tsx", import.meta.url), "utf8");
   const trade = readFileSync(new URL("../src/pages/TradePage.tsx", import.meta.url), "utf8");
-  for (const source of [unified, trade]) {
+  const newDeal = readFileSync(new URL("../src/pages/NewDealPage.tsx", import.meta.url), "utf8");
+  for (const source of [unified, trade, newDeal]) {
     assert.match(source, /Retry payment only/);
     assert.match(source, /saveTransactionPayments\(paymentRetry\.error\.transactionId,\s*paymentRetry\.error\.transaction\)/);
   }

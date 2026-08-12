@@ -152,12 +152,27 @@ export function dailyFinancialSummary(date: string, sales: SalesRecord[], purcha
     return sum + incomingMarket + row.cashReceived - outgoingBasis - row.cashPaid;
   }, 0);
   const netCashFlow = cashSales + digitalSales + tradeCashReceived - inventorySpent - operatingExpenses - tableFees - tradeCashPaid;
+  const salesRevenue = roundMoney(cashSales + digitalSales);
+  const cashMargin = roundMoney(salesRevenue + tradeCashReceived - inventorySpent - tradeCashPaid);
+  const completedTransactions = transactions.filter((row) => row.status === "completed" && row.tradeDate.slice(0, 10) === date);
+  const saleTransactions = completedTransactions.filter((row) => row.transactionType === "sale");
+  const purchaseTransactions = completedTransactions.filter((row) => row.transactionType === "purchase");
+  const tradeTransactions = completedTransactions.filter((row) => row.transactionType === "trade" || row.transactionType === "cash_trade");
+  const cardsMoved = completedTransactions.reduce((sum, row) => sum + row.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 1), 0), 0);
+  const currentInventoryMarketValue = roundMoney(purchases
+    .filter((purchase) => purchase.status === "in_stock" || purchase.status === "partially_sold")
+    .reduce((sum, purchase) => {
+      const remaining = Math.max(0, Number(purchase.quantity || 0) - Number(purchase.quantitySold || 0));
+      return sum + Number(purchase.marketValue || 0) * (remaining / Math.max(1, Number(purchase.quantity || 1)));
+    }, 0));
   const ownerProfit = new Map<string, number>();
   daySales.forEach((sale) => (sale.ownershipShares || []).forEach((share) => ownerProfit.set(share.workerId, roundMoney((ownerProfit.get(share.workerId) || 0) + (Number(sale.soldPrice || 0) - Number(sale.boughtPrice || 0)) * share.ownershipPercentage / 100))));
   return {
-    cashSales: roundMoney(cashSales), digitalSales: roundMoney(digitalSales), inventorySpent: roundMoney(inventorySpent),
+    cashSales: roundMoney(cashSales), digitalSales: roundMoney(digitalSales), salesRevenue, inventorySpent: roundMoney(inventorySpent),
     operatingExpenses: roundMoney(operatingExpenses), tableFees: roundMoney(tableFees), tradeCashReceived: roundMoney(tradeCashReceived),
-    tradeCashPaid: roundMoney(tradeCashPaid), netCashFlow: roundMoney(netCashFlow), inventoryBought: dayPurchases.length,
+    tradeCashPaid: roundMoney(tradeCashPaid), netCashFlow: roundMoney(netCashFlow), cashMargin,
+    transactionCount: completedTransactions.length, saleCount: saleTransactions.length, purchaseCount: purchaseTransactions.length,
+    tradeCount: tradeTransactions.length, cardsMoved, currentInventoryMarketValue, inventoryBought: dayPurchases.length,
     inventorySold: daySales.length, inventoryTradedOut: trades.flatMap((row) => row.items).filter((item) => item.direction === "outgoing").length,
     inventoryReceived: trades.flatMap((row) => row.items).filter((item) => item.direction === "incoming").length,
     realizedGrossProfit: roundMoney(realizedGrossProfit), estimatedTradeGainLoss: roundMoney(estimatedTradeGainLoss),

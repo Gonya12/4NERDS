@@ -36,6 +36,7 @@ function loadLazyRoute<T>(label: string, loader: () => Promise<T>) {
 }
 
 const SalesControlPage = lazy(() => import("./pages/SalesControlPage").then((module) => ({ default: module.SalesControlPage })));
+const NewDealPage = lazy(() => loadLazyRoute("new deal", () => import("./pages/NewDealPage")).then((module) => ({ default: module.NewDealPage })));
 const TradePage = lazy(() => loadLazyRoute("trade", () => import("./pages/TradePage")).then((module) => ({ default: module.TradePage })));
 const UnifiedTransactionPage = lazy(() => loadLazyRoute("unified transaction", () => import("./pages/UnifiedTransactionPage")).then((module) => ({ default: module.UnifiedTransactionPage })));
 const DailySummaryPage = lazy(() => import("./pages/DailySummaryPage").then((module) => ({ default: module.DailySummaryPage })));
@@ -176,6 +177,7 @@ export default function App() {
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/flyers" element={<FlyerGalleryPage />} />
             <Route path="/sales" element={<Suspense fallback={<div className="surface-card p-5 font-bold">Loading Sales Control…</div>}><SalesControlPage /></Suspense>} />
+            <Route path="/sales/deals/new" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Preparing New Deal…" />}><NewDealPage /></Suspense></TransactionRouteBoundary>} />
             <Route path="/sales/trades" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Preparing trade workspace…" />}><TradePage /></Suspense></TransactionRouteBoundary>} />
             <Route path="/sales/trades/:id" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Loading trade…" />}><TradePage /></Suspense></TransactionRouteBoundary>} />
             <Route path="/sales/transactions/new" element={<TransactionRouteBoundary><Suspense fallback={<TransactionRouteFallback label="Opening transaction editor…" />}><UnifiedTransactionPage /></Suspense></TransactionRouteBoundary>} />

@@ -1,4 +1,4 @@
-import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction, TransactionImageAttachment, TransactionImageType } from "../../types/models";
+import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction, TransactionImageAttachment, TransactionImageType, TransactionPaymentEntry } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
 import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
 import { getCachedInventoryPurchases, saveInventoryPurchase } from "./inventoryPurchaseRepository";
@@ -367,12 +367,21 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     };
     itemMap.set(row.transaction_id, [...(itemMap.get(row.transaction_id) || []), value]);
   });
-  const paymentMap = new Map<string, { received: number; paid: number; paidByWorkerId?: string }>();
+  const paymentMap = new Map<string, { received: number; paid: number; paidByWorkerId?: string; payments: TransactionPaymentEntry[] }>();
   (payments.data as PaymentRow[] || []).forEach((row) => {
-    const current: { received: number; paid: number; paidByWorkerId?: string } =
-      paymentMap.get(row.transaction_id) || { received: 0, paid: 0 };
+    const current: { received: number; paid: number; paidByWorkerId?: string; payments: TransactionPaymentEntry[] } =
+      paymentMap.get(row.transaction_id) || { received: 0, paid: 0, payments: [] };
     current[row.direction] += Number(row.amount || 0);
     if (row.direction === "paid" && row.paid_by_worker_id) current.paidByWorkerId = row.paid_by_worker_id;
+    current.payments.push({
+      id: row.id,
+      direction: row.direction,
+      paymentMethod: row.payment_method as TransactionPaymentEntry["paymentMethod"],
+      amount: Number(row.amount || 0),
+      paidByWorkerId: row.paid_by_worker_id || undefined,
+      note: row.note || undefined,
+      paidAt: row.paid_at,
+    });
     paymentMap.set(row.transaction_id, current);
   });
   const values = (transactions.data as TransactionRow[] || []).map((row): TradeTransaction => {
@@ -392,6 +401,7 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     reversalOfTradeId: row.reversal_of_transaction_id || undefined, createdAt: row.created_at || row.transaction_date, updatedAt: row.updated_at || row.transaction_date, items: itemMap.get(row.id) || []
     , transactionType: applicationType, itemMode: row.item_mode || "multiple", pricingMode: row.allocation_method || row.pricing_mode || "individual",
     bundleTotal: row.bundle_total == null ? undefined : Number(row.bundle_total), paymentMethod: row.payment_method || undefined,
+    payments: paymentMap.get(row.id)?.payments,
     purchaseSource: applicationType === "purchase" ? (row.transaction_subtype as TradeTransaction["purchaseSource"]) || row.purchase_source || undefined : undefined,
     expenseCategory: applicationType === "expense" ? row.expense_category || undefined : undefined,
     paidByWorkerId: paymentMap.get(row.id)?.paidByWorkerId || row.paid_by_worker_id || undefined, keepAsBundle: Boolean(row.keep_as_bundle)

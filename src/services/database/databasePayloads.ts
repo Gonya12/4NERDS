@@ -140,9 +140,30 @@ export function buildTransactionPaymentPayload(input: {
 export function buildTransactionPaymentPayloads(
   transactionId: string,
   transaction: Pick<TradeTransaction,
-    "cashReceived" | "cashPaid" | "paymentMethod" | "paidByWorkerId" | "notes" | "tradeDate"
+    "cashReceived" | "cashPaid" | "paymentMethod" | "payments" | "paidByWorkerId" | "notes" | "tradeDate"
   >
 ): TransactionPaymentPayload[] {
+  if (transaction.payments?.length) {
+    const grouped = new Map<string, typeof transaction.payments[number]>();
+    transaction.payments
+      .filter((payment) => Number.isFinite(Number(payment.amount)) && Number(payment.amount) > 0)
+      .forEach((payment) => {
+        const key = `${payment.direction}:${payment.paymentMethod}`;
+        const current = grouped.get(key);
+        grouped.set(key, current
+          ? { ...current, amount: Number(current.amount) + Number(payment.amount), paidByWorkerId: current.paidByWorkerId || payment.paidByWorkerId, note: current.note || payment.note }
+          : payment);
+      });
+    return [...grouped.values()].map((payment) => buildTransactionPaymentPayload({
+        transactionId,
+        direction: payment.direction,
+        paymentMethod: payment.paymentMethod,
+        amount: payment.amount,
+        paidByWorkerId: payment.direction === "paid" ? payment.paidByWorkerId : null,
+        note: payment.note,
+        paidAt: payment.paidAt || transaction.tradeDate,
+      }));
+  }
   const candidates = [
     { direction: "received" as const, amount: Number(transaction.cashReceived || 0), paidByWorkerId: null },
     { direction: "paid" as const, amount: Number(transaction.cashPaid || 0), paidByWorkerId: transaction.paidByWorkerId }

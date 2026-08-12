@@ -283,6 +283,16 @@ export interface TradeItemOwnershipShare extends OwnershipShare {
   allocatedTradeValue?: number;
 }
 
+export interface TransactionPaymentEntry {
+  id: string;
+  direction: "received" | "paid";
+  paymentMethod: SalePaymentMethod;
+  amount: number;
+  paidByWorkerId?: string;
+  note?: string;
+  paidAt: string;
+}
+
 export interface TradeItem {
   id: string;
   tradeTransactionId: string;
@@ -355,6 +365,7 @@ export interface TradeTransaction {
   pricingMode: TransactionPricingMode;
   bundleTotal?: number;
   paymentMethod?: SalePaymentMethod;
+  payments?: TransactionPaymentEntry[];
   purchaseSource?: PurchaseSource;
   expenseCategory?: BusinessExpenseCategory;
   paidByWorkerId?: string;
