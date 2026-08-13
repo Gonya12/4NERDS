@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
+import { POKEMON_CARD_IDENTIFY_FUNCTION } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { CARD_SEARCH_FUNCTION_NAME } from "../sales/cardSearchContract";
 
 export type SupabaseHealthStatus = "pass" | "fail";
@@ -177,22 +178,24 @@ export async function runSupabaseHealthCheck(): Promise<SupabaseHealthReport> {
     }
   });
 
-  checks.push({
-    id: `function:${CARD_SEARCH_FUNCTION_NAME}`,
-    label: `${CARD_SEARCH_FUNCTION_NAME} Edge Function`,
-    group: "function",
-    run: async () => {
-      const response = await fetch(`${projectUrl}/functions/v1/${CARD_SEARCH_FUNCTION_NAME}`, {
-        method: "OPTIONS",
-        headers: {
-          apikey: publishableKey,
-          Authorization: `Bearer ${publishableKey}`
-        }
-      });
-      if (!response.ok) throw new Error(`OPTIONS returned HTTP ${response.status}.`);
-      return "CORS preflight succeeded.";
-    }
-  });
+  for (const functionName of [CARD_SEARCH_FUNCTION_NAME, POKEMON_CARD_IDENTIFY_FUNCTION]) {
+    checks.push({
+      id: `function:${functionName}`,
+      label: `${functionName} Edge Function`,
+      group: "function",
+      run: async () => {
+        const response = await fetch(`${projectUrl}/functions/v1/${functionName}`, {
+          method: "OPTIONS",
+          headers: {
+            apikey: publishableKey,
+            Authorization: `Bearer ${publishableKey}`
+          }
+        });
+        if (!response.ok) throw new Error(`OPTIONS returned HTTP ${response.status}.`);
+        return "CORS preflight succeeded.";
+      }
+    });
+  }
 
   const settled = await Promise.allSettled(checks.map(async (check) => {
     const started = performance.now();

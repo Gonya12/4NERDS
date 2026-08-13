@@ -2,3 +2,8 @@
 # API key off the device while allowing unauthenticated scanner lookups.
 [functions.pokemon-card-search]
 verify_jwt = false
+
+# Gemini credentials stay in Edge Function secrets; the browser receives only
+# normalized identification fields and never the API key.
+[functions.pokemon-card-identify]
+verify_jwt = false

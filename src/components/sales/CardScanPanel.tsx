@@ -1,6 +1,6 @@
 import { Crop, LoaderCircle, ScanLine, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { InventoryPurchase, PokemonProductCategory } from "../../types/models";
+import type { CardCondition, InventoryPurchase, PokemonProductCategory } from "../../types/models";
 import type { CropPoint } from "../../services/sales/cardImageProcessor";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
 import { cardProviderLabel } from "../../services/sales/pokemonCardSearchService";
@@ -35,6 +35,13 @@ const defaultCorners: CropPoint[] = [
   { x: 0.92, y: 0.06 },
   { x: 0.92, y: 0.94 },
   { x: 0.08, y: 0.94 },
+];
+const scanConditions: CardCondition[] = [
+  "Near Mint / NM",
+  "Lightly Played / LP",
+  "Moderately Played / MP",
+  "Heavily Played / HP",
+  "Damaged",
 ];
 
 function useFilePreview(file?: File) {
@@ -117,6 +124,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const [detectingCrop, setDetectingCrop] = useState(false);
   const [manualSearchOpen, setManualSearchOpen] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [showAllMatches, setShowAllMatches] = useState(false);
   const [outcome, setOutcome] = useState<ScanOutcome>();
   const [cardGame, setCardGame] = useState<CardGame>(initialGame);
   const [cardLanguage, setCardLanguage] = useState<CardLanguage>(initialGame === "pokemon" ? initialLanguage : initialGame === "one_piece" ? "en" : "unknown");
@@ -143,6 +151,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setHash("");
     setMessage("");
     setOutcome(undefined);
+    setShowAllMatches(false);
     setCropConfidence(null);
     setCorners(defaultCorners);
     if (!imageFile) return () => controller.abort();
@@ -209,16 +218,24 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         language: cardLanguage,
       });
       if (run !== runRef.current) return;
-      setSuggestion(result.suggestion);
+      const scanSuggestion: CardScanSuggestion = result.suggestion;
+      setSuggestion(scanSuggestion);
       setHash(result.hash);
       setStatus("review");
-      const matchCount = result.suggestion.possibleMatches?.length || 0;
+      const matchCount = scanSuggestion.possibleMatches?.length || 0;
       setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : "No reliable match");
-      setMessage(matchCount > 1
-        ? "Several possible matches found. Choose the exact card."
+      if (scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.5) {
+        setManualSearchOpen(true);
+      }
+      setMessage(scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.5
+        ? "Couldn't confidently identify this card. Search is prefilled with any text that was readable."
+        : scanSuggestion.likelyMatchProviderId
+        ? "Found likely match. Confirm the exact printing before applying it."
+        : matchCount > 1
+          ? "Several possible matches found. Choose the exact card."
         : matchCount === 1
           ? "One possible match found. Confirm it before applying."
-          : "We could not identify this card automatically.");
+          : "Couldn't confidently identify this card.");
     } catch (error) {
       if (run !== runRef.current) return;
       setStatus("failed");
@@ -266,11 +283,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     && inventory.some((row) => row.certificateNumber?.trim().toLowerCase() === reviewSuggestion.certificateNumber?.trim().toLowerCase());
   const hasUsefulSuggestion = Boolean(reviewSuggestion && (
     reviewSuggestion.cardName
+    || reviewSuggestion.correctedNameCandidate
     || reviewSuggestion.collectorNumber
     || reviewSuggestion.condition
     || reviewSuggestion.stickerPrice != null
     || reviewSuggestion.possibleMatches?.length
   ));
+  const isAiScan = Boolean(reviewSuggestion?.aiIdentification);
+  const likelyMatch = reviewSuggestion?.possibleMatches?.find((match) => match.providerCardId === reviewSuggestion.likelyMatchProviderId);
+  const displayedMatches = reviewSuggestion?.possibleMatches
+    ? likelyMatch && !showAllMatches ? [likelyMatch] : reviewSuggestion.possibleMatches
+    : [];
+  const needsCondition = Boolean(resolvedCard && category !== "graded_card" && !reviewSuggestion?.condition);
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => {
     if (resolvedCard) {
       setResolvedCard({ ...resolvedCard, suggestion: { ...resolvedCard.suggestion, [key]: value } });
@@ -301,7 +325,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
         <p className="font-black text-violet-900 dark:text-violet-100">Multi-game card scanner</p>
-        <p className="text-xs text-violet-700 dark:text-violet-300">Choose the catalog before OCR. Suggestions are never saved until the normal form is saved.</p>
+        <p className="text-xs text-violet-700 dark:text-violet-300">Pokémon photos use AI visual reading, then the existing official catalog search. Suggestions are never saved until you confirm them.</p>
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" onClick={() => setManualSearchOpen(true)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"><Search size={17} />Search Card Manually</button>
@@ -355,7 +379,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     {message && status !== "crop" ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
     {outcome === "No reliable match" && hasUsefulSuggestion ? <div className="grid gap-2 sm:grid-cols-2">
       <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
-      <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Crop and Retry</button>
+      <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Try Again</button>
       <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">Retake Photo</button>
       <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
     </div> : null}
@@ -380,9 +404,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         </div>
       </div> : null}
       {reviewSuggestion.correctedNameCandidate && !reviewSuggestion.cardName ? <div className="rounded-xl border border-violet-200 bg-white p-3 dark:bg-slate-900">
-        <p className="text-xs font-bold text-slate-500">Cleaned OCR candidate — not yet confirmed</p>
+        <p className="text-xs font-bold text-slate-500">{isAiScan ? "AI visual identification — exact printing not yet confirmed" : "Cleaned OCR candidate — not yet confirmed"}</p>
         <p className="font-black">{reviewSuggestion.correctedNameCandidate}</p>
-        <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[reviewSuggestion.correctedNameConfidence || "low"]}`}>{reviewSuggestion.correctedNameConfidence || "low"} confidence</span>
+        <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[reviewSuggestion.correctedNameConfidence || "low"]}`}>{isAiScan ? "AI Match" : "OCR"}: {reviewSuggestion.correctedNameConfidence || "low"}</span>
       </div> : null}
       <div className="grid gap-2 sm:grid-cols-3">
         {field("cardName", "Card name (confirmed/manual)")}
@@ -397,11 +421,12 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
           {field("certificateNumber", "Certificate number")}
         </> : null}
       </div>
-      {reviewSuggestion.possibleMatches?.length ? <div className="space-y-2">
-        <p className="text-xs font-black">Possible {cardProviderLabel(reviewSuggestion.possibleMatches[0]?.provider)} records — confirmation required</p>
-        {reviewSuggestion.possibleMatches.map((match) => <article key={`${match.provider}:${match.providerCardId}`} className="flex gap-3 rounded-xl border border-violet-200 bg-white p-2 text-xs dark:bg-slate-900">
+      {displayedMatches.length ? <div className="space-y-2">
+        <p className="text-xs font-black">Possible {cardProviderLabel(displayedMatches[0]?.provider)} records — confirmation required</p>
+        {displayedMatches.map((match) => <article key={`${match.provider}:${match.providerCardId}`} className={`flex gap-3 rounded-xl border bg-white p-2 text-xs dark:bg-slate-900 ${match.providerCardId === reviewSuggestion.likelyMatchProviderId ? "border-emerald-400 ring-2 ring-emerald-200 dark:ring-emerald-900" : "border-violet-200"}`}>
           {match.imageSmall ? <img src={match.imageSmall} alt={`${match.name} official card`} loading="lazy" className="h-28 w-20 rounded object-contain" /> : null}
           <div className="min-w-0 flex-1">
+            {match.providerCardId === reviewSuggestion.likelyMatchProviderId ? <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Likely Match · AI Match: High</p> : null}
             <p className="font-black">{match.name} · {match.cardCode || match.collectorNumber}</p>
             <p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p>
             <p>{match.matchScore}% match{match.pricing?.market != null ? ` · ${match.pricing.currency || "USD"} ${match.pricing.market.toFixed(2)} market` : ""}</p>
@@ -409,8 +434,16 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
             <button type="button" disabled={searching} onClick={() => void chooseMatch(match)} className="mt-2 rounded-lg bg-violet-600 px-3 py-2 font-black text-white disabled:opacity-40">Use This Card</button>
           </div>
         </article>)}
+        {likelyMatch && reviewSuggestion.possibleMatches && reviewSuggestion.possibleMatches.length > 1 && !showAllMatches ? <button type="button" onClick={() => setShowAllMatches(true)} className="min-h-10 w-full rounded-xl border border-violet-300 px-3 text-xs font-black text-violet-700 dark:text-violet-300">See Other Matches</button> : null}
         <button type="button" onClick={() => setSuggestion((current) => current ? { ...current, possibleMatches: [] } : current)} className="text-xs font-black text-violet-700 dark:text-violet-300">None of These / Enter Manually</button>
       </div> : null}
+      {resolvedCard && category !== "graded_card" ? <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+        <p className="text-xs font-black uppercase tracking-wide text-emerald-800 dark:text-emerald-200">Choose condition</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {scanConditions.map((condition) => <button type="button" key={condition} onClick={() => edit("condition", condition)} className={`min-h-10 rounded-xl px-3 text-xs font-black ${reviewSuggestion.condition === condition ? "bg-emerald-600 text-white" : "bg-white text-slate-700 dark:bg-slate-900 dark:text-slate-200"}`}>{condition.replace(/.*\/ /, "")}</button>)}
+        </div>
+        {needsCondition ? <p className="mt-2 text-xs font-bold text-amber-700 dark:text-amber-300">Select a condition before applying this card.</p> : null}
+      </section> : null}
       <TcgplayerPricingPanel suggestion={reviewSuggestion} isSlab={category === "graded_card"} onChange={(next) => resolvedCard ? setResolvedCard({ ...resolvedCard, suggestion: next }) : setSuggestion(next)} />
       {reviewSuggestion.warnings.filter((warning) => !resolvedCard || !/no pokémon tcg api match|market price unavailable|raw ocr is available/i.test(warning)).map((warning) => <p key={warning} className="text-xs text-amber-700 dark:text-amber-300">{warning}</p>)}
       {reviewSuggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs dark:bg-slate-900">
@@ -420,16 +453,17 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       {duplicateCertificate ? <p className="rounded-xl bg-rose-100 p-2 text-sm font-black text-rose-800">Possible duplicate slab certificate.</p> : null}
       <div className="grid gap-2 sm:grid-cols-2">
         <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop / Rescan</button>
-        <button type="button" onClick={() => { onApply(reviewSuggestion, hash, processedFile); setMessage("Suggestions applied. Confirm the normal form, then press Save."); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white"><Sparkles size={17} />Apply Suggestions</button>
+        <button type="button" disabled={isAiScan && (!resolvedCard || needsCondition)} onClick={() => { onApply(reviewSuggestion, hash, processedFile); setMessage("Suggestions applied. Confirm the normal form, then press Save."); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white disabled:opacity-40"><Sparkles size={17} />Apply Suggestions</button>
       </div>
       <p className="text-xs text-slate-500">Sticker price never fills Cash Paid or Cost Basis. A single photo is not a physical condition grade.</p>
     </div> : null}
 
     {status === "failed" ? <div className="space-y-2">
-      <p className="text-sm font-black text-rose-700 dark:text-rose-300">We could not identify this card automatically.</p>
+      <p className="text-sm font-black text-rose-700 dark:text-rose-300">Couldn't confidently identify this card.</p>
       <div className="grid gap-2 sm:grid-cols-2">
+        <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white">Try Again</button>
         <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
-        <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Crop and Retry</button>
+        <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop</button>
         <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><ScanLine className="mr-1 inline" size={17} />Retake Photo</button>
         <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
       </div>
