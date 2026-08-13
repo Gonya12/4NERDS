@@ -14,10 +14,12 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "x-request-id, retry-after",
 };
 const maxDecodedBytes = 6 * 1024 * 1024;
-const prompt = `You are a visual Pokémon trading-card identification assistant. Inspect the single card occupying most of the image. Read only visible evidence. Never provide prices, accounting values, inventory IDs, Pokémon TCG API IDs, or a final confirmation. Preserve collector-number leading zeros and distinguish EX, ex, GX, V, VMAX, VSTAR, promo, and older printings. Detect Japanese rather than forcing English. If text or a number is unreadable, return null and lower confidence instead of guessing. Notes should briefly describe glare, blur, sleeve/top-loader obstruction, tilt, or ambiguity that affects identification.`;
+const prompt = `You are a visual trading-card identification assistant. Inspect the single Pokémon or One Piece card occupying most of the image, even when a sleeve, top loader, stand, background, glare, or slight tilt is visible. Read only visible evidence. Extract partial visible text and distinctive artwork characteristics when exact identification is uncertain so the app can search for candidates. Never provide prices, accounting values, inventory IDs, provider API IDs, or a final confirmation. Preserve collector-number leading zeros and distinguish EX, ex, GX, V, VMAX, VSTAR, promo, and older printings. Detect Japanese rather than forcing English. If text or a number is unreadable, return null and lower confidence instead of guessing. Notes should briefly describe image limitations that affect identification.`;
 
-const nullableString = { anyOf: [{ type: "string" }, { type: "null" }] };
-const nullableInteger = { anyOf: [{ type: "integer" }, { type: "null" }] };
+// Gemini 3.6 structured output supports nullable primitives through a JSON
+// Schema type array. Using anyOf for primitive nullability can be rejected.
+const nullableString = { type: ["string", "null"] };
+const nullableInteger = { type: ["integer", "null"] };
 const responseSchema = {
   type: "object",
   properties: {
@@ -27,17 +29,21 @@ const responseSchema = {
     printed_total_number: nullableString,
     set_name_hint: nullableString,
     set_code_hint: nullableString,
+    card_game: { type: "string", enum: ["pokemon", "one_piece", "unknown"] },
     language: { type: "string", enum: ["en", "ja", "unknown"] },
     rarity_hint: nullableString,
     hp: nullableInteger,
     regulation_mark: nullableString,
     copyright_year: nullableInteger,
+    visible_text: { type: "array", items: { type: "string" }, maxItems: 12 },
+    artwork_characteristics: { type: "array", items: { type: "string" }, maxItems: 8 },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     notes: { type: "array", items: { type: "string" }, maxItems: 8 },
   },
   required: [
     "card_name", "pokemon_name", "collector_number", "printed_total_number", "set_name_hint", "set_code_hint",
-    "language", "rarity_hint", "hp", "regulation_mark", "copyright_year", "confidence", "notes",
+    "card_game", "language", "rarity_hint", "hp", "regulation_mark", "copyright_year",
+    "visible_text", "artwork_characteristics", "confidence", "notes",
   ],
 };
 
@@ -65,6 +71,15 @@ function responseText(value: unknown) {
   const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
   const parts = Array.isArray(content.parts) ? content.parts : [];
   return parts.map((part) => part && typeof part === "object" ? String((part as Record<string, unknown>).text || "") : "").join("").trim();
+}
+
+function geminiError(value: unknown) {
+  const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const error = root.error && typeof root.error === "object" ? root.error as Record<string, unknown> : {};
+  return {
+    code: typeof error.status === "string" ? error.status : undefined,
+    message: typeof error.message === "string" ? error.message.slice(0, 300) : undefined,
+  };
 }
 
 Deno.serve(async (request) => {
@@ -116,10 +131,30 @@ Deno.serve(async (request) => {
     });
     const payload = await upstream.json().catch(() => null);
     if (!upstream.ok) {
-      const status = upstream.status === 429 ? 429 : upstream.status >= 500 ? 502 : 400;
-      const code = upstream.status === 429 ? "GEMINI_RATE_LIMITED" : "GEMINI_REQUEST_FAILED";
-      console.warn("[pokemon-card-identify] Gemini request failed", { model: POKEMON_CARD_IDENTIFY_MODEL, status: upstream.status, latencyMs: Date.now() - startedAt });
-      return errorResponse(requestId, code, upstream.status === 429 ? "Visual identification is busy. Try again shortly." : "Visual identification could not read this image.", status, upstream.headers.get("Retry-After") || undefined);
+      const providerError = geminiError(payload);
+      const status = upstream.status === 429 ? 429 : upstream.status >= 500 ? 502 : upstream.status === 401 || upstream.status === 403 ? 503 : 400;
+      const code = upstream.status === 429
+        ? "GEMINI_RATE_LIMITED"
+        : upstream.status === 401 || upstream.status === 403
+          ? "GEMINI_AUTH_CONFIGURATION"
+          : upstream.status === 400
+            ? "GEMINI_INVALID_REQUEST"
+            : "GEMINI_UNAVAILABLE";
+      console.warn("[pokemon-card-identify] Gemini request failed", {
+        model: POKEMON_CARD_IDENTIFY_MODEL,
+        providerStatus: upstream.status,
+        upstreamErrorCode: providerError.code,
+        upstreamMessage: providerError.message,
+        latencyMs: Date.now() - startedAt,
+      });
+      const message = upstream.status === 429
+        ? "Card recognition is busy. Try again shortly."
+        : upstream.status === 401 || upstream.status === 403
+          ? "Card recognition is not configured correctly."
+          : upstream.status === 400
+            ? "Card recognition rejected the processed image. Adjust the crop and try again."
+            : "Couldn't connect to card recognition. Try again.";
+      return json({ success: false, code, message, requestId, providerStatus: upstream.status, upstreamErrorCode: providerError.code }, status, requestId, upstream.headers.get("Retry-After") ? { "Retry-After": upstream.headers.get("Retry-After") as string } : {});
     }
     const text = responseText(payload);
     if (!text) throw new Error("Gemini returned no structured identification.");

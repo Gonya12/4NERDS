@@ -121,6 +121,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const [processedFile, setProcessedFile] = useState<File>();
   const [corners, setCorners] = useState<CropPoint[]>(defaultCorners);
   const [cropConfidence, setCropConfidence] = useState<number | null>(null);
+  const [sourceDimensions, setSourceDimensions] = useState<{ width: number; height: number }>();
   const [detectingCrop, setDetectingCrop] = useState(false);
   const [manualSearchOpen, setManualSearchOpen] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -153,6 +154,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setOutcome(undefined);
     setShowAllMatches(false);
     setCropConfidence(null);
+    setSourceDimensions(undefined);
     setCorners(defaultCorners);
     if (!imageFile) return () => controller.abort();
     setDetectingCrop(true);
@@ -161,6 +163,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       .then((detection) => {
         if (run !== runRef.current) return;
         setCorners(detection.corners);
+        setSourceDimensions({ width: detection.width, height: detection.height });
         setCropConfidence(detection.confidence);
         setMessage(detection.confidence >= 0.48
           ? "Card edges detected. Adjust any corner that is not on the printed card."
@@ -202,6 +205,12 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setStage("Preparing image");
     try {
       let source = imageFile;
+      if (import.meta.env.DEV) console.info("[Visual card scanner] crop submission", {
+        imageDimensions: sourceDimensions,
+        originalFileSize: imageFile.size,
+        cropCoordinates: useFullImage ? null : corners,
+        useFullImage,
+      });
       if (!useFullImage) {
         setStage("Detecting and cropping card");
         const { cropCardPerspective } = await import("../../services/sales/cardImageProcessor");
@@ -224,15 +233,15 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       setStatus("review");
       const matchCount = scanSuggestion.possibleMatches?.length || 0;
       setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : "No reliable match");
-      if (scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.5) {
+      if (scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0) {
         setManualSearchOpen(true);
       }
-      setMessage(scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.5
+      setMessage(scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0
         ? "Couldn't confidently identify this card. Search is prefilled with any text that was readable."
         : scanSuggestion.likelyMatchProviderId
         ? "Found likely match. Confirm the exact printing before applying it."
         : matchCount > 1
-          ? "Several possible matches found. Choose the exact card."
+          ? "We found a few possible matches. Choose the exact card."
         : matchCount === 1
           ? "One possible match found. Confirm it before applying."
           : "Couldn't confidently identify this card.");
@@ -377,11 +386,14 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     {status !== "crop" && processedPreview ? <img src={processedPreview} alt="Processed card crop" className="mx-auto max-h-80 rounded-xl bg-black object-contain" /> : null}
     {outcome ? <p role="status" className="inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white dark:bg-white dark:text-slate-900">State: {outcome}</p> : null}
     {message && status !== "crop" ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
-    {outcome === "No reliable match" && hasUsefulSuggestion ? <div className="grid gap-2 sm:grid-cols-2">
+    {outcome === "No reliable match" && hasUsefulSuggestion ? <div className="space-y-2">
+      <p className="text-sm font-bold text-amber-700 dark:text-amber-300">We couldn't identify this card confidently. Search manually with the recognized text or adjust the crop.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
       <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
       <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Try Again</button>
       <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">Retake Photo</button>
       <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
+      </div>
     </div> : null}
 
     {reviewSuggestion && !hasUsefulSuggestion ? <div className="space-y-2 rounded-xl bg-amber-100 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
@@ -459,7 +471,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     </div> : null}
 
     {status === "failed" ? <div className="space-y-2">
-      <p className="text-sm font-black text-rose-700 dark:text-rose-300">Couldn't confidently identify this card.</p>
+      <p className="text-sm font-black text-rose-700 dark:text-rose-300">Card recognition could not complete.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white">Try Again</button>
         <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>

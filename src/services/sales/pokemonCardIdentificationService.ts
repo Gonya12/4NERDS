@@ -14,6 +14,8 @@ type IdentifyPayload = {
   message?: string;
   identification?: unknown;
   requestId?: string;
+  providerStatus?: number;
+  upstreamErrorCode?: string;
 };
 
 export class PokemonCardIdentificationError extends Error {
@@ -65,20 +67,43 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
     if (!response.ok || !payload?.success || !payload.identification) {
+      if (import.meta.env.DEV) console.error("[Visual card scanner] recognition request failed", {
+        httpStatus: response.status,
+        upstreamErrorCode: payload?.upstreamErrorCode || payload?.code,
+        providerStatus: payload?.providerStatus,
+        requestId: payload?.requestId || response.headers.get("x-request-id"),
+        fileSize: file.size,
+        mimeType: file.type,
+      });
+      const fallbackMessage = response.status === 429
+        ? "Card recognition is busy. Try again shortly."
+        : response.status === 400 || response.status === 413 || response.status === 415
+          ? "Card recognition rejected the processed image. Adjust the crop and try again."
+          : response.status === 401 || response.status === 403
+            ? "Card recognition is not configured correctly."
+            : "Couldn't connect to card recognition. Try again.";
       throw new PokemonCardIdentificationError(
-        payload?.message || "Couldn't confidently identify this card.",
+        payload?.message || fallbackMessage,
         payload?.code || `HTTP_${response.status}`,
         payload?.requestId || response.headers.get("x-request-id") || undefined,
       );
     }
-    return normalizePokemonCardIdentification(payload.identification);
+    const identification = normalizePokemonCardIdentification(payload.identification);
+    if (import.meta.env.DEV) console.info("[Visual card scanner] recognition response parsed", {
+      visionProcessingSucceeded: true,
+      extractedName: identification.card_name || identification.pokemon_name,
+      extractedCollectorNumber: identification.collector_number,
+      extractedSetHint: identification.set_name_hint || identification.set_code_hint,
+      confidence: identification.confidence,
+    });
+    return identification;
   } catch (error) {
     if (error instanceof PokemonCardIdentificationError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       if (signal?.aborted) throw error;
       throw new PokemonCardIdentificationError("Visual identification timed out. Try again or search manually.", "GEMINI_TIMEOUT");
     }
-    throw new PokemonCardIdentificationError("Couldn't confidently identify this card.", "NETWORK_ERROR");
+    throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
   } finally {
     request.cleanup();
   }

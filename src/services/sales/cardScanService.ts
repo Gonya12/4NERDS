@@ -12,7 +12,7 @@ import {
   type PokemonCardIdentification,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
-import { compressSaleImage } from "../images/saleImageService";
+import { compressSaleImage, prepareCardRecognitionImage } from "../images/saleImageService";
 import { automaticallyPrepareCard, terminateCardImageWorker } from "./cardImageProcessor";
 import {
   buildNameEvidence,
@@ -104,6 +104,7 @@ export type CardScanStage =
   | "Reading card"
   | "Matching with TCG database"
   | "Found likely match"
+  | "Reading visible text fallback"
   | "Initializing OCR"
   | "Reading card name"
   | "Reading collector number"
@@ -150,6 +151,10 @@ function confidence(value: number): ScanConfidence {
 
 function confidenceFromMatchScore(value: number): ScanConfidence {
   return value >= 78 ? "high" : value >= 52 ? "medium" : "low";
+}
+
+function devCardScanLog(event: string, details: Record<string, unknown>) {
+  if (import.meta.env.DEV) console.info("[Visual card scanner]", { event, ...details });
 }
 
 export async function cancelCardScan() {
@@ -618,15 +623,30 @@ async function scanPokemonCardWithVisualAi(
   options.onStage?.("Reading card");
   const { identifyPokemonCardVisually, matchPokemonIdentification } = await import("./pokemonCardIdentificationService");
   const identification = await identifyPokemonCardVisually(preparedFront, options.signal);
+  devCardScanLog("vision succeeded", {
+    extractedName: identification.card_name || identification.pokemon_name,
+    extractedCollectorNumber: identification.collector_number,
+    extractedSetHint: identification.set_name_hint || identification.set_code_hint,
+    confidence: identification.confidence,
+    visibleText: identification.visible_text,
+  });
   checkAbort(options.signal);
   const recognitionConfidence = identificationConfidenceLabel(identification.confidence);
   options.onStage?.("Matching with TCG database");
   const possibleMatches = await matchPokemonIdentification(identification, options.signal);
+  devCardScanLog("catalog matching complete", {
+    candidateSearchQuery: buildPokemonIdentificationSearchAttempts(identification).map((attempt) => ({
+      name: attempt.name,
+      collectorNumber: attempt.collectorNumber,
+      set: attempt.set,
+    })),
+    candidateCount: possibleMatches.length,
+  });
   checkAbort(options.signal);
   const likelyMatch = isStrongVisualCatalogMatch(identification, possibleMatches) ? possibleMatches[0] : undefined;
   if (likelyMatch) options.onStage?.("Found likely match");
   const detectedLanguage = identification.language === "ja" ? "ja" : "en";
-  const correctedNameCandidate = identification.card_name || identification.pokemon_name;
+  const correctedNameCandidate = identification.card_name || identification.pokemon_name || identification.visible_text[0] || null;
   const warnings = [...identification.notes];
   if (identification.confidence < 0.5) warnings.push("AI recognition confidence is low. Confirm the detected text or search manually.");
   if (!possibleMatches.length) warnings.push(`No ${detectedLanguage === "ja" ? "TCGdex" : "Pokémon TCG API"} match was found. Search manually with the detected text.`);
@@ -717,8 +737,18 @@ export async function scanPokemonCard(
     options.onStage?.(name);
   };
   stage("Preparing image");
-  const preparedFront = await compressSaleImage(front);
+  const preparedFront = await prepareCardRecognitionImage(front);
   const preparedBack = back ? await compressSaleImage(back) : undefined;
+  if (import.meta.env.DEV) {
+    const processedImage = await imageElement(preparedFront);
+    devCardScanLog("image prepared", {
+      originalFileSize: front.size,
+      processedFileSize: preparedFront.size,
+      processedWidth: processedImage.naturalWidth,
+      processedHeight: processedImage.naturalHeight,
+      mimeType: preparedFront.type,
+    });
+  }
   const hash = `${await imageHash(preparedFront)}:${preparedBack ? await imageHash(preparedBack) : ""}`;
   const scanGame = options.game || "pokemon";
   const scanLanguage = scanGame === "pokemon" ? options.language || "en" : "en";
@@ -732,8 +762,19 @@ export async function scanPokemonCard(
     }
   }
 
+  let visualFailure: unknown;
   if (scanGame === "pokemon") {
-    return scanPokemonCardWithVisualAi(preparedFront, requestedType, hash, cacheKey, options, startedAt);
+    try {
+      return await scanPokemonCardWithVisualAi(preparedFront, requestedType, hash, cacheKey, options, startedAt);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      visualFailure = error;
+      devCardScanLog("vision failed; starting local text fallback", {
+        upstreamErrorCode: error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code || "UNKNOWN") : "UNKNOWN",
+        message: error instanceof Error ? error.message : "Unknown recognition error",
+      });
+      options.onStage?.("Reading visible text fallback");
+    }
   }
 
   const task = serializedOcr(async () => {
@@ -804,6 +845,7 @@ export async function scanPokemonCard(
     const correctedNameConfidence = possibleMatches[0]?.matchConfidence
       || (correctedNameCandidate ? confidence(top.confidence) : undefined);
     const warnings = [...qualityWarnings];
+    if (visualFailure) warnings.push("Visual recognition was unavailable; local text reading and the existing card catalog were used instead.");
     if (options.skipCrop) {
       warnings.push("The selected crop was used for OCR.");
     } else if (prepared.cropped) {
@@ -900,6 +942,12 @@ export async function scanPokemonCard(
     () => void cancelCardScan(),
   );
   checkAbort(options.signal);
+  if (visualFailure
+    && !analysis.suggestion.possibleMatches?.length
+    && !analysis.suggestion.correctedNameCandidate
+    && !analysis.suggestion.collectorNumber) {
+    throw visualFailure;
+  }
   try {
     localStorage.setItem(cacheKey, JSON.stringify(analysis.suggestion));
   } catch {

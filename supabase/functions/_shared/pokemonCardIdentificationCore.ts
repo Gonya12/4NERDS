@@ -10,11 +10,14 @@ export type PokemonCardIdentification = {
   printed_total_number: string | null;
   set_name_hint: string | null;
   set_code_hint: string | null;
+  card_game: "pokemon" | "one_piece" | "unknown";
   language: "en" | "ja" | "unknown";
   rarity_hint: string | null;
   hp: number | null;
   regulation_mark: string | null;
   copyright_year: number | null;
+  visible_text: string[];
+  artwork_characteristics: string[];
   confidence: number;
   notes: string[];
 };
@@ -53,11 +56,18 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
     printed_total_number: nullableText(row.printed_total_number, 32),
     set_name_hint: nullableText(row.set_name_hint),
     set_code_hint: nullableText(row.set_code_hint, 32),
+    card_game: row.card_game === "pokemon" || row.card_game === "one_piece" ? row.card_game : "unknown",
     language,
     rarity_hint: nullableText(row.rarity_hint, 80),
     hp: nullableInteger(row.hp, 0, 9999),
     regulation_mark: nullableText(row.regulation_mark, 8),
     copyright_year: nullableInteger(row.copyright_year, 1996, 2100),
+    visible_text: Array.isArray(row.visible_text)
+      ? row.visible_text.map((text) => nullableText(text, 100)).filter((text): text is string => Boolean(text)).slice(0, 12)
+      : [],
+    artwork_characteristics: Array.isArray(row.artwork_characteristics)
+      ? row.artwork_characteristics.map((text) => nullableText(text, 120)).filter((text): text is string => Boolean(text)).slice(0, 8)
+      : [],
     confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
     notes: Array.isArray(row.notes)
       ? row.notes.map((note) => nullableText(note, 180)).filter((note): note is string => Boolean(note)).slice(0, 8)
@@ -66,24 +76,36 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
 }
 
 export function identificationConfidenceLabel(confidence: number) {
-  return confidence >= 0.8 ? "high" as const : confidence >= 0.5 ? "medium" as const : "low" as const;
+  return confidence >= 0.75 ? "high" as const : confidence >= 0.4 ? "medium" as const : "low" as const;
 }
 
 export function hasUsefulPokemonIdentification(value: PokemonCardIdentification) {
-  return Boolean(value.card_name || value.pokemon_name || value.collector_number);
+  return Boolean(value.card_name || value.pokemon_name || value.collector_number || value.visible_text.length);
+}
+
+export function normalizeIdentificationCollectorNumber(value: string | null) {
+  if (!value) return "";
+  const clean = value.normalize("NFKC").trim().replace(/^#+\s*/, "");
+  const fraction = clean.match(/(?:[A-Z]{2,6}[-\s]*)?#?\s*(\d{1,4})\s*\/\s*(\d{1,4})/i);
+  if (fraction) return `${fraction[1]}/${fraction[2]}`;
+  const promo = clean.match(/^[A-Z]{2,6}[-\s]+#?\s*(\d{1,4})$/i);
+  if (promo) return promo[1];
+  const simple = clean.match(/^0*\d{1,4}[A-Z]?$/i);
+  return simple ? clean : clean.replace(/\s+/g, " ");
 }
 
 export function buildPokemonIdentificationSearchAttempts(value: PokemonCardIdentification) {
   const cardName = value.card_name || "";
   const pokemonName = value.pokemon_name || "";
-  const collectorNumber = value.collector_number || "";
+  const collectorNumber = normalizeIdentificationCollectorNumber(value.collector_number);
   const set = value.set_name_hint || value.set_code_hint || "";
+  const visibleName = value.visible_text.find((text) => /^[\p{L}][\p{L}\p{N}'’.:& -]{2,48}$/u.test(text)) || "";
   const attempts: IdentificationSearchAttempt[] = [
     { name: cardName, collectorNumber, set: "", reason: "collector number + card name" },
     { name: pokemonName, collectorNumber, set: "", reason: "collector number + Pokémon name" },
     { name: cardName, collectorNumber: "", set, reason: "card name + set" },
     { name: pokemonName, collectorNumber: "", set, reason: "Pokémon name + set" },
-    { name: cardName || pokemonName, collectorNumber: "", set: "", reason: "card name fallback" },
+    { name: cardName || pokemonName || visibleName, collectorNumber: "", set: "", reason: "card name fallback" },
   ].filter((attempt) => Boolean(attempt.name || attempt.collectorNumber));
   const seen = new Set<string>();
   return attempts.filter((attempt) => {
@@ -101,9 +123,9 @@ export function isStrongVisualCatalogMatch(
   const first = matches[0];
   const second = matches[1];
   return Boolean(
-    identification.confidence >= 0.8
+    identification.confidence >= 0.72
     && first
-    && (first.matchConfidence === "high" || first.matchScore >= 85)
-    && (!second || first.matchScore - second.matchScore >= 8),
+    && (first.matchConfidence === "high" || first.matchScore >= 80)
+    && (!second || first.matchScore - second.matchScore >= 6),
   );
 }

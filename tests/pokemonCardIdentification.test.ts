@@ -6,6 +6,7 @@ import {
   buildPokemonIdentificationSearchAttempts,
   identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
+  normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
   stripPokemonCardImagePrefix,
 } from "../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
@@ -56,6 +57,13 @@ test("builds the required collector-first catalog search order", () => {
   assert.equal(attempts[0].collectorNumber, "057");
 });
 
+test("normalizes common collector-number formats before catalog search", () => {
+  assert.equal(normalizeIdentificationCollectorNumber("#56"), "56");
+  assert.equal(normalizeIdentificationCollectorNumber("056"), "056");
+  assert.equal(normalizeIdentificationCollectorNumber("SVP 056"), "056");
+  assert.equal(normalizeIdentificationCollectorNumber("056 / 198"), "056/198");
+});
+
 test("keeps AI recognition confidence separate from exact catalog confidence", () => {
   const identification = normalizePokemonCardIdentification({ card_name: "Mew ex", confidence: 0.92, language: "en" });
   assert.equal(identificationConfidenceLabel(identification.confidence), "high");
@@ -75,6 +83,8 @@ test("Edge Function keeps Gemini secret server-side and requests structured visu
   assert.doesNotMatch(edgeSource, /VITE_GEMINI_API_KEY/);
   assert.match(edgeSource, /inline_data/);
   assert.match(edgeSource, /responseFormat/);
+  assert.match(edgeSource, /type: \["string", "null"\]/);
+  assert.doesNotMatch(edgeSource, /const nullableString = \{ anyOf/);
   assert.match(edgeSource, /imageBase64/);
   assert.doesNotMatch(edgeSource, /market.?price|TCGplayer price/i);
 });
@@ -88,5 +98,25 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /See Other Matches/);
   assert.match(scannerSource, /Try Again/);
   assert.match(scannerSource, /Search Card Manually/);
+  assert.match(scannerSource, /We found a few possible matches/);
+  assert.match(scannerSource, /Card recognition could not complete/);
   assert.match(scannerSource, /disabled=\{isAiScan && \(!resolvedCard \|\| needsCondition\)\}/);
+});
+
+test("a vision transport failure falls back to local OCR before becoming a processing error", () => {
+  const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
+  assert.match(scanService, /vision failed; starting local text fallback/);
+  assert.match(scanService, /Reading visible text fallback/);
+  assert.match(scanService, /!analysis\.suggestion\.possibleMatches\?\.length/);
+  assert.match(scanService, /throw visualFailure/);
+});
+
+test("recognition preprocessing preserves crop detail and avoids double JPEG loss", () => {
+  const imageService = readFileSync(new URL("../src/services/images/saleImageService.ts", import.meta.url), "utf8");
+  const processor = readFileSync(new URL("../src/services/sales/cardImageProcessor.ts", import.meta.url), "utf8");
+  assert.match(imageService, /prepareCardRecognitionImage/);
+  assert.match(imageService, /file\.name\.startsWith\("cropped-"\)/);
+  assert.match(imageService, /maxLongEdge: 2000, quality: 0\.92/);
+  assert.match(imageService, /imageOrientation: "from-image"/);
+  assert.match(processor, /maxLongEdge: 1800/);
 });

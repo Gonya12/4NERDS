@@ -75,7 +75,7 @@ function runWorker(
       buffer,
       mimeType: file.type,
       corners,
-      maxLongEdge: 1400,
+      maxLongEdge: 1800,
     }, [buffer]);
   }));
 }
@@ -103,7 +103,7 @@ async function fallbackCrop(file: File, corners: CropPoint[], signal?: AbortSign
   const bottom = Math.min(1, Math.max(...corners.map((point) => point.y)));
   const sourceWidth = Math.max(1, Math.round(image.naturalWidth * (right - left)));
   const sourceHeight = Math.max(1, Math.round(image.naturalHeight * (bottom - top)));
-  const scale = Math.min(1, 1400 / Math.max(sourceWidth, sourceHeight));
+  const scale = Math.min(1, 1800 / Math.max(sourceWidth, sourceHeight));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));

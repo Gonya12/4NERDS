@@ -32,9 +32,8 @@ export function fileToDataUrl(file: File) {
   });
 }
 
-export async function compressSaleImage(file: File) {
+async function resizeImage(file: File, options: { maxLongEdge: number; quality: number; prefix: string }) {
   if (!isSupportedSaleImage(file)) throw new Error("Please use a JPG, JPEG, PNG, WebP, HEIC, or HEIF image.");
-  if (file.name.startsWith("compressed-")) return file;
   const imageUrl = URL.createObjectURL(file);
   let bitmap: ImageBitmap | undefined;
   try {
@@ -63,8 +62,7 @@ export async function compressSaleImage(file: File) {
       sourceWidth = image.naturalWidth || image.width;
       sourceHeight = image.naturalHeight || image.height;
     }
-    const maxLongEdge = 1800;
-    const scale = Math.min(1, maxLongEdge / Math.max(sourceWidth, sourceHeight));
+    const scale = Math.min(1, options.maxLongEdge / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(sourceWidth * scale));
     canvas.height = Math.max(1, Math.round(sourceHeight * scale));
@@ -72,13 +70,27 @@ export async function compressSaleImage(file: File) {
     if (!context) throw new Error("Could not prepare image.");
     context.drawImage(source, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", 0.84);
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", options.quality);
     });
-    return new File([blob], `compressed-${file.name || "financial-image"}.jpg`, { type: "image/jpeg" });
+    return new File([blob], `${options.prefix}-${file.name || "financial-image"}.jpg`, { type: "image/jpeg" });
   } finally {
     bitmap?.close();
     URL.revokeObjectURL(imageUrl);
   }
+}
+
+export async function compressSaleImage(file: File) {
+  if (file.name.startsWith("compressed-")) return file;
+  return resizeImage(file, { maxLongEdge: 1800, quality: 0.84, prefix: "compressed" });
+}
+
+export async function prepareCardRecognitionImage(file: File) {
+  if (!isSupportedSaleImage(file)) throw new Error("Please use a JPG, JPEG, PNG, or WebP card image.");
+  // The crop worker already corrects perspective at high JPEG quality. Avoid a
+  // second lossy encode that can erase tiny collector numbers.
+  if (file.type === "image/jpeg" && file.name.startsWith("cropped-") && file.size <= 6 * 1024 * 1024) return file;
+  if (file.name.startsWith("recognition-")) return file;
+  return resizeImage(file, { maxLongEdge: 2000, quality: 0.92, prefix: "recognition" });
 }
 
 export async function uploadSaleImage(file: File, saleId: string) {
