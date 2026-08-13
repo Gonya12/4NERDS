@@ -18,7 +18,7 @@ type Props = {
   onApply: (suggestion: CardScanSuggestion, hash: string, processedFile?: File) => void;
   onRetakePhoto?: () => void;
 };
-type ScanOutcome = "Match found" | "Several possible matches" | "No reliable match" | "Timed out" | "Cancelled" | "Processing error";
+type ScanOutcome = "Match found" | "Several possible matches" | "Partial identification" | "No reliable match" | "Timed out" | "Cancelled" | "Processing error";
 type ResolvedCard = {
   source: "manual_search" | "automatic_match";
   suggestion: CardScanSuggestion;
@@ -126,6 +126,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const [manualSearchOpen, setManualSearchOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [showAllMatches, setShowAllMatches] = useState(false);
+  const [recognizedName, setRecognizedName] = useState("");
+  const [recognizedCollectorNumber, setRecognizedCollectorNumber] = useState("");
+  const [recognizedSearchError, setRecognizedSearchError] = useState("");
   const [outcome, setOutcome] = useState<ScanOutcome>();
   const [cardGame, setCardGame] = useState<CardGame>(initialGame);
   const [cardLanguage, setCardLanguage] = useState<CardLanguage>(initialGame === "pokemon" ? initialLanguage : initialGame === "one_piece" ? "en" : "unknown");
@@ -176,6 +179,12 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       .finally(() => { if (run === runRef.current) setDetectingCrop(false); });
     return () => controller.abort();
   }, [imageFile]);
+
+  useEffect(() => {
+    setRecognizedName(suggestion?.cardName || suggestion?.correctedNameCandidate || "");
+    setRecognizedCollectorNumber(suggestion?.collectorNumber || "");
+    setRecognizedSearchError("");
+  }, [suggestion?.cardName, suggestion?.correctedNameCandidate, suggestion?.collectorNumber]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -232,11 +241,19 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       setHash(result.hash);
       setStatus("review");
       const matchCount = scanSuggestion.possibleMatches?.length || 0;
-      setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : "No reliable match");
-      if (scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0) {
+      const recognizedSomething = Boolean(
+        scanSuggestion.cardName
+        || scanSuggestion.correctedNameCandidate
+        || scanSuggestion.collectorNumber
+        || scanSuggestion.cardSet
+        || scanSuggestion.aiIdentification?.hp
+        || scanSuggestion.aiIdentification?.visible_text.length,
+      );
+      setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : recognizedSomething ? "Partial identification" : "No reliable match");
+      if (scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0 && !recognizedSomething) {
         setManualSearchOpen(true);
       }
-      setMessage(scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0
+      setMessage(scanSuggestion.aiRecognitionConfidence != null && scanSuggestion.aiRecognitionConfidence < 0.25 && matchCount === 0 && !recognizedSomething
         ? "Couldn't confidently identify this card. Search is prefilled with any text that was readable."
         : scanSuggestion.likelyMatchProviderId
         ? "Found likely match. Confirm the exact printing before applying it."
@@ -244,7 +261,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
           ? "We found a few possible matches. Choose the exact card."
         : matchCount === 1
           ? "One possible match found. Confirm it before applying."
-          : "Couldn't confidently identify this card.");
+          : recognizedSomething
+            ? "We couldn't determine the exact printing. Review the recognized information and search for matches."
+            : "Couldn't confidently identify this card.");
     } catch (error) {
       if (run !== runRef.current) return;
       setStatus("failed");
@@ -287,6 +306,47 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     }
   }
 
+  async function searchRecognizedMatches() {
+    const name = recognizedName.trim();
+    const collectorNumber = recognizedCollectorNumber.trim();
+    if (!name && !collectorNumber) {
+      setRecognizedSearchError("Enter a card name or collector number first.");
+      return;
+    }
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setSearching(true);
+    setRecognizedSearchError("");
+    setMessage("Searching the card catalog with the recognized information…");
+    try {
+      const { searchRecognizedCardText } = await import("../../services/sales/pokemonCardIdentificationService");
+      const candidates = await searchRecognizedCardText({
+        name,
+        collectorNumber,
+        game: cardGame === "one_piece" ? "one_piece" : "pokemon",
+        language: cardGame === "pokemon" && cardLanguage === "ja" ? "ja" : "en",
+      }, controller.signal);
+      setSuggestion((current) => current ? {
+        ...current,
+        correctedNameCandidate: name || current.correctedNameCandidate,
+        collectorNumber: collectorNumber || null,
+        possibleMatches: candidates,
+        likelyMatchProviderId: undefined,
+      } : current);
+      setShowAllMatches(true);
+      setOutcome(candidates.length > 1 ? "Several possible matches" : candidates.length === 1 ? "Match found" : "Partial identification");
+      setMessage(candidates.length
+        ? "We found a few possible matches. Choose the exact printing."
+        : "We couldn't determine the exact printing. Correct the recognized text, adjust the crop, or search manually.");
+      if (!candidates.length) setRecognizedSearchError("No catalog candidates matched those fields. You can edit them and search again.");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setRecognizedSearchError(error instanceof Error ? error.message : "Could not search for matching cards.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
   const reviewSuggestion = resolvedCard?.suggestion || suggestion;
   const duplicateCertificate = reviewSuggestion?.certificateNumber
     && inventory.some((row) => row.certificateNumber?.trim().toLowerCase() === reviewSuggestion.certificateNumber?.trim().toLowerCase());
@@ -294,6 +354,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     reviewSuggestion.cardName
     || reviewSuggestion.correctedNameCandidate
     || reviewSuggestion.collectorNumber
+    || reviewSuggestion.cardSet
+    || reviewSuggestion.aiIdentification?.hp
+    || reviewSuggestion.aiIdentification?.visible_text.length
     || reviewSuggestion.condition
     || reviewSuggestion.stickerPrice != null
     || reviewSuggestion.possibleMatches?.length
@@ -304,6 +367,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     ? likelyMatch && !showAllMatches ? [likelyMatch] : reviewSuggestion.possibleMatches
     : [];
   const needsCondition = Boolean(resolvedCard && category !== "graded_card" && !reviewSuggestion?.condition);
+  const recognizedSummary = [recognizedName, recognizedCollectorNumber ? `#${recognizedCollectorNumber.replace(/^#/, "")}` : ""].filter(Boolean).join(" • ");
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => {
     if (resolvedCard) {
       setResolvedCard({ ...resolvedCard, suggestion: { ...resolvedCard.suggestion, [key]: value } });
@@ -420,9 +484,33 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         <p className="font-black">{reviewSuggestion.correctedNameCandidate}</p>
         <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[reviewSuggestion.correctedNameConfidence || "low"]}`}>{isAiScan ? "AI Match" : "OCR"}: {reviewSuggestion.correctedNameConfidence || "low"}</span>
       </div> : null}
+      {!resolvedCard && !displayedMatches.length && hasUsefulSuggestion ? <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+        <div>
+          <p className="font-black text-amber-950 dark:text-amber-100">We couldn't determine the exact printing.</p>
+          {recognizedSummary ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Recognized:</span> {recognizedSummary}</p> : null}
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+            {[reviewSuggestion.cardSet, reviewSuggestion.aiIdentification?.hp ? `${reviewSuggestion.aiIdentification.hp} HP` : "", reviewSuggestion.cardGame, reviewSuggestion.language].filter(Boolean).join(" • ")}
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-xs font-black">Card Name
+            <input value={recognizedName} onChange={(event) => setRecognizedName(event.target.value)} placeholder="Charizard ex" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+          </label>
+          <label className="text-xs font-black">Collector Number
+            <input value={recognizedCollectorNumber} onChange={(event) => setRecognizedCollectorNumber(event.target.value)} placeholder="56" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+          </label>
+        </div>
+        {recognizedSearchError ? <p role="alert" className="text-xs font-bold text-rose-700 dark:text-rose-300">{recognizedSearchError}</p> : null}
+        <button type="button" disabled={searching} onClick={() => void searchRecognizedMatches()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 text-sm font-black text-white disabled:opacity-40">{searching ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />} Search Matches</button>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-10 rounded-xl bg-slate-900 px-3 text-xs font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
+          <button type="button" onClick={() => void scan(true, false)} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">Try Again</button>
+          <button type="button" onClick={() => setStatus("crop")} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">Adjust Crop</button>
+        </div>
+      </section> : null}
       <div className="grid gap-2 sm:grid-cols-3">
-        {field("cardName", "Card name (confirmed/manual)")}
-        {field("collectorNumber", "Collector number")}
+        {resolvedCard ? field("cardName", "Card name (confirmed/manual)") : null}
+        {resolvedCard ? field("collectorNumber", "Collector number") : null}
         {field("cardSet", "Set / code")}
         {field("language", "Language")}
         {field("condition", "Visible sticker condition")}
@@ -485,8 +573,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       open={manualSearchOpen}
       category={category}
       baseSuggestion={suggestion}
-      initialName={suggestion?.cardName || (suggestion?.correctedNameConfidence !== "low" ? suggestion?.correctedNameCandidate : "") || ""}
-      initialCollectorNumber={suggestion?.collectorNumber || ""}
+      initialName={recognizedName || suggestion?.cardName || suggestion?.correctedNameCandidate || ""}
+      initialCollectorNumber={recognizedCollectorNumber || suggestion?.collectorNumber || ""}
       initialSet={suggestion?.cardSet || ""}
       initialLanguage={suggestion?.language || cardLanguage}
       initialGame={suggestion?.cardGame || cardGame}

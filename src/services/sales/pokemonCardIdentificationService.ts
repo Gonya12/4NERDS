@@ -2,6 +2,7 @@ import {
   POKEMON_CARD_IDENTIFY_FUNCTION,
   buildPokemonIdentificationSearchAttempts,
   normalizePokemonCardIdentification,
+  selectScannerCandidates,
   type PokemonCardIdentification,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
@@ -110,13 +111,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
 }
 
 function mergeMatches(groups: CardMatch[][]) {
-  const matches = new Map<string, CardMatch>();
-  for (const match of groups.flat()) {
-    const key = `${match.provider}:${match.providerCardId}`;
-    const existing = matches.get(key);
-    if (!existing || match.matchScore > existing.matchScore) matches.set(key, match);
-  }
-  return [...matches.values()].sort((left, right) => right.matchScore - left.matchScore).slice(0, 5);
+  return selectScannerCandidates(groups.flat());
 }
 
 async function runSearchAttempts(
@@ -141,12 +136,45 @@ async function runSearchAttempts(
         pageSize: 12,
         disableCorrection: true,
       }, signal);
-      return result.matches.filter((match) => match.searchConfidence === "exact" || match.searchConfidence === "likely");
+      // "possible" is a useful scanner candidate when the image supplied a
+      // readable name but not enough evidence for an exact printing.
+      return selectScannerCandidates(result.matches);
     } catch (error) {
       if (signal?.aborted) throw error;
       return [] as CardMatch[];
     }
   }));
+}
+
+export async function searchRecognizedCardText(input: {
+  name: string;
+  collectorNumber: string;
+  game: "pokemon" | "one_piece";
+  language: "en" | "ja";
+}, signal?: AbortSignal) {
+  const query = [input.name.trim(), input.collectorNumber.trim()].filter(Boolean).join(" ");
+  if (!query) return [];
+  const result = await searchPokemonCardsManually({
+    game: input.game,
+    language: input.language,
+    name: input.name.trim(),
+    collectorNumber: input.collectorNumber.trim(),
+    query,
+    page: 1,
+    pageSize: 30,
+    disableCorrection: false,
+  }, signal);
+  const candidates = selectScannerCandidates(result.matches);
+  if (import.meta.env.DEV) console.info("[Visual card scanner] recognized-text search", {
+    detectedCardName: input.name.trim() || null,
+    detectedCollectorNumber: input.collectorNumber.trim() || null,
+    query,
+    providerCandidateCount: result.matches.length,
+    candidateCount: candidates.length,
+    rejectedCandidates: result.matches.length - candidates.length,
+    rejectionReason: result.matches.length > candidates.length ? "unreliable confidence or duplicate provider record" : "none",
+  });
+  return candidates;
 }
 
 export async function matchPokemonIdentification(identification: PokemonCardIdentification, signal?: AbortSignal) {

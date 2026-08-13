@@ -129,3 +129,13 @@ export function isStrongVisualCatalogMatch(
     && (!second || first.matchScore - second.matchScore >= 6),
   );
 }
+
+export function selectScannerCandidates<T extends { providerCardId: string; matchScore: number; searchConfidence?: string }>(matches: T[]) {
+  const unique = new Map<string, T>();
+  for (const match of matches) {
+    if (match.searchConfidence === "unreliable") continue;
+    const existing = unique.get(match.providerCardId);
+    if (!existing || match.matchScore > existing.matchScore) unique.set(match.providerCardId, match);
+  }
+  return [...unique.values()].sort((left, right) => right.matchScore - left.matchScore).slice(0, 5);
+}

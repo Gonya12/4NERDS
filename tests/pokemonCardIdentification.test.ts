@@ -8,6 +8,7 @@ import {
   isStrongVisualCatalogMatch,
   normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
+  selectScannerCandidates,
   stripPokemonCardImagePrefix,
 } from "../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 
@@ -77,6 +78,17 @@ test("keeps AI recognition confidence separate from exact catalog confidence", (
   ]), false);
 });
 
+test("name-only possible matches survive scanner candidate selection", () => {
+  const candidates = selectScannerCandidates([
+    { providerCardId: "charizard-a", matchScore: 63, searchConfidence: "possible" },
+    { providerCardId: "charizard-b", matchScore: 59, searchConfidence: "possible" },
+    { providerCardId: "noise", matchScore: 20, searchConfidence: "unreliable" },
+  ]);
+  assert.deepEqual(candidates.map((candidate) => candidate.providerCardId), ["charizard-a", "charizard-b"]);
+  assert.doesNotMatch(serviceSource, /match\.searchConfidence === "exact" \|\| match\.searchConfidence === "likely"/);
+  assert.match(serviceSource, /searchRecognizedCardText/);
+});
+
 test("Edge Function keeps Gemini secret server-side and requests structured visual output", () => {
   assert.equal(POKEMON_CARD_IDENTIFY_MODEL, "gemini-3.6-flash");
   assert.match(edgeSource, /Deno\.env\.get\("GEMINI_API_KEY"\)/);
@@ -100,6 +112,11 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /Search Card Manually/);
   assert.match(scannerSource, /We found a few possible matches/);
   assert.match(scannerSource, /Card recognition could not complete/);
+  assert.match(scannerSource, /Partial identification/);
+  assert.match(scannerSource, />Card Name/);
+  assert.match(scannerSource, />Collector Number/);
+  assert.match(scannerSource, /Search Matches/);
+  assert.match(scannerSource, /initialName=\{recognizedName \|\| suggestion\?\.cardName \|\| suggestion\?\.correctedNameCandidate/);
   assert.match(scannerSource, /disabled=\{isAiScan && \(!resolvedCard \|\| needsCondition\)\}/);
 });
 
