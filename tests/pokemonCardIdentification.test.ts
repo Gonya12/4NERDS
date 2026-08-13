@@ -8,6 +8,8 @@ import {
   isStrongVisualCatalogMatch,
   normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
+  rankScannerCandidates,
+  scannerCardNameSimilarity,
   selectScannerCandidates,
   stripPokemonCardImagePrefix,
 } from "../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
@@ -38,24 +40,68 @@ test("strips only supported image data URL prefixes", () => {
   assert.equal(stripPokemonCardImagePrefix(" data:image/webp;base64,AA EC== "), "AAEC==");
 });
 
-test("builds the required collector-first catalog search order", () => {
+test("builds a confidence-aware catalog search order", () => {
   const identification = normalizePokemonCardIdentification({
     card_name: "Pikachu ex",
     pokemon_name: "Pikachu",
     collector_number: "057",
     set_name_hint: "Journey Together",
     confidence: 0.91,
+    field_confidence: {
+      card_name: "high",
+      collector_number: "low",
+      set: "medium",
+      hp: "high",
+      language: "high",
+      artwork: "medium",
+    },
     language: "en",
   });
   const attempts = buildPokemonIdentificationSearchAttempts(identification);
   assert.deepEqual(attempts.map((attempt) => attempt.reason), [
-    "collector number + card name",
-    "collector number + Pokémon name",
-    "card name + set",
-    "Pokémon name + set",
+    "card name first",
+    "Pokémon name first",
     "card name fallback",
   ]);
-  assert.equal(attempts[0].collectorNumber, "057");
+  assert.equal(attempts[0].collectorNumber, "");
+});
+
+test("low-confidence collector numbers cannot outrank a strong recognized name", () => {
+  const evidence = {
+    name: "Charizard ex",
+    collectorNumber: "2",
+    set: "",
+    language: "en" as const,
+    nameConfidence: "high" as const,
+    collectorNumberConfidence: "low" as const,
+    setConfidence: "low" as const,
+  };
+  const ranked = rankScannerCandidates([
+    { providerCardId: "weedle-2", name: "Weedle", collectorNumber: "2", language: "en", matchScore: 99, matchConfidence: "high", searchConfidence: "exact", reasons: [] },
+    { providerCardId: "oddish-2", name: "Oddish", collectorNumber: "2", language: "en", matchScore: 98, matchConfidence: "high", searchConfidence: "exact", reasons: [] },
+    { providerCardId: "ludicolo-2", name: "Ludicolo", collectorNumber: "2", language: "en", matchScore: 97, matchConfidence: "high", searchConfidence: "exact", reasons: [] },
+    { providerCardId: "charizard-56", name: "Charizard ex", collectorNumber: "56", language: "en", matchScore: 61, matchConfidence: "medium", searchConfidence: "possible", reasons: [] },
+    { providerCardId: "charizard-199", name: "Charizard EX", collectorNumber: "199", language: "en", matchScore: 58, matchConfidence: "medium", searchConfidence: "possible", reasons: [] },
+  ], evidence);
+  assert.deepEqual(ranked.map((candidate) => candidate.providerCardId), ["charizard-56", "charizard-199"]);
+  assert.equal(scannerCardNameSimilarity("  Charizard—EX ", "charizard ex"), 1);
+  assert.ok(scannerCardNameSimilarity("Charizard ex", "Weedle") < 0.58);
+});
+
+test("manual collector correction becomes strong evidence among same-name printings", () => {
+  const ranked = rankScannerCandidates([
+    { providerCardId: "charizard-2", name: "Charizard ex", collectorNumber: "2", language: "en", matchScore: 80, matchConfidence: "high", searchConfidence: "likely", reasons: [] },
+    { providerCardId: "charizard-56", name: "Charizard ex", collectorNumber: "056", language: "en", matchScore: 60, matchConfidence: "medium", searchConfidence: "possible", reasons: [] },
+  ], {
+    name: "Charizard ex",
+    collectorNumber: "56",
+    set: "",
+    language: "en",
+    nameConfidence: "high",
+    collectorNumberConfidence: "high",
+    setConfidence: "low",
+  });
+  assert.equal(ranked[0].providerCardId, "charizard-56");
 });
 
 test("normalizes common collector-number formats before catalog search", () => {

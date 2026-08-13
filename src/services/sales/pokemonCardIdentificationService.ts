@@ -2,8 +2,14 @@ import {
   POKEMON_CARD_IDENTIFY_FUNCTION,
   buildPokemonIdentificationSearchAttempts,
   normalizePokemonCardIdentification,
+  rankScannerCandidates,
+  scannerCandidateEvidence,
+  scannerCardNameSimilarity,
   selectScannerCandidates,
+  type IdentificationFieldConfidence,
+  type IdentificationSearchAttempt,
   type PokemonCardIdentification,
+  type ScannerCandidateEvidence,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
 import { fileToDataUrl } from "../images/saleImageService";
@@ -114,6 +120,22 @@ function mergeMatches(groups: CardMatch[][]) {
   return selectScannerCandidates(groups.flat());
 }
 
+function scannerMatchDiagnostics(matches: CardMatch[], evidence: ScannerCandidateEvidence) {
+  const threshold = evidence.nameConfidence === "high" ? 0.58 : evidence.nameConfidence === "medium" ? 0.42 : 0;
+  return matches.map((match) => {
+    const nameSimilarity = evidence.name ? scannerCardNameSimilarity(evidence.name, match.name) : 0;
+    return {
+      candidateName: match.name,
+      collectorNumber: match.collectorNumber || null,
+      nameSimilarity: Math.round(nameSimilarity * 100) / 100,
+      rejected: Boolean(evidence.name && threshold && nameSimilarity < threshold),
+      rejectionReason: evidence.name && threshold && nameSimilarity < threshold
+        ? `name similarity below ${threshold}`
+        : null,
+    };
+  });
+}
+
 async function runSearchAttempts(
   identification: PokemonCardIdentification,
   indexes: number[],
@@ -121,6 +143,7 @@ async function runSearchAttempts(
 ) {
   const language = identification.language === "ja" ? "ja" : "en";
   const attempts = buildPokemonIdentificationSearchAttempts(identification);
+  const evidence = scannerCandidateEvidence(identification);
   return Promise.all(indexes.map(async (index) => {
     const attempt = attempts[index];
     if (!attempt) return [] as CardMatch[];
@@ -138,7 +161,26 @@ async function runSearchAttempts(
       }, signal);
       // "possible" is a useful scanner candidate when the image supplied a
       // readable name but not enough evidence for an exact printing.
-      return selectScannerCandidates(result.matches);
+      const candidates = selectScannerCandidates(rankScannerCandidates(result.matches, evidence));
+      if (import.meta.env.DEV) console.info("[Visual card scanner] candidate ranking", {
+        recognizedFields: {
+          name: evidence.name || null,
+          collectorNumber: evidence.collectorNumber || null,
+          set: evidence.set || null,
+          language: evidence.language,
+        },
+        fieldConfidence: {
+          name: evidence.nameConfidence,
+          collectorNumber: evidence.collectorNumberConfidence,
+          set: evidence.setConfidence,
+        },
+        query: [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" "),
+        reason: attempt.reason,
+        providerCandidateCount: result.matches.length,
+        candidates: scannerMatchDiagnostics(result.matches, evidence),
+        acceptedCandidateCount: candidates.length,
+      });
+      return candidates;
     } catch (error) {
       if (signal?.aborted) throw error;
       return [] as CardMatch[];
@@ -151,28 +193,77 @@ export async function searchRecognizedCardText(input: {
   collectorNumber: string;
   game: "pokemon" | "one_piece";
   language: "en" | "ja";
+  nameConfidence?: IdentificationFieldConfidence;
+  collectorNumberConfidence?: IdentificationFieldConfidence;
 }, signal?: AbortSignal) {
-  const query = [input.name.trim(), input.collectorNumber.trim()].filter(Boolean).join(" ");
-  if (!query) return [];
-  const result = await searchPokemonCardsManually({
-    game: input.game,
+  const name = input.name.trim();
+  const collectorNumber = input.collectorNumber.trim();
+  if (!name && !collectorNumber) return [];
+  const nameConfidence = input.nameConfidence || (name ? "high" : "low");
+  const collectorNumberConfidence = input.collectorNumberConfidence || (collectorNumber ? "high" : "low");
+  const evidence: ScannerCandidateEvidence = {
+    name,
+    collectorNumber,
+    set: "",
     language: input.language,
-    name: input.name.trim(),
-    collectorNumber: input.collectorNumber.trim(),
-    query,
-    page: 1,
-    pageSize: 30,
-    disableCorrection: false,
-  }, signal);
-  const candidates = selectScannerCandidates(result.matches);
+    nameConfidence,
+    collectorNumberConfidence,
+    setConfidence: "low",
+  };
+  let attempts: IdentificationSearchAttempt[];
+  if (name && (nameConfidence === "high" || nameConfidence === "medium") && collectorNumberConfidence !== "high") {
+    attempts = [
+      { name, collectorNumber: "", set: "", reason: "name-first because collector number is not high confidence" },
+      ...(collectorNumberConfidence === "medium" && collectorNumber ? [{ name, collectorNumber, set: "", reason: "medium-confidence collector-number refinement" }] : []),
+    ];
+  } else if (collectorNumber && collectorNumberConfidence === "high" && nameConfidence === "low") {
+    attempts = [
+      { name: "", collectorNumber, set: "", reason: "high-confidence collector number primary" },
+      ...(name ? [{ name, collectorNumber: "", set: "", reason: "name fallback" }] : []),
+    ];
+  } else {
+    attempts = [
+      { name, collectorNumber, set: "", reason: "high-confidence recognized fields" },
+      ...(name && collectorNumber ? [{ name, collectorNumber: "", set: "", reason: "automatic name-only fallback" }] : []),
+    ];
+  }
+  const queryHistory: string[] = [];
+  const groups: CardMatch[][] = [];
+  const diagnostics: ReturnType<typeof scannerMatchDiagnostics> = [];
+  let providerCandidateCount = 0;
+  let fallbackTriggered = false;
+  for (let index = 0; index < attempts.length; index++) {
+    const attempt = attempts[index];
+    const query = [attempt.name, attempt.collectorNumber].filter(Boolean).join(" ");
+    queryHistory.push(query);
+    const result = await searchPokemonCardsManually({
+      game: input.game,
+      language: input.language,
+      name: attempt.name,
+      collectorNumber: attempt.collectorNumber,
+      query,
+      page: 1,
+      pageSize: 30,
+      disableCorrection: false,
+    }, signal);
+    providerCandidateCount += result.matches.length;
+    diagnostics.push(...scannerMatchDiagnostics(result.matches, evidence));
+    const ranked = selectScannerCandidates(rankScannerCandidates(result.matches, evidence));
+    groups.push(ranked);
+    const merged = mergeMatches(groups);
+    if (merged.length >= 5 || (merged.length && !attempt.collectorNumber)) break;
+    if (index === 0 && attempts.length > 1) fallbackTriggered = true;
+  }
+  const candidates = mergeMatches(groups);
   if (import.meta.env.DEV) console.info("[Visual card scanner] recognized-text search", {
-    detectedCardName: input.name.trim() || null,
-    detectedCollectorNumber: input.collectorNumber.trim() || null,
-    query,
-    providerCandidateCount: result.matches.length,
+    recognizedFields: { name: name || null, collectorNumber: collectorNumber || null, language: input.language },
+    fieldConfidence: { name: nameConfidence, collectorNumber: collectorNumberConfidence },
+    queries: queryHistory,
+    providerCandidateCount,
     candidateCount: candidates.length,
-    rejectedCandidates: result.matches.length - candidates.length,
-    rejectionReason: result.matches.length > candidates.length ? "unreliable confidence or duplicate provider record" : "none",
+    candidates: diagnostics,
+    fallbackTriggered,
+    confidenceThreshold: nameConfidence === "high" ? 0.58 : nameConfidence === "medium" ? 0.42 : 0,
   });
   return candidates;
 }
@@ -180,13 +271,11 @@ export async function searchRecognizedCardText(input: {
 export async function matchPokemonIdentification(identification: PokemonCardIdentification, signal?: AbortSignal) {
   const attempts = buildPokemonIdentificationSearchAttempts(identification);
   if (!attempts.length) return [];
-  const collectorIndexes = attempts
-    .map((attempt, index) => attempt.collectorNumber ? index : -1)
-    .filter((index) => index >= 0);
-  const collectorMatches = mergeMatches(await runSearchAttempts(identification, collectorIndexes, signal));
-  if (collectorMatches.length >= 5 || collectorMatches[0]?.matchScore >= 92) return collectorMatches;
-  const fallbackIndexes = attempts
-    .map((attempt, index) => !attempt.collectorNumber ? index : -1)
-    .filter((index) => index >= 0);
-  return mergeMatches([collectorMatches, ...await runSearchAttempts(identification, fallbackIndexes, signal)]);
+  const groups: CardMatch[][] = [];
+  for (let index = 0; index < attempts.length; index++) {
+    groups.push(...await runSearchAttempts(identification, [index], signal));
+    const matches = mergeMatches(groups);
+    if (matches.length >= 5 || matches[0]?.matchScore >= 92) return matches;
+  }
+  return mergeMatches(groups);
 }

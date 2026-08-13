@@ -3,6 +3,15 @@ export const POKEMON_CARD_IDENTIFY_FUNCTION = "pokemon-card-identify";
 export const supportedPokemonCardImageTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 
 export type PokemonCardImageMimeType = typeof supportedPokemonCardImageTypes[number];
+export type IdentificationFieldConfidence = "high" | "medium" | "low";
+export type PokemonIdentificationFieldConfidence = {
+  card_name: IdentificationFieldConfidence;
+  collector_number: IdentificationFieldConfidence;
+  set: IdentificationFieldConfidence;
+  hp: IdentificationFieldConfidence;
+  language: IdentificationFieldConfidence;
+  artwork: IdentificationFieldConfidence;
+};
 export type PokemonCardIdentification = {
   card_name: string | null;
   pokemon_name: string | null;
@@ -19,6 +28,7 @@ export type PokemonCardIdentification = {
   visible_text: string[];
   artwork_characteristics: string[];
   confidence: number;
+  field_confidence: PokemonIdentificationFieldConfidence;
   notes: string[];
 };
 
@@ -27,6 +37,16 @@ export type IdentificationSearchAttempt = {
   collectorNumber: string;
   set: string;
   reason: string;
+};
+
+export type ScannerCandidateEvidence = {
+  name: string;
+  collectorNumber: string;
+  set: string;
+  language: "en" | "ja" | "unknown";
+  nameConfidence: IdentificationFieldConfidence;
+  collectorNumberConfidence: IdentificationFieldConfidence;
+  setConfidence: IdentificationFieldConfidence;
 };
 
 function nullableText(value: unknown, maxLength = 120) {
@@ -41,6 +61,10 @@ function nullableInteger(value: unknown, minimum: number, maximum: number) {
   return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
 }
 
+function fieldConfidence(value: unknown, fallback: IdentificationFieldConfidence) {
+  return value === "high" || value === "medium" || value === "low" ? value : fallback;
+}
+
 export function stripPokemonCardImagePrefix(value: string) {
   return value.trim().replace(/^data:image\/(?:jpeg|png|webp);base64,/i, "").replace(/\s+/g, "");
 }
@@ -49,6 +73,11 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const language = row.language === "en" || row.language === "ja" ? row.language : "unknown";
   const confidence = Number(row.confidence);
+  const overallConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;
+  const fallbackConfidence = identificationConfidenceLabel(overallConfidence);
+  const rawFieldConfidence = row.field_confidence && typeof row.field_confidence === "object" && !Array.isArray(row.field_confidence)
+    ? row.field_confidence as Record<string, unknown>
+    : {};
   return {
     card_name: nullableText(row.card_name),
     pokemon_name: nullableText(row.pokemon_name),
@@ -68,7 +97,15 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
     artwork_characteristics: Array.isArray(row.artwork_characteristics)
       ? row.artwork_characteristics.map((text) => nullableText(text, 120)).filter((text): text is string => Boolean(text)).slice(0, 8)
       : [],
-    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+    confidence: overallConfidence,
+    field_confidence: {
+      card_name: fieldConfidence(rawFieldConfidence.card_name, fallbackConfidence),
+      collector_number: fieldConfidence(rawFieldConfidence.collector_number, fallbackConfidence),
+      set: fieldConfidence(rawFieldConfidence.set, fallbackConfidence),
+      hp: fieldConfidence(rawFieldConfidence.hp, fallbackConfidence),
+      language: fieldConfidence(rawFieldConfidence.language, fallbackConfidence),
+      artwork: fieldConfidence(rawFieldConfidence.artwork, fallbackConfidence),
+    },
     notes: Array.isArray(row.notes)
       ? row.notes.map((note) => nullableText(note, 180)).filter((note): note is string => Boolean(note)).slice(0, 8)
       : [],
@@ -100,20 +137,149 @@ export function buildPokemonIdentificationSearchAttempts(value: PokemonCardIdent
   const collectorNumber = normalizeIdentificationCollectorNumber(value.collector_number);
   const set = value.set_name_hint || value.set_code_hint || "";
   const visibleName = value.visible_text.find((text) => /^[\p{L}][\p{L}\p{N}'’.:& -]{2,48}$/u.test(text)) || "";
-  const attempts: IdentificationSearchAttempt[] = [
-    { name: cardName, collectorNumber, set: "", reason: "collector number + card name" },
-    { name: pokemonName, collectorNumber, set: "", reason: "collector number + Pokémon name" },
-    { name: cardName, collectorNumber: "", set, reason: "card name + set" },
-    { name: pokemonName, collectorNumber: "", set, reason: "Pokémon name + set" },
-    { name: cardName || pokemonName || visibleName, collectorNumber: "", set: "", reason: "card name fallback" },
-  ].filter((attempt) => Boolean(attempt.name || attempt.collectorNumber));
+  const name = cardName || pokemonName || visibleName;
+  const nameConfidence = value.field_confidence.card_name;
+  const numberConfidence = value.field_confidence.collector_number;
+  const nameOnly: IdentificationSearchAttempt[] = [
+    { name: cardName, collectorNumber: "", set, reason: "card name first" },
+    { name: pokemonName, collectorNumber: "", set, reason: "Pokémon name first" },
+    { name, collectorNumber: "", set: "", reason: "card name fallback" },
+  ];
+  const combined: IdentificationSearchAttempt[] = [
+    { name: cardName || pokemonName, collectorNumber, set: "", reason: "high-confidence name + collector number" },
+    { name: pokemonName, collectorNumber, set: "", reason: "Pokémon name + collector number" },
+  ];
+  let planned: IdentificationSearchAttempt[];
+  if (nameConfidence === "high" && numberConfidence === "high") {
+    planned = [...combined, ...nameOnly];
+  } else if ((nameConfidence === "high" || nameConfidence === "medium") && numberConfidence !== "high") {
+    // A questionable number may reorder same-name printings, but must never
+    // turn an unrelated #2 card into a Charizard suggestion.
+    planned = [...nameOnly, ...(numberConfidence === "medium" ? combined : [])];
+  } else if (numberConfidence === "high") {
+    planned = [
+      { name: nameConfidence === "medium" ? name : "", collectorNumber, set: "", reason: nameConfidence === "medium" ? "collector number with name sanity check" : "high-confidence collector number" },
+      ...nameOnly,
+    ];
+  } else {
+    planned = [...nameOnly, { name: "", collectorNumber, set: "", reason: "low-confidence fuzzy fallback" }];
+  }
   const seen = new Set<string>();
-  return attempts.filter((attempt) => {
+  return planned.filter((attempt) => Boolean(attempt.name || attempt.collectorNumber)).filter((attempt) => {
     const key = `${attempt.name.toLocaleLowerCase()}|${attempt.collectorNumber.toLocaleLowerCase()}|${attempt.set.toLocaleLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function normalizedCollector(value: string | null | undefined) {
+  return normalizeIdentificationCollectorNumber(value || "").split("/")[0].replace(/^0+(?=\d)/, "").toLocaleLowerCase();
+}
+
+function normalizedNameTokens(value: string) {
+  return value.normalize("NFKC")
+    .replace(/([a-z])(?=(?:GX|EX|VMAX|VSTAR|BREAK)\b)/g, "$1 ")
+    .replace(/[-_]+/g, " ")
+    .replace(/['’‘‛`´"]/g, "")
+    .replace(/[^\p{L}\p{N} ]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function editSimilarity(left: string, right: string) {
+  const a = normalizedNameTokens(left).replace(/\s+/g, "");
+  const b = normalizedNameTokens(right).replace(/\s+/g, "");
+  if (!a || !b) return 0;
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= a.length; leftIndex++) {
+    let previous = row[0];
+    row[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= b.length; rightIndex++) {
+      const saved = row[rightIndex];
+      row[rightIndex] = Math.min(row[rightIndex] + 1, row[rightIndex - 1] + 1, previous + (a[leftIndex - 1] === b[rightIndex - 1] ? 0 : 1));
+      previous = saved;
+    }
+  }
+  return Math.max(0, 1 - row[b.length] / Math.max(a.length, b.length));
+}
+
+/** Normalizes punctuation, typography, whitespace and suffix casing before comparison. */
+export function scannerCardNameSimilarity(recognizedName: string, candidateName: string) {
+  const left = normalizedNameTokens(recognizedName);
+  const right = normalizedNameTokens(candidateName);
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  const suffixes = new Set(["ex", "gx", "v", "vmax", "vstar", "break"]);
+  const base = (value: string) => value.split(" ").filter((token) => !suffixes.has(token)).join(" ");
+  if (base(left) && base(left) === base(right)) return 0.9;
+  const leftTokens = new Set(left.split(" "));
+  const rightTokens = new Set(right.split(" "));
+  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const tokenScore = overlap / new Set([...leftTokens, ...rightTokens]).size;
+  return Math.max(editSimilarity(left, right), tokenScore);
+}
+
+export function scannerCandidateEvidence(value: PokemonCardIdentification): ScannerCandidateEvidence {
+  return {
+    name: value.card_name || value.pokemon_name || "",
+    collectorNumber: normalizeIdentificationCollectorNumber(value.collector_number),
+    set: value.set_name_hint || value.set_code_hint || "",
+    language: value.language,
+    nameConfidence: value.field_confidence.card_name,
+    collectorNumberConfidence: value.field_confidence.collector_number,
+    setConfidence: value.field_confidence.set,
+  };
+}
+
+export function rankScannerCandidates<T extends {
+  providerCardId: string;
+  name: string;
+  collectorNumber?: string;
+  setName?: string;
+  setId?: string;
+  setCode?: string;
+  language?: string;
+  matchScore: number;
+  matchConfidence?: string;
+  searchConfidence?: string;
+  reasons?: string[];
+}>(matches: T[], evidence: ScannerCandidateEvidence) {
+  const nameThreshold = evidence.nameConfidence === "high" ? 0.58 : evidence.nameConfidence === "medium" ? 0.42 : 0;
+  const numberWeight = evidence.collectorNumberConfidence === "high" ? 32 : evidence.collectorNumberConfidence === "medium" ? 12 : 2;
+  const nameWeight = evidence.nameConfidence === "high" ? 72 : evidence.nameConfidence === "medium" ? 52 : 16;
+  const bothLow = evidence.nameConfidence === "low" && evidence.collectorNumberConfidence === "low";
+  return matches.flatMap((match) => {
+    const nameSimilarity = evidence.name ? scannerCardNameSimilarity(evidence.name, match.name) : 0;
+    if (evidence.name && nameThreshold && nameSimilarity < nameThreshold) return [];
+    const numberMatches = Boolean(
+      evidence.collectorNumber
+      && normalizedCollector(evidence.collectorNumber) === normalizedCollector(match.collectorNumber),
+    );
+    const setSimilarity = evidence.set
+      ? scannerCardNameSimilarity(evidence.set, `${match.setName || ""} ${match.setCode || match.setId || ""}`)
+      : 0;
+    let score = nameSimilarity * nameWeight + Math.min(100, Math.max(0, match.matchScore)) * 0.18;
+    if (numberMatches) score += numberWeight;
+    else if (evidence.collectorNumber && evidence.collectorNumberConfidence === "high") score -= 8;
+    score += setSimilarity * (evidence.setConfidence === "high" ? 10 : evidence.setConfidence === "medium" ? 6 : 2);
+    if (evidence.language !== "unknown" && match.language === evidence.language) score += 2;
+    score = Math.round(Math.max(0, Math.min(bothLow ? 69 : 99, score)));
+    const confidence = score >= 78 ? "high" : score >= 52 ? "medium" : "low";
+    const searchConfidence = bothLow ? "possible" : match.searchConfidence;
+    return [{
+      ...match,
+      matchScore: score,
+      matchConfidence: confidence,
+      searchConfidence,
+      reasons: [
+        ...(match.reasons || []),
+        evidence.name ? `Name similarity ${Math.round(nameSimilarity * 100)}%` : "",
+        numberMatches ? `Collector number matched (${evidence.collectorNumberConfidence}-confidence evidence)` : "",
+      ].filter(Boolean),
+    } as T];
+  }).sort((left, right) => right.matchScore - left.matchScore);
 }
 
 export function isStrongVisualCatalogMatch(

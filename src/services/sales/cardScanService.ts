@@ -628,6 +628,7 @@ async function scanPokemonCardWithVisualAi(
     extractedCollectorNumber: identification.collector_number,
     extractedSetHint: identification.set_name_hint || identification.set_code_hint,
     confidence: identification.confidence,
+    fieldConfidence: identification.field_confidence,
     visibleText: identification.visible_text,
   });
   checkAbort(options.signal);
@@ -651,10 +652,10 @@ async function scanPokemonCardWithVisualAi(
   if (identification.confidence < 0.5) warnings.push("AI recognition confidence is low. Confirm the detected text or search manually.");
   if (!possibleMatches.length) warnings.push(`No ${detectedLanguage === "ja" ? "TCGdex" : "Pokémon TCG API"} match was found. Search manually with the detected text.`);
   const fieldConfidence = {
-    cardName: correctedNameCandidate ? recognitionConfidence : "low" as const,
-    collectorNumber: identification.collector_number ? recognitionConfidence : "low" as const,
-    cardSet: identification.set_name_hint || identification.set_code_hint ? recognitionConfidence : "low" as const,
-    language: identification.language !== "unknown" ? recognitionConfidence : "low" as const,
+    cardName: correctedNameCandidate ? identification.field_confidence.card_name : "low" as const,
+    collectorNumber: identification.collector_number ? identification.field_confidence.collector_number : "low" as const,
+    cardSet: identification.set_name_hint || identification.set_code_hint ? identification.field_confidence.set : "low" as const,
+    language: identification.language !== "unknown" ? identification.field_confidence.language : "low" as const,
     condition: "low" as const,
     stickerPrice: "low" as const,
     gradingCompany: "low" as const,
@@ -828,12 +829,19 @@ export async function scanPokemonCard(
       ? rawNameCandidate || null
       : nameEvidence.isReliable ? nameEvidence.candidates[0] || null : null;
     const searchableNumber = onePieceCode || collector?.normalized || null;
+    const ocrNameConfidence = searchableName ? confidence(Math.max(top.confidence, full.confidence)) : "low" as const;
+    const ocrNumberConfidence = searchableNumber ? confidence(bottom.confidence) : "low" as const;
     stage("Searching card catalog");
+    const { searchRecognizedCardText } = await import("./pokemonCardIdentificationService");
     const possibleMatches = await timed(
-      searchPokemonCards(searchableName, searchableNumber, options.signal, {
-        game: selectedGame,
-        language: selectedLanguage,
-      }),
+      searchRecognizedCardText({
+        name: searchableName || "",
+        collectorNumber: searchableNumber || "",
+        game: selectedGame === "one_piece" ? "one_piece" : "pokemon",
+        language: selectedLanguage === "ja" ? "ja" : "en",
+        nameConfidence: ocrNameConfidence,
+        collectorNumberConfidence: ocrNumberConfidence,
+      }, options.signal),
       18_000,
       `${selectedGame === "one_piece" ? "OPTCG API" : selectedLanguage === "ja" ? "TCGdex" : "Pokémon card search"} timed out.`,
     ).catch((error) => {

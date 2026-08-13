@@ -128,6 +128,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const [showAllMatches, setShowAllMatches] = useState(false);
   const [recognizedName, setRecognizedName] = useState("");
   const [recognizedCollectorNumber, setRecognizedCollectorNumber] = useState("");
+  const [recognizedNameEdited, setRecognizedNameEdited] = useState(false);
+  const [recognizedCollectorEdited, setRecognizedCollectorEdited] = useState(false);
   const [recognizedSearchError, setRecognizedSearchError] = useState("");
   const [outcome, setOutcome] = useState<ScanOutcome>();
   const [cardGame, setCardGame] = useState<CardGame>(initialGame);
@@ -136,6 +138,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const processedPreview = useFilePreview(processedFile);
   const runRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const recognizedEditTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -183,6 +186,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   useEffect(() => {
     setRecognizedName(suggestion?.cardName || suggestion?.correctedNameCandidate || "");
     setRecognizedCollectorNumber(suggestion?.collectorNumber || "");
+    setRecognizedNameEdited(false);
+    setRecognizedCollectorEdited(false);
     setRecognizedSearchError("");
   }, [suggestion?.cardName, suggestion?.correctedNameCandidate, suggestion?.collectorNumber]);
 
@@ -192,6 +197,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       mountedRef.current = false;
       runRef.current += 1;
       controllerRef.current?.abort();
+      if (recognizedEditTimerRef.current != null) window.clearTimeout(recognizedEditTimerRef.current);
       queueMicrotask(() => {
         if (!mountedRef.current) {
           void import("../../services/sales/cardScanService").then(({ cancelCardScan }) => cancelCardScan());
@@ -306,13 +312,19 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     }
   }
 
-  async function searchRecognizedMatches() {
-    const name = recognizedName.trim();
-    const collectorNumber = recognizedCollectorNumber.trim();
+  async function searchRecognizedMatches(overrides: {
+    name?: string;
+    collectorNumber?: string;
+    nameEdited?: boolean;
+    collectorEdited?: boolean;
+  } = {}) {
+    const name = (overrides.name ?? recognizedName).trim();
+    const collectorNumber = (overrides.collectorNumber ?? recognizedCollectorNumber).trim();
     if (!name && !collectorNumber) {
       setRecognizedSearchError("Enter a card name or collector number first.");
       return;
     }
+    controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setSearching(true);
@@ -325,11 +337,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         collectorNumber,
         game: cardGame === "one_piece" ? "one_piece" : "pokemon",
         language: cardGame === "pokemon" && cardLanguage === "ja" ? "ja" : "en",
+        nameConfidence: (overrides.nameEdited ?? recognizedNameEdited) ? "high" : suggestion?.fieldConfidence?.cardName || "low",
+        collectorNumberConfidence: (overrides.collectorEdited ?? recognizedCollectorEdited) ? "high" : suggestion?.fieldConfidence?.collectorNumber || "low",
       }, controller.signal);
       setSuggestion((current) => current ? {
         ...current,
         correctedNameCandidate: name || current.correctedNameCandidate,
         collectorNumber: collectorNumber || null,
+        fieldConfidence: {
+          ...current.fieldConfidence,
+          cardName: (overrides.nameEdited ?? recognizedNameEdited) ? "high" : current.fieldConfidence.cardName,
+          collectorNumber: (overrides.collectorEdited ?? recognizedCollectorEdited) ? "high" : current.fieldConfidence.collectorNumber,
+        },
         possibleMatches: candidates,
         likelyMatchProviderId: undefined,
       } : current);
@@ -345,6 +364,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     } finally {
       setSearching(false);
     }
+  }
+
+  function queueRecognizedSearch(nextName: string, nextCollectorNumber: string, editedField: "name" | "collector") {
+    if (recognizedEditTimerRef.current != null) window.clearTimeout(recognizedEditTimerRef.current);
+    recognizedEditTimerRef.current = window.setTimeout(() => {
+      void searchRecognizedMatches({
+        name: nextName,
+        collectorNumber: nextCollectorNumber,
+        nameEdited: editedField === "name" || recognizedNameEdited,
+        collectorEdited: editedField === "collector" || recognizedCollectorEdited,
+      });
+    }, 500);
   }
 
   const reviewSuggestion = resolvedCard?.suggestion || suggestion;
@@ -367,6 +398,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     ? likelyMatch && !showAllMatches ? [likelyMatch] : reviewSuggestion.possibleMatches
     : [];
   const needsCondition = Boolean(resolvedCard && category !== "graded_card" && !reviewSuggestion?.condition);
+  const recognizedNameConfidence = recognizedNameEdited ? "high" : reviewSuggestion?.fieldConfidence?.cardName || "low";
+  const recognizedCollectorConfidence = recognizedCollectorEdited ? "high" : reviewSuggestion?.fieldConfidence?.collectorNumber || "low";
   const recognizedSummary = [recognizedName, recognizedCollectorNumber ? `#${recognizedCollectorNumber.replace(/^#/, "")}` : ""].filter(Boolean).join(" • ");
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => {
     if (resolvedCard) {
@@ -484,20 +517,32 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         <p className="font-black">{reviewSuggestion.correctedNameCandidate}</p>
         <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[reviewSuggestion.correctedNameConfidence || "low"]}`}>{isAiScan ? "AI Match" : "OCR"}: {reviewSuggestion.correctedNameConfidence || "low"}</span>
       </div> : null}
-      {!resolvedCard && !displayedMatches.length && hasUsefulSuggestion ? <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+      {!resolvedCard && hasUsefulSuggestion && (!displayedMatches.length || recognizedNameConfidence === "low" || recognizedCollectorConfidence === "low") ? <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
         <div>
-          <p className="font-black text-amber-950 dark:text-amber-100">We couldn't determine the exact printing.</p>
+          <p className="font-black text-amber-950 dark:text-amber-100">{displayedMatches.length ? "Review uncertain recognized information." : "We couldn't determine the exact printing."}</p>
           {recognizedSummary ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Recognized:</span> {recognizedSummary}</p> : null}
           <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
             {[reviewSuggestion.cardSet, reviewSuggestion.aiIdentification?.hp ? `${reviewSuggestion.aiIdentification.hp} HP` : "", reviewSuggestion.cardGame, reviewSuggestion.language].filter(Boolean).join(" • ")}
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
-          <label className="text-xs font-black">Card Name
-            <input value={recognizedName} onChange={(event) => setRecognizedName(event.target.value)} placeholder="Charizard ex" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+          <label className="text-xs font-black">Card Name <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[recognizedNameConfidence]}`}>{recognizedNameConfidence}</span>
+            <input value={recognizedName} onChange={(event) => {
+              const next = event.target.value;
+              setRecognizedName(next);
+              setRecognizedNameEdited(true);
+              queueRecognizedSearch(next, recognizedCollectorNumber, "name");
+            }} placeholder="Charizard ex" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+            {recognizedNameConfidence === "low" ? <span className="mt-1 block font-medium text-amber-800 dark:text-amber-200">Not sure about this value — edit it if needed.</span> : null}
           </label>
-          <label className="text-xs font-black">Collector Number
-            <input value={recognizedCollectorNumber} onChange={(event) => setRecognizedCollectorNumber(event.target.value)} placeholder="56" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+          <label className="text-xs font-black">Collector Number <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[recognizedCollectorConfidence]}`}>{recognizedCollectorConfidence}</span>
+            <input value={recognizedCollectorNumber} onChange={(event) => {
+              const next = event.target.value;
+              setRecognizedCollectorNumber(next);
+              setRecognizedCollectorEdited(true);
+              queueRecognizedSearch(recognizedName, next, "collector");
+            }} placeholder="56" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+            {recognizedCollectorConfidence === "low" ? <span className="mt-1 block font-medium text-amber-800 dark:text-amber-200">Not sure about this value — edit it if needed.</span> : null}
           </label>
         </div>
         {recognizedSearchError ? <p role="alert" className="text-xs font-bold text-rose-700 dark:text-rose-300">{recognizedSearchError}</p> : null}

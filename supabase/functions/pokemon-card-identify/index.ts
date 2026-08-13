@@ -14,6 +14,7 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "x-request-id, retry-after",
 };
 const maxDecodedBytes = 6 * 1024 * 1024;
+const fieldConfidenceInstruction = "Grade card name, collector number, set, HP, language, and artwork confidence independently as high, medium, or low. A readable name and uncertain collector number must be high name confidence and low collector-number confidence.";
 const prompt = `You are a visual trading-card identification assistant. Inspect the single Pokémon or One Piece card occupying most of the image, even when a sleeve, top loader, stand, background, glare, or slight tilt is visible. Read only visible evidence. Extract partial visible text and distinctive artwork characteristics when exact identification is uncertain so the app can search for candidates. Never provide prices, accounting values, inventory IDs, provider API IDs, or a final confirmation. Preserve collector-number leading zeros and distinguish EX, ex, GX, V, VMAX, VSTAR, promo, and older printings. Detect Japanese rather than forcing English. If text or a number is unreadable, return null and lower confidence instead of guessing. Notes should briefly describe image limitations that affect identification.`;
 
 // Gemini 3.6 structured output supports nullable primitives through a JSON
@@ -38,12 +39,24 @@ const responseSchema = {
     visible_text: { type: "array", items: { type: "string" }, maxItems: 12 },
     artwork_characteristics: { type: "array", items: { type: "string" }, maxItems: 8 },
     confidence: { type: "number", minimum: 0, maximum: 1 },
+    field_confidence: {
+      type: "object",
+      properties: {
+        card_name: { type: "string", enum: ["high", "medium", "low"] },
+        collector_number: { type: "string", enum: ["high", "medium", "low"] },
+        set: { type: "string", enum: ["high", "medium", "low"] },
+        hp: { type: "string", enum: ["high", "medium", "low"] },
+        language: { type: "string", enum: ["high", "medium", "low"] },
+        artwork: { type: "string", enum: ["high", "medium", "low"] },
+      },
+      required: ["card_name", "collector_number", "set", "hp", "language", "artwork"],
+    },
     notes: { type: "array", items: { type: "string" }, maxItems: 8 },
   },
   required: [
     "card_name", "pokemon_name", "collector_number", "printed_total_number", "set_name_hint", "set_code_hint",
     "card_game", "language", "rarity_hint", "hp", "regulation_mark", "copyright_year",
-    "visible_text", "artwork_characteristics", "confidence", "notes",
+    "visible_text", "artwork_characteristics", "confidence", "field_confidence", "notes",
   ],
 };
 
@@ -122,7 +135,7 @@ Deno.serve(async (request) => {
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       signal: controller.signal,
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data: imageBase64 } }, { text: prompt }] }],
+        contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data: imageBase64 } }, { text: `${prompt} ${fieldConfidenceInstruction}` }] }],
         generationConfig: {
           thinkingConfig: { thinkingLevel: "low" },
           responseFormat: { text: { mimeType: "application/json", schema: responseSchema } },
