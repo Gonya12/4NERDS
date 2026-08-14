@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/prepare-sites-build.mjs",
     "test:scanner": "node --experimental-strip-types --test tests/cardScanParsing.test.ts",
     "test:card-search": "node --experimental-strip-types --test tests/pokemonCardSearchCore.test.ts",
     "test:multi-game": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/unifiedCardSearchCore.test.ts",
