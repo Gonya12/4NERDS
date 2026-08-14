@@ -4,7 +4,7 @@ import {
   normalizePokemonCardIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
-  scannerCardNameSimilarity,
+  scoreScannerCandidate,
   selectScannerCandidates,
   type IdentificationFieldConfidence,
   type IdentificationSearchAttempt,
@@ -24,6 +24,49 @@ type IdentifyPayload = {
   providerStatus?: number;
   upstreamErrorCode?: string;
 };
+
+export type VisualRecognitionDebug = {
+  httpStatus: number;
+  responseBodyKeys: string[];
+  requestId?: string;
+  providerStatus?: number;
+  elapsedMs: number;
+  timeout: boolean;
+  rawIdentification?: unknown;
+};
+
+export type ScannerSearchDebug = {
+  recognizedFields: { name: string | null; collectorNumber: string | null; set: string | null; language: string };
+  fieldConfidence: { name: IdentificationFieldConfidence; collectorNumber: IdentificationFieldConfidence; set: IdentificationFieldConfidence };
+  queries: Array<{
+    query: string;
+    reason: string;
+    httpStatus?: number;
+    providerStatus?: number;
+    responseBodyKeys?: string[];
+    requestId?: string;
+    resultCount?: number;
+    emptyResultRetried?: boolean;
+  }>;
+  firstTwentyReturned: Array<{ name: string; collectorNumber: string | null; set: string | null; language: string; providerId: string }>;
+  rankings: ReturnType<typeof scoreScannerCandidate>[];
+  providerCandidateCount: number;
+  fallbackUsed: boolean;
+  selectedCandidate: string | null;
+  candidateListShown: string[];
+  finalReason: string;
+};
+
+const visualDebug = new WeakMap<PokemonCardIdentification, VisualRecognitionDebug>();
+let latestSearchDebug: ScannerSearchDebug | undefined;
+
+export function visualRecognitionDebugFor(identification: PokemonCardIdentification) {
+  return visualDebug.get(identification);
+}
+
+export function latestScannerSearchDebug() {
+  return latestSearchDebug;
+}
 
 export class PokemonCardIdentificationError extends Error {
   code: string;
@@ -61,6 +104,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
   const dataUrl = await fileToDataUrl(file);
   const imageBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
   const request = combinedAbortSignal(signal, 26_000);
+  const startedAt = performance.now();
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/${POKEMON_CARD_IDENTIFY_FUNCTION}`, {
       method: "POST",
@@ -73,6 +117,14 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
       signal: request.signal,
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
+    if (import.meta.env.DEV) console.info("[Visual card scanner] recognition HTTP response", {
+      httpStatus: response.status,
+      responseBodyKeys: payload ? Object.keys(payload) : [],
+      requestId: payload?.requestId || response.headers.get("x-request-id"),
+      providerStatus: payload?.providerStatus,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      rawIdentification: payload?.identification,
+    });
     if (!response.ok || !payload?.success || !payload.identification) {
       if (import.meta.env.DEV) console.error("[Visual card scanner] recognition request failed", {
         httpStatus: response.status,
@@ -96,17 +148,36 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
       );
     }
     const identification = normalizePokemonCardIdentification(payload.identification);
+    if (import.meta.env.DEV) visualDebug.set(identification, {
+      httpStatus: response.status,
+      responseBodyKeys: Object.keys(payload),
+      requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
+      providerStatus: payload.providerStatus,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      timeout: false,
+      rawIdentification: payload.identification,
+    });
     if (import.meta.env.DEV) console.info("[Visual card scanner] recognition response parsed", {
       visionProcessingSucceeded: true,
       extractedName: identification.card_name || identification.pokemon_name,
       extractedCollectorNumber: identification.collector_number,
       extractedSetHint: identification.set_name_hint || identification.set_code_hint,
+      hp: identification.hp,
+      language: identification.language,
+      cardGame: identification.card_game,
       confidence: identification.confidence,
+      fieldConfidence: identification.field_confidence,
     });
     return identification;
   } catch (error) {
     if (error instanceof PokemonCardIdentificationError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (import.meta.env.DEV) console.error("[Visual card scanner] recognition timeout", {
+        timeout: true,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        fileSize: file.size,
+        mimeType: file.type,
+      });
       if (signal?.aborted) throw error;
       throw new PokemonCardIdentificationError("Visual identification timed out. Try again or search manually.", "GEMINI_TIMEOUT");
     }
@@ -121,24 +192,28 @@ function mergeMatches(groups: CardMatch[][]) {
 }
 
 function scannerMatchDiagnostics(matches: CardMatch[], evidence: ScannerCandidateEvidence) {
-  const threshold = evidence.nameConfidence === "high" ? 0.58 : evidence.nameConfidence === "medium" ? 0.42 : 0;
-  return matches.map((match) => {
-    const nameSimilarity = evidence.name ? scannerCardNameSimilarity(evidence.name, match.name) : 0;
-    return {
-      candidateName: match.name,
-      collectorNumber: match.collectorNumber || null,
-      nameSimilarity: Math.round(nameSimilarity * 100) / 100,
-      rejected: Boolean(evidence.name && threshold && nameSimilarity < threshold),
-      rejectionReason: evidence.name && threshold && nameSimilarity < threshold
-        ? `name similarity below ${threshold}`
-        : null,
-    };
-  });
+  return matches.map((match) => scoreScannerCandidate(match, evidence));
+}
+
+function newSearchDebug(evidence: ScannerCandidateEvidence): ScannerSearchDebug {
+  return {
+    recognizedFields: { name: evidence.name || null, collectorNumber: evidence.collectorNumber || null, set: evidence.set || null, language: evidence.language },
+    fieldConfidence: { name: evidence.nameConfidence, collectorNumber: evidence.collectorNumberConfidence, set: evidence.setConfidence },
+    queries: [],
+    firstTwentyReturned: [],
+    rankings: [],
+    providerCandidateCount: 0,
+    fallbackUsed: false,
+    selectedCandidate: null,
+    candidateListShown: [],
+    finalReason: "Search has not completed.",
+  };
 }
 
 async function runSearchAttempts(
   identification: PokemonCardIdentification,
   indexes: number[],
+  debug: ScannerSearchDebug,
   signal?: AbortSignal,
 ) {
   const language = identification.language === "ja" ? "ja" : "en";
@@ -148,20 +223,41 @@ async function runSearchAttempts(
     const attempt = attempts[index];
     if (!attempt) return [] as CardMatch[];
     try {
+      const query = [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" ");
+      debug.queries.push({ query, reason: attempt.reason });
       const result = await searchPokemonCardsManually({
         game: "pokemon",
         language,
         name: attempt.name,
         collectorNumber: attempt.collectorNumber,
         set: attempt.set,
-        query: [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" "),
+        query,
         page: 1,
         pageSize: 12,
         disableCorrection: true,
       }, signal);
+      Object.assign(debug.queries[debug.queries.length - 1], {
+        httpStatus: result.debug?.httpStatus,
+        providerStatus: result.debug?.providerResponseStatus,
+        responseBodyKeys: result.debug?.responseBodyKeys,
+        requestId: result.debug?.requestId,
+        resultCount: result.matches.length,
+        emptyResultRetried: result.debug?.emptyResultRetried,
+      });
       // "possible" is a useful scanner candidate when the image supplied a
       // readable name but not enough evidence for an exact printing.
       const candidates = selectScannerCandidates(rankScannerCandidates(result.matches, evidence));
+      const rankings = scannerMatchDiagnostics(result.matches, evidence);
+      debug.providerCandidateCount += result.matches.length;
+      debug.firstTwentyReturned.push(...result.matches.map((match) => ({
+        name: match.name,
+        collectorNumber: match.collectorNumber || null,
+        set: match.setName || null,
+        language: match.language,
+        providerId: match.providerCardId,
+      })));
+      debug.firstTwentyReturned = debug.firstTwentyReturned.slice(0, 20);
+      debug.rankings.push(...rankings);
       if (import.meta.env.DEV) console.info("[Visual card scanner] candidate ranking", {
         recognizedFields: {
           name: evidence.name || null,
@@ -174,10 +270,11 @@ async function runSearchAttempts(
           collectorNumber: evidence.collectorNumberConfidence,
           set: evidence.setConfidence,
         },
-        query: [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" "),
+        query,
         reason: attempt.reason,
         providerCandidateCount: result.matches.length,
-        candidates: scannerMatchDiagnostics(result.matches, evidence),
+        firstTwentyReturned: debug.firstTwentyReturned,
+        candidates: rankings,
         acceptedCandidateCount: candidates.length,
       });
       return candidates;
@@ -210,6 +307,7 @@ export async function searchRecognizedCardText(input: {
     collectorNumberConfidence,
     setConfidence: "low",
   };
+  const debug = newSearchDebug(evidence);
   let attempts: IdentificationSearchAttempt[];
   if (name && (nameConfidence === "high" || nameConfidence === "medium") && collectorNumberConfidence !== "high") {
     attempts = [
@@ -236,6 +334,7 @@ export async function searchRecognizedCardText(input: {
     const attempt = attempts[index];
     const query = [attempt.name, attempt.collectorNumber].filter(Boolean).join(" ");
     queryHistory.push(query);
+    debug.queries.push({ query, reason: attempt.reason });
     const result = await searchPokemonCardsManually({
       game: input.game,
       language: input.language,
@@ -246,8 +345,27 @@ export async function searchRecognizedCardText(input: {
       pageSize: 30,
       disableCorrection: false,
     }, signal);
+    Object.assign(debug.queries[debug.queries.length - 1], {
+      httpStatus: result.debug?.httpStatus,
+      providerStatus: result.debug?.providerResponseStatus,
+      responseBodyKeys: result.debug?.responseBodyKeys,
+      requestId: result.debug?.requestId,
+      resultCount: result.matches.length,
+      emptyResultRetried: result.debug?.emptyResultRetried,
+    });
     providerCandidateCount += result.matches.length;
-    diagnostics.push(...scannerMatchDiagnostics(result.matches, evidence));
+    const attemptDiagnostics = scannerMatchDiagnostics(result.matches, evidence);
+    diagnostics.push(...attemptDiagnostics);
+    debug.providerCandidateCount += result.matches.length;
+    debug.firstTwentyReturned.push(...result.matches.map((match) => ({
+      name: match.name,
+      collectorNumber: match.collectorNumber || null,
+      set: match.setName || null,
+      language: match.language,
+      providerId: match.providerCardId,
+    })));
+    debug.firstTwentyReturned = debug.firstTwentyReturned.slice(0, 20);
+    debug.rankings.push(...attemptDiagnostics);
     const ranked = selectScannerCandidates(rankScannerCandidates(result.matches, evidence));
     groups.push(ranked);
     const merged = mergeMatches(groups);
@@ -255,6 +373,13 @@ export async function searchRecognizedCardText(input: {
     if (index === 0 && attempts.length > 1) fallbackTriggered = true;
   }
   const candidates = mergeMatches(groups);
+  debug.fallbackUsed = fallbackTriggered;
+  debug.selectedCandidate = candidates[0]?.providerCardId || null;
+  debug.candidateListShown = candidates.map((candidate) => candidate.providerCardId);
+  debug.finalReason = candidates.length
+    ? `${candidates.length} candidate${candidates.length === 1 ? "" : "s"} passed the confidence and name-sanity checks.`
+    : "No provider candidate passed the confidence and name-sanity checks.";
+  latestSearchDebug = debug;
   if (import.meta.env.DEV) console.info("[Visual card scanner] recognized-text search", {
     recognizedFields: { name: name || null, collectorNumber: collectorNumber || null, language: input.language },
     fieldConfidence: { name: nameConfidence, collectorNumber: collectorNumberConfidence },
@@ -271,11 +396,27 @@ export async function searchRecognizedCardText(input: {
 export async function matchPokemonIdentification(identification: PokemonCardIdentification, signal?: AbortSignal) {
   const attempts = buildPokemonIdentificationSearchAttempts(identification);
   if (!attempts.length) return [];
+  const debug = newSearchDebug(scannerCandidateEvidence(identification));
   const groups: CardMatch[][] = [];
   for (let index = 0; index < attempts.length; index++) {
-    groups.push(...await runSearchAttempts(identification, [index], signal));
+    groups.push(...await runSearchAttempts(identification, [index], debug, signal));
     const matches = mergeMatches(groups);
-    if (matches.length >= 5 || matches[0]?.matchScore >= 92) return matches;
+    if (matches.length >= 5 || matches[0]?.matchScore >= 92) {
+      debug.fallbackUsed = index > 0;
+      debug.selectedCandidate = matches[0]?.providerCardId || null;
+      debug.candidateListShown = matches.map((match) => match.providerCardId);
+      debug.finalReason = `${matches.length} candidate${matches.length === 1 ? "" : "s"} passed the confidence and name-sanity checks.`;
+      latestSearchDebug = debug;
+      return matches;
+    }
   }
-  return mergeMatches(groups);
+  const matches = mergeMatches(groups);
+  debug.fallbackUsed = attempts.length > 1;
+  debug.selectedCandidate = matches[0]?.providerCardId || null;
+  debug.candidateListShown = matches.map((match) => match.providerCardId);
+  debug.finalReason = matches.length
+    ? `${matches.length} candidate${matches.length === 1 ? "" : "s"} passed the confidence and name-sanity checks.`
+    : "No provider candidate passed the confidence and name-sanity checks.";
+  latestSearchDebug = debug;
+  return matches;
 }

@@ -1255,10 +1255,8 @@ export function SalesControlPage() {
         </div>
       </ResponsiveModal>
 
-      {batchOpen ? <BatchInventoryImporter events={events} workers={workers} onClose={() => setBatchOpen(false)} onImport={async (input, file) => {
-        const saved = await saveInventoryPurchase(input, file);
-        if (input.ownershipShares?.length) await saveInventoryOwnership(saved.id, input.ownershipShares);
-        setPurchases((current) => [{ ...saved, ownershipShares: input.ownershipShares || [] }, ...current.filter((row) => row.id !== saved.id)]);
+      {batchOpen ? <BatchInventoryImporter workers={workers} onClose={() => setBatchOpen(false)} onConfirmed={(saved) => {
+        setPurchases((current) => [saved, ...current.filter((row) => row.id !== saved.id)]);
       }} /> : null}
 
       {editor ? (

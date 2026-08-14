@@ -13,7 +13,7 @@ import {
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { compressSaleImage, prepareCardRecognitionImage } from "../images/saleImageService";
-import { automaticallyPrepareCard, terminateCardImageWorker } from "./cardImageProcessor";
+import { automaticallyPrepareCard, terminateCardImageWorker, type CropPoint } from "./cardImageProcessor";
 import {
   buildNameEvidence,
   buildPokemonApiQueries,
@@ -94,6 +94,20 @@ export type CardScanSuggestion = {
     processingMs?: number;
     identificationProvider?: string;
     visualIdentification?: PokemonCardIdentification;
+    scannerDebug?: {
+      imageInput?: {
+        originalDimensions?: { width: number; height: number };
+        originalFileSize: number;
+        originalMimeType: string;
+        cropCoordinates: CropPoint[] | null;
+        processedDimensions?: { width: number; height: number };
+        processedFileSize?: number;
+        processedMimeType?: string;
+        orientationCorrection: string;
+      };
+      visualRecognition?: import("./pokemonCardIdentificationService").VisualRecognitionDebug;
+      search?: import("./pokemonCardIdentificationService").ScannerSearchDebug;
+    };
   };
 };
 
@@ -118,6 +132,15 @@ type ScanOptions = {
   skipCrop?: boolean;
   game?: CardGame;
   language?: CardLanguage;
+  inputDebug?: {
+    originalDimensions?: { width: number; height: number };
+    originalFileSize: number;
+    originalMimeType: string;
+    cropCoordinates: CropPoint[] | null;
+    processedDimensions?: { width: number; height: number };
+    processedFileSize?: number;
+    processedMimeType?: string;
+  };
 };
 
 let workerPromise: Promise<Worker> | null = null;
@@ -621,7 +644,12 @@ async function scanPokemonCardWithVisualAi(
   startedAt: number,
 ) {
   options.onStage?.("Reading card");
-  const { identifyPokemonCardVisually, matchPokemonIdentification } = await import("./pokemonCardIdentificationService");
+  const {
+    identifyPokemonCardVisually,
+    latestScannerSearchDebug,
+    matchPokemonIdentification,
+    visualRecognitionDebugFor,
+  } = await import("./pokemonCardIdentificationService");
   const identification = await identifyPokemonCardVisually(preparedFront, options.signal);
   devCardScanLog("vision succeeded", {
     extractedName: identification.card_name || identification.pokemon_name,
@@ -707,6 +735,18 @@ async function scanPokemonCardWithVisualAi(
       processingMs: Math.round(performance.now() - startedAt),
       identificationProvider: "Gemini visual identification",
       visualIdentification: identification,
+      ...(import.meta.env.DEV ? {
+        scannerDebug: {
+          imageInput: options.inputDebug ? {
+            ...options.inputDebug,
+            processedFileSize: preparedFront.size,
+            processedMimeType: preparedFront.type,
+            orientationCorrection: "createImageBitmap imageOrientation=from-image",
+          } : undefined,
+          visualRecognition: visualRecognitionDebugFor(identification),
+          search: latestScannerSearchDebug(),
+        },
+      } : {}),
     },
   } satisfies CardScanSuggestion;
   try {
@@ -740,20 +780,34 @@ export async function scanPokemonCard(
   stage("Preparing image");
   const preparedFront = await prepareCardRecognitionImage(front);
   const preparedBack = back ? await compressSaleImage(back) : undefined;
+  let processedDimensions: { width: number; height: number } | undefined;
   if (import.meta.env.DEV) {
     const processedImage = await imageElement(preparedFront);
+    processedDimensions = { width: processedImage.naturalWidth, height: processedImage.naturalHeight };
     devCardScanLog("image prepared", {
+      originalDimensions: options.inputDebug?.originalDimensions,
       originalFileSize: front.size,
+      originalMimeType: front.type,
+      cropCoordinates: options.inputDebug?.cropCoordinates,
       processedFileSize: preparedFront.size,
       processedWidth: processedImage.naturalWidth,
       processedHeight: processedImage.naturalHeight,
       mimeType: preparedFront.type,
+      orientationCorrection: "createImageBitmap imageOrientation=from-image",
     });
   }
+  if (import.meta.env.DEV && options.inputDebug) options.inputDebug = {
+    ...options.inputDebug,
+    processedDimensions,
+    processedFileSize: preparedFront.size,
+    processedMimeType: preparedFront.type,
+  };
   const hash = `${await imageHash(preparedFront)}:${preparedBack ? await imageHash(preparedBack) : ""}`;
   const scanGame = options.game || "pokemon";
   const scanLanguage = scanGame === "pokemon" ? options.language || "en" : "en";
-  const cacheKey = `4nerds_card_scan_v4_${scanGame}_${scanLanguage}_${hash}`;
+  // v5 invalidates scanner suggestions produced before confidence-aware
+  // diagnostics and transient-empty search handling were available.
+  const cacheKey = `4nerds_card_scan_v5_${scanGame}_${scanLanguage}_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);

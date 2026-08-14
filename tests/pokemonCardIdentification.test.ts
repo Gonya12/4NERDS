@@ -10,6 +10,7 @@ import {
   normalizePokemonCardIdentification,
   rankScannerCandidates,
   scannerCardNameSimilarity,
+  scoreScannerCandidate,
   selectScannerCandidates,
   stripPokemonCardImagePrefix,
 } from "../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
@@ -85,7 +86,19 @@ test("low-confidence collector numbers cannot outrank a strong recognized name",
   ], evidence);
   assert.deepEqual(ranked.map((candidate) => candidate.providerCardId), ["charizard-56", "charizard-199"]);
   assert.equal(scannerCardNameSimilarity("  Charizard—EX ", "charizard ex"), 1);
+  assert.equal(scannerCardNameSimilarity("Charizard-ex", "CHARIZARD EX"), 1);
+  assert.equal(scannerCardNameSimilarity("Charizard... ex", "charizard ex"), 1);
   assert.ok(scannerCardNameSimilarity("Charizard ex", "Weedle") < 0.58);
+  const accepted = scoreScannerCandidate({ providerCardId: "charizard-56", name: "Charizard ex", collectorNumber: "56", language: "en", matchScore: 59 }, evidence);
+  const rejected = scoreScannerCandidate({ providerCardId: "weedle-2", name: "Weedle", collectorNumber: "2", language: "en", matchScore: 99 }, evidence);
+  assert.deepEqual({ name: accepted.normalizedNameSimilarity, number: accepted.numberScore, language: accepted.languageScore, total: accepted.totalScore }, {
+    name: 1,
+    number: 0,
+    language: 2,
+    total: 85,
+  });
+  assert.equal(rejected.accepted, false);
+  assert.match(rejected.reason, /below the 58% sanity threshold/);
 });
 
 test("manual collector correction becomes strong evidence among same-name printings", () => {
@@ -107,6 +120,7 @@ test("manual collector correction becomes strong evidence among same-name printi
 test("normalizes common collector-number formats before catalog search", () => {
   assert.equal(normalizeIdentificationCollectorNumber("#56"), "56");
   assert.equal(normalizeIdentificationCollectorNumber("056"), "056");
+  assert.equal(normalizeIdentificationCollectorNumber("SVP056"), "056");
   assert.equal(normalizeIdentificationCollectorNumber("SVP 056"), "056");
   assert.equal(normalizeIdentificationCollectorNumber("056 / 198"), "056/198");
 });
@@ -164,6 +178,18 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /Search Matches/);
   assert.match(scannerSource, /initialName=\{recognizedName \|\| suggestion\?\.cardName \|\| suggestion\?\.correctedNameCandidate/);
   assert.match(scannerSource, /disabled=\{isAiScan && \(!resolvedCard \|\| needsCondition\)\}/);
+  assert.match(scannerSource, /import\.meta\.env\.DEV && reviewSuggestion\.technicalDetails\?\.scannerDebug/);
+  assert.match(scannerSource, /Scanner Debug/);
+  assert.match(serviceSource, /firstTwentyReturned/);
+  assert.match(serviceSource, /responseBodyKeys/);
+});
+
+test("transient empty searches are retried but never cached", () => {
+  const searchService = readFileSync(new URL("../src/services/sales/pokemonCardSearchService.ts", import.meta.url), "utf8");
+  const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
+  assert.match(searchService, /empty result retry/);
+  assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
+  assert.match(scanService, /4nerds_card_scan_v5_/);
 });
 
 test("a vision transport failure falls back to local OCR before becoming a processing error", () => {

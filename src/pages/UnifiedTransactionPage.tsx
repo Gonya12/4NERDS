@@ -293,7 +293,7 @@ export function UnifiedTransactionPage() {
       ...blankTradeItem(transaction.id, "outgoing"), inventoryPurchaseId: purchase.id, itemName: purchase.itemName,
       itemType: purchase.category, quantity: Math.max(1, purchase.quantity - purchase.quantitySold),
       marketValue: Number(purchase.marketValue || 0), historicalCostBasis: Number(purchase.totalCost ?? 0),
-      zeroCostBasisConfirmed: false,
+      zeroCostBasisConfirmed: purchase.zeroCostBasisConfirmed === true,
       soldPrice: Number(purchase.marketValue || 0), imageUrl: purchase.frontImageUrl || purchase.imageUrl,
       imagePath: purchase.frontImagePath || purchase.imagePath, collectorNumber: purchase.collectorNumber,
       cardSet: purchase.cardSet, cardSetId: purchase.cardSetId, cardSetCode: purchase.cardSetCode,

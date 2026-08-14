@@ -7,3 +7,8 @@ verify_jwt = false
 # normalized identification fields and never the API key.
 [functions.pokemon-card-identify]
 verify_jwt = false
+
+# Durable bulk-import worker. Requests must still include this project's anon
+# or service key; service-role database access remains server-side only.
+[functions.bulk-inventory-process]
+verify_jwt = false

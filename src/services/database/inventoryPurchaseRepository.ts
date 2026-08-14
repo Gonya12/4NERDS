@@ -22,7 +22,10 @@ type PurchaseRow = {
   quantity_sold?: number | null;
   purchase_date: string;
   total_cost: number;
+  cost_basis_known?: boolean | null;
+  zero_cost_basis_confirmed?: boolean | null;
   market_value?: number | null;
+  provider_base_market?: number | null;
   market_price_source?: string | null;
   market_price_variant?: string | null;
   market_price_updated_at?: string | null;
@@ -94,7 +97,10 @@ function fromRow(row: PurchaseRow): InventoryPurchase {
     quantitySold: Math.max(0, Number(row.quantity_sold || 0)),
     purchaseDate: row.purchase_date,
     totalCost: Number(row.total_cost || 0),
+    costBasisKnown: row.cost_basis_known !== false,
+    zeroCostBasisConfirmed: Boolean(row.zero_cost_basis_confirmed),
     marketValue: row.market_value === null || row.market_value === undefined ? undefined : Number(row.market_value),
+    providerBaseMarket: row.provider_base_market === null || row.provider_base_market === undefined ? undefined : Number(row.provider_base_market),
     marketPriceSource: row.market_price_source || undefined,
     marketPriceVariant: row.market_price_variant || undefined,
     marketPriceUpdatedAt: row.market_price_updated_at || undefined,
@@ -168,7 +174,10 @@ export function buildInventoryPurchasePayload(value: InventoryPurchase): Purchas
     quantity_sold: Math.max(0, Number(value.quantitySold || 0)),
     purchase_date: value.purchaseDate,
     total_cost: Number(value.totalCost || 0),
+    cost_basis_known: value.costBasisKnown !== false,
+    zero_cost_basis_confirmed: Boolean(value.zeroCostBasisConfirmed),
     market_value: value.marketValue ?? null,
+    provider_base_market: value.providerBaseMarket ?? null,
     market_price_source: value.marketPriceSource || null,
     market_price_variant: value.marketPriceVariant || null,
     market_price_updated_at: value.marketPriceUpdatedAt || null,
@@ -265,6 +274,16 @@ function withoutTradeColumns(row: PurchaseRow) {
   return legacy;
 }
 
+function withoutBulkImportColumns(row: PurchaseRow) {
+  const {
+    cost_basis_known: _costBasisKnown,
+    zero_cost_basis_confirmed: _zeroCostBasisConfirmed,
+    provider_base_market: _providerBaseMarket,
+    ...legacy
+  } = row;
+  return legacy;
+}
+
 function isMissingColumnError(error?: { code?: string; message?: string } | null) {
   return Boolean(error && (error.code === "42703" || error.code === "PGRST204" || /column .* does not exist|schema cache/i.test(error.message || "")));
 }
@@ -283,7 +302,7 @@ export function getCachedInventoryPurchases() {
 
 export async function listInventoryPurchases(limit = 100) {
   if (!isSupabaseConfigured || !supabase) return read(localKey);
-  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,market_value,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,set_name,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
+  const columns = "id,image_url,image_path,item_name,category,quantity,quantity_sold,purchase_date,total_cost,cost_basis_known,zero_cost_basis_confirmed,market_value,provider_base_market,market_price_source,market_price_variant,market_price_updated_at,market_price_checked_at,market_price_currency,is_raw_card,buy_percentage,target_buy_price,purchase_source,seller,event_id,purchased_by_worker_id,notes,status,sold_price,sold_date,sold_by_worker_id,sold_event_id,sold_payment_method,buyer_note,card_name,collector_number,set_name,card_set,card_set_id,card_set_code,card_rarity,card_game,card_language,data_provider,provider_card_id,card_code,pokemon_tcg_card_id,official_card_image_url,tcgplayer_url,card_condition,sticker_price,grading_company,grade,certificate_number,front_image_url,front_image_path,back_image_url,back_image_path,scan_confidence,scan_status,image_hash,scan_result,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,financial_transaction_id,financial_transaction_item_id,created_at,updated_at";
   const completeTrace = startSupabaseQueryTrace("inventory_purchases", "listInventoryPurchases", columns);
   const enhanced = await supabase.from("inventory_purchases")
     .select(columns)
@@ -292,6 +311,8 @@ export async function listInventoryPurchases(limit = 100) {
   let error = enhanced.error;
   if (isMissingColumnError(error)) {
     const legacyColumns = columns
+      .replace(",cost_basis_known,zero_cost_basis_confirmed", "")
+      .replace(",provider_base_market", "")
       .replace(",market_price_currency", "")
       .replace(",set_name", "")
       .replace(",card_set_id,card_set_code,card_rarity", "")
@@ -350,7 +371,10 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
     quantitySold: Math.min(Math.max(0, Number(input.quantitySold || 0)), Math.max(1, Number(input.quantity || 1))),
     purchaseDate: input.purchaseDate || timestamp,
     totalCost: Number(input.totalCost || 0),
+    costBasisKnown: input.costBasisKnown !== false,
+    zeroCostBasisConfirmed: Boolean(input.zeroCostBasisConfirmed),
     marketValue: input.marketValue,
+    providerBaseMarket: input.providerBaseMarket,
     marketPriceSource: input.marketPriceSource,
     marketPriceVariant: input.marketPriceVariant,
     marketPriceUpdatedAt: input.marketPriceUpdatedAt,
@@ -410,7 +434,7 @@ export async function saveInventoryPurchase(input: Partial<InventoryPurchase>, i
   const row = buildInventoryPurchasePayload(value);
   let result = await supabase.from("inventory_purchases").upsert(row).select("*").single();
   if (isMissingColumnError(result.error)) {
-    result = await supabase.from("inventory_purchases").upsert(withoutTradeColumns(withoutManualSearchColumns(row) as PurchaseRow)).select("*").single();
+    result = await supabase.from("inventory_purchases").upsert(withoutBulkImportColumns(withoutTradeColumns(withoutManualSearchColumns(row) as PurchaseRow) as PurchaseRow)).select("*").single();
   }
   const { data, error } = result;
   recordSupabaseRequest("inventory_purchases", "saveInventoryPurchase", data ? 1 : 0);

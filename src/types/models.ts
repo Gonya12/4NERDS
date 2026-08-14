@@ -197,7 +197,10 @@ export interface InventoryPurchase {
   quantitySold: number;
   purchaseDate: string;
   totalCost: number;
+  costBasisKnown?: boolean;
+  zeroCostBasisConfirmed?: boolean;
   marketValue?: number;
+  providerBaseMarket?: number;
   marketPriceSource?: string;
   marketPriceVariant?: string;
   marketPriceUpdatedAt?: string;
@@ -245,7 +248,7 @@ export interface InventoryPurchase {
   scanStatus?: CardScanStatus;
   imageHash?: string;
   scanResult?: Record<string, unknown>;
-  acquisitionMethod?: "purchased" | "trade" | "manual_entry" | "other";
+  acquisitionMethod?: "purchased" | "trade" | "manual_entry" | "existing_inventory_import" | "other";
   acquiredFinancialTransactionId?: string;
   disposedFinancialTransactionId?: string;
   tradedAt?: string;

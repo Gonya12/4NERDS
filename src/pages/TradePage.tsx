@@ -499,7 +499,8 @@ function TradeEditor(props: EditorProps) {
       targetBuyPrice: purchase.targetBuyPrice, cardSelectionSource: "inventory" as const,
       cardCondition: purchase.cardCondition, stickerPrice: purchase.stickerPrice, stickerCondition: purchase.cardCondition,
       gradingCompany: purchase.gradingCompany, grade: purchase.grade,
-      certificateNumber: purchase.certificateNumber, ownershipShares: purchase.ownershipShares || []
+      certificateNumber: purchase.certificateNumber, ownershipShares: purchase.ownershipShares || [],
+      zeroCostBasisConfirmed: purchase.zeroCostBasisConfirmed === true,
     };
     update({ items: [...trade.items, item] });
   };

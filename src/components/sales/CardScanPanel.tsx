@@ -240,6 +240,12 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         skipCrop: true,
         game: cardGame,
         language: cardLanguage,
+        inputDebug: {
+          originalDimensions: sourceDimensions,
+          originalFileSize: imageFile.size,
+          originalMimeType: imageFile.type,
+          cropCoordinates: useFullImage ? null : corners,
+        },
       });
       if (run !== runRef.current) return;
       const scanSuggestion: CardScanSuggestion = result.suggestion;
@@ -331,7 +337,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setRecognizedSearchError("");
     setMessage("Searching the card catalog with the recognized information…");
     try {
-      const { searchRecognizedCardText } = await import("../../services/sales/pokemonCardIdentificationService");
+      const { latestScannerSearchDebug, searchRecognizedCardText } = await import("../../services/sales/pokemonCardIdentificationService");
       const candidates = await searchRecognizedCardText({
         name,
         collectorNumber,
@@ -351,6 +357,13 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         },
         possibleMatches: candidates,
         likelyMatchProviderId: undefined,
+        technicalDetails: current.technicalDetails ? {
+          ...current.technicalDetails,
+          scannerDebug: {
+            ...current.technicalDetails.scannerDebug,
+            search: latestScannerSearchDebug(),
+          },
+        } : current.technicalDetails,
       } : current);
       setShowAllMatches(true);
       setOutcome(candidates.length > 1 ? "Several possible matches" : candidates.length === 1 ? "Match found" : "Partial identification");
@@ -591,6 +604,24 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       </section> : null}
       <TcgplayerPricingPanel suggestion={reviewSuggestion} isSlab={category === "graded_card"} onChange={(next) => resolvedCard ? setResolvedCard({ ...resolvedCard, suggestion: next }) : setSuggestion(next)} />
       {reviewSuggestion.warnings.filter((warning) => !resolvedCard || !/no pokémon tcg api match|market price unavailable|raw ocr is available/i.test(warning)).map((warning) => <p key={warning} className="text-xs text-amber-700 dark:text-amber-300">{warning}</p>)}
+      {import.meta.env.DEV && reviewSuggestion.technicalDetails?.scannerDebug ? <details className="rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs dark:border-sky-900 dark:bg-sky-950/30">
+        <summary className="cursor-pointer font-black text-sky-900 dark:text-sky-100">Scanner Debug</summary>
+        <dl className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+          <div><dt className="font-black">Recognized name</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.name || "Not recognized"}</dd></div>
+          <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.name || "Unknown"}</dd></div>
+          <div><dt className="font-black">Recognized number</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.collectorNumber || "Not recognized"}</dd></div>
+          <div><dt className="font-black">Number confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.collectorNumber || "Unknown"}</dd></div>
+          <div className="sm:col-span-2"><dt className="font-black">Query</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.queries.map((entry) => entry.query).join(" → ") || "No query sent"}</dd></div>
+          <div><dt className="font-black">Candidates returned</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.providerCandidateCount ?? 0}</dd></div>
+          <div><dt className="font-black">Fallback used</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.fallbackUsed ? "Yes" : "No"}</dd></div>
+          <div><dt className="font-black">Final state</dt><dd>{outcome || "Pending"}</dd></div>
+          <div><dt className="font-black">Candidate list shown</dt><dd>{displayedMatches.length}</dd></div>
+        </dl>
+        <details className="mt-3 rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
+          <summary className="cursor-pointer font-black">Complete pipeline trace</summary>
+          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap">{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug, null, 2)}</pre>
+        </details>
+      </details> : null}
       {reviewSuggestion.technicalDetails ? <details className="rounded-xl bg-slate-100 p-2 text-xs dark:bg-slate-900">
         <summary className="cursor-pointer font-black">Technical Details (raw OCR)</summary>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap">{JSON.stringify(reviewSuggestion.technicalDetails, null, 2)}</pre>

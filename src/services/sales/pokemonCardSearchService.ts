@@ -60,6 +60,13 @@ export type ManualCardSearchPage = {
   warnings: string[];
   provider?: CardDataProvider;
   query?: string;
+  debug?: {
+    httpStatus?: number;
+    providerResponseStatus?: number;
+    requestId?: string;
+    responseBodyKeys: string[];
+    emptyResultRetried: boolean;
+  };
 };
 
 type UnifiedApiPayload = {
@@ -87,6 +94,7 @@ type UnifiedApiPayload = {
   normalizedQuery?: string;
   providerQuery?: string;
   resultCount?: number;
+  __debug?: { httpStatus: number; responseBodyKeys: string[] };
 };
 
 export type PokemonCardSearchErrorCode =
@@ -414,6 +422,10 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
         },
       );
     }
+    if (import.meta.env.DEV) payload.__debug = {
+      httpStatus: response.status,
+      responseBodyKeys: Object.keys(payload),
+    };
     return payload;
   } catch (error) {
     if (error instanceof PokemonCardSearchError) throw error;
@@ -435,7 +447,7 @@ async function invokeSearch(request: ManualCardSearchInput): Promise<UnifiedApiP
   }
 }
 
-export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?: AbortSignal) {
+export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?: AbortSignal): Promise<ManualCardSearchPage> {
   const game = normalizeCardGame(input.game);
   const language = normalizeCardLanguage(input.language, game);
   if (game === "other") {
@@ -479,7 +491,20 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
   const existing = inFlight.get(cacheKey);
   if (existing) return waitForCaller(existing, signal);
 
-  const promise = invokeSearch(request).then((payload) => {
+  const promise = invokeSearch(request).then(async (firstPayload) => {
+    let payload = firstPayload;
+    const firstResults = payload.results
+      || (Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : []);
+    const emptyResultRetried = !request.providerCardId && firstResults.length === 0;
+    if (emptyResultRetried) {
+      devSearchLog("empty result retry", {
+        query: request.query,
+        provider: payload.provider,
+        providerResponseStatus: payload.providerResponseStatus,
+        requestId: payload.requestId,
+      });
+      payload = await invokeSearch(request);
+    }
     const canonicalResults = payload.results
       || (Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : []);
     const matches = canonicalResults
@@ -495,8 +520,19 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
       warnings: payload.warnings || [],
       provider: payload.provider,
       query: payload.query,
+      ...(import.meta.env.DEV ? {
+        debug: {
+          httpStatus: payload.__debug?.httpStatus,
+          providerResponseStatus: payload.providerResponseStatus,
+          requestId: payload.requestId,
+          responseBodyKeys: payload.__debug?.responseBodyKeys || Object.keys(payload),
+          emptyResultRetried,
+        },
+      } : {}),
     };
-    writeCache(cacheKey, result);
+    // A transient upstream failure can be returned as an empty successful
+    // response. Never make that temporary miss sticky for scanner or manual search.
+    if (matches.length > 0 || request.providerCardId) writeCache(cacheKey, result);
     return result;
   }).finally(() => inFlight.delete(cacheKey));
   inFlight.set(cacheKey, promise);

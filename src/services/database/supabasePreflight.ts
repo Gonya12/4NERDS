@@ -63,7 +63,15 @@ const tableChecks: Array<{ table: string; columns: string }> = [
   },
   {
     table: "inventory_purchases",
-    columns: "id,total_cost,status,financial_transaction_id,financial_transaction_item_id,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,card_game,card_language,data_provider,provider_card_id,card_code,market_price_currency"
+    columns: "id,total_cost,cost_basis_known,zero_cost_basis_confirmed,provider_base_market,status,financial_transaction_id,financial_transaction_item_id,acquisition_method,acquired_financial_transaction_id,disposed_financial_transaction_id,traded_at,agreed_trade_value,prior_inventory_purchase_id,card_game,card_language,data_provider,provider_card_id,card_code,market_price_currency"
+  },
+  {
+    table: "bulk_inventory_import_jobs",
+    columns: "id,status,expected_card_game,expected_language,original_count,uploaded_count,processed_count,ready_count,needs_review_count,failed_count,confirmed_count,last_error,created_at,updated_at"
+  },
+  {
+    table: "bulk_inventory_import_items",
+    columns: "id,job_id,upload_order,status,attempt_count,source_image_path,source_image_url,thumbnail_path,thumbnail_url,image_hash,possible_duplicate,recognized_name,recognized_collector_number,recognized_set,selected_candidate,alternative_candidates,overall_confidence,condition,base_market,adjusted_market,cost_basis,zero_cost_basis_confirmed,ownership_shares,inventory_purchase_id,error_message,created_at,updated_at"
   },
   {
     table: "business_expenses",
@@ -148,7 +156,7 @@ export async function runSupabaseHealthCheck(): Promise<SupabaseHealthReport> {
     }
   }));
 
-  for (const bucket of ["transaction-images", "sale-images", "event-images"]) {
+  for (const bucket of ["transaction-images", "sale-images", "event-images", "bulk-inventory-imports"]) {
     checks.push({
       id: `storage:${bucket}`,
       label: `${bucket} bucket`,
@@ -160,6 +168,20 @@ export async function runSupabaseHealthCheck(): Promise<SupabaseHealthReport> {
       }
     });
   }
+
+  checks.push({
+    id: "function:bulk-inventory-process",
+    label: "bulk-inventory-process Edge Function",
+    group: "function",
+    run: async () => {
+      const response = await fetch(`${projectUrl}/functions/v1/bulk-inventory-process`, {
+        method: "OPTIONS",
+        headers: { apikey: publishableKey }
+      });
+      if (!response.ok && response.status !== 204) throw new Error(`HTTP ${response.status}`);
+      return "Function endpoint is reachable.";
+    }
+  });
 
   checks.push({
     id: "function:inventory-claim",

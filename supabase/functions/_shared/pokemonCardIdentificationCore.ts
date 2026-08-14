@@ -49,6 +49,19 @@ export type ScannerCandidateEvidence = {
   setConfidence: IdentificationFieldConfidence;
 };
 
+export type ScannerCandidateScore = {
+  providerCardId: string;
+  candidateName: string;
+  normalizedNameSimilarity: number;
+  providerScore: number;
+  numberScore: number;
+  setScore: number;
+  languageScore: number;
+  totalScore: number;
+  accepted: boolean;
+  reason: string;
+};
+
 function nullableText(value: unknown, maxLength = 120) {
   if (typeof value !== "string") return null;
   const clean = value.normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -125,7 +138,7 @@ export function normalizeIdentificationCollectorNumber(value: string | null) {
   const clean = value.normalize("NFKC").trim().replace(/^#+\s*/, "");
   const fraction = clean.match(/(?:[A-Z]{2,6}[-\s]*)?#?\s*(\d{1,4})\s*\/\s*(\d{1,4})/i);
   if (fraction) return `${fraction[1]}/${fraction[2]}`;
-  const promo = clean.match(/^[A-Z]{2,6}[-\s]+#?\s*(\d{1,4})$/i);
+  const promo = clean.match(/^[A-Z]{2,6}[-\s]*#?\s*(\d{1,4})$/i);
   if (promo) return promo[1];
   const simple = clean.match(/^0*\d{1,4}[A-Z]?$/i);
   return simple ? clean : clean.replace(/\s+/g, " ");
@@ -233,6 +246,65 @@ export function scannerCandidateEvidence(value: PokemonCardIdentification): Scan
   };
 }
 
+export function scoreScannerCandidate(match: {
+  providerCardId: string;
+  name: string;
+  collectorNumber?: string;
+  setName?: string;
+  setId?: string;
+  setCode?: string;
+  language?: string;
+  matchScore: number;
+}, evidence: ScannerCandidateEvidence): ScannerCandidateScore {
+  const nameThreshold = evidence.nameConfidence === "high" ? 0.58 : evidence.nameConfidence === "medium" ? 0.42 : 0;
+  const numberWeight = evidence.collectorNumberConfidence === "high" ? 32 : evidence.collectorNumberConfidence === "medium" ? 12 : 2;
+  const nameWeight = evidence.nameConfidence === "high" ? 72 : evidence.nameConfidence === "medium" ? 52 : 16;
+  const bothLow = evidence.nameConfidence === "low" && evidence.collectorNumberConfidence === "low";
+  const normalizedNameSimilarity = evidence.name ? scannerCardNameSimilarity(evidence.name, match.name) : 0;
+  if (evidence.name && nameThreshold && normalizedNameSimilarity < nameThreshold) {
+    return {
+      providerCardId: match.providerCardId,
+      candidateName: match.name,
+      normalizedNameSimilarity,
+      providerScore: Math.round(Math.min(100, Math.max(0, match.matchScore)) * 0.18 * 100) / 100,
+      numberScore: 0,
+      setScore: 0,
+      languageScore: 0,
+      totalScore: 0,
+      accepted: false,
+      reason: `Name similarity ${Math.round(normalizedNameSimilarity * 100)}% is below the ${Math.round(nameThreshold * 100)}% sanity threshold.`,
+    };
+  }
+  const numberMatches = Boolean(
+    evidence.collectorNumber
+    && normalizedCollector(evidence.collectorNumber) === normalizedCollector(match.collectorNumber),
+  );
+  const setSimilarity = evidence.set
+    ? scannerCardNameSimilarity(evidence.set, `${match.setName || ""} ${match.setCode || match.setId || ""}`)
+    : 0;
+  const providerScore = Math.min(100, Math.max(0, match.matchScore)) * 0.18;
+  const numberScore = numberMatches ? numberWeight : evidence.collectorNumber && evidence.collectorNumberConfidence === "high" ? -8 : 0;
+  const setScore = setSimilarity * (evidence.setConfidence === "high" ? 10 : evidence.setConfidence === "medium" ? 6 : 2);
+  const languageScore = evidence.language !== "unknown" && match.language === evidence.language ? 2 : 0;
+  const totalScore = Math.round(Math.max(0, Math.min(bothLow ? 69 : 99,
+    normalizedNameSimilarity * nameWeight + providerScore + numberScore + setScore + languageScore,
+  )));
+  return {
+    providerCardId: match.providerCardId,
+    candidateName: match.name,
+    normalizedNameSimilarity,
+    providerScore: Math.round(providerScore * 100) / 100,
+    numberScore,
+    setScore: Math.round(setScore * 100) / 100,
+    languageScore,
+    totalScore,
+    accepted: true,
+    reason: numberMatches
+      ? `Accepted; collector number is a ${evidence.collectorNumberConfidence}-confidence ranking signal.`
+      : "Accepted by name sanity check; collector number did not filter the result.",
+  };
+}
+
 export function rankScannerCandidates<T extends {
   providerCardId: string;
   name: string;
@@ -246,37 +318,21 @@ export function rankScannerCandidates<T extends {
   searchConfidence?: string;
   reasons?: string[];
 }>(matches: T[], evidence: ScannerCandidateEvidence) {
-  const nameThreshold = evidence.nameConfidence === "high" ? 0.58 : evidence.nameConfidence === "medium" ? 0.42 : 0;
-  const numberWeight = evidence.collectorNumberConfidence === "high" ? 32 : evidence.collectorNumberConfidence === "medium" ? 12 : 2;
-  const nameWeight = evidence.nameConfidence === "high" ? 72 : evidence.nameConfidence === "medium" ? 52 : 16;
   const bothLow = evidence.nameConfidence === "low" && evidence.collectorNumberConfidence === "low";
   return matches.flatMap((match) => {
-    const nameSimilarity = evidence.name ? scannerCardNameSimilarity(evidence.name, match.name) : 0;
-    if (evidence.name && nameThreshold && nameSimilarity < nameThreshold) return [];
-    const numberMatches = Boolean(
-      evidence.collectorNumber
-      && normalizedCollector(evidence.collectorNumber) === normalizedCollector(match.collectorNumber),
-    );
-    const setSimilarity = evidence.set
-      ? scannerCardNameSimilarity(evidence.set, `${match.setName || ""} ${match.setCode || match.setId || ""}`)
-      : 0;
-    let score = nameSimilarity * nameWeight + Math.min(100, Math.max(0, match.matchScore)) * 0.18;
-    if (numberMatches) score += numberWeight;
-    else if (evidence.collectorNumber && evidence.collectorNumberConfidence === "high") score -= 8;
-    score += setSimilarity * (evidence.setConfidence === "high" ? 10 : evidence.setConfidence === "medium" ? 6 : 2);
-    if (evidence.language !== "unknown" && match.language === evidence.language) score += 2;
-    score = Math.round(Math.max(0, Math.min(bothLow ? 69 : 99, score)));
-    const confidence = score >= 78 ? "high" : score >= 52 ? "medium" : "low";
+    const score = scoreScannerCandidate(match, evidence);
+    if (!score.accepted) return [];
+    const confidence = score.totalScore >= 78 ? "high" : score.totalScore >= 52 ? "medium" : "low";
     const searchConfidence = bothLow ? "possible" : match.searchConfidence;
     return [{
       ...match,
-      matchScore: score,
+      matchScore: score.totalScore,
       matchConfidence: confidence,
       searchConfidence,
       reasons: [
         ...(match.reasons || []),
-        evidence.name ? `Name similarity ${Math.round(nameSimilarity * 100)}%` : "",
-        numberMatches ? `Collector number matched (${evidence.collectorNumberConfidence}-confidence evidence)` : "",
+        evidence.name ? `Name similarity ${Math.round(score.normalizedNameSimilarity * 100)}%` : "",
+        score.numberScore > 0 ? `Collector number matched (${evidence.collectorNumberConfidence}-confidence evidence)` : "",
       ].filter(Boolean),
     } as T];
   }).sort((left, right) => right.matchScore - left.matchScore);

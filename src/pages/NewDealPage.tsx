@@ -254,7 +254,7 @@ export function NewDealPage() {
       grade: purchase.grade,
       certificateNumber: purchase.certificateNumber,
       ownershipShares: purchase.ownershipShares || [],
-      zeroCostBasisConfirmed: Number(purchase.totalCost ?? 0) === 0 ? false : undefined,
+      zeroCostBasisConfirmed: purchase.zeroCostBasisConfirmed === true,
     };
   }
 
