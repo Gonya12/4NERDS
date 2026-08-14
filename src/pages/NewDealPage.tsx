@@ -1,7 +1,7 @@
 import {
   ArrowLeft, ArrowRight, Banknote, Camera, Check, ChevronRight, CircleDollarSign, Copy,
-  Eye, EyeOff, ImagePlus, Package, PackageCheck, Plus, RefreshCcw, Save, ScanLine,
-  Search, SlidersHorizontal, Trash2, WalletCards, X,
+  Eye, EyeOff, ImagePlus, LoaderCircle, Package, PackageCheck, Plus, RefreshCcw, Save, ScanLine,
+  Search, SlidersHorizontal, Trash2, Upload, WalletCards, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -37,6 +37,8 @@ import { paymentMethodLabels, pokemonCategoryLabels } from "../utils/salesContro
 import { hasKnownHistoricalCostBasis } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
+import { appendBulkScanSelection, isLikelyMobileScanner } from "../utils/dealScanQueue";
+import type { CardScanSuggestion } from "../services/sales/cardScanService";
 
 const draftKey = "4nerds:new-deal-draft:v1";
 const inputClass = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-950 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-200 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:ring-violet-900";
@@ -48,6 +50,24 @@ const saveSteps: ProgressStep[] = [
 ];
 const conditions: CardCondition[] = ["Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"];
 const paymentMethods = Object.keys(paymentMethodLabels) as SalePaymentMethod[];
+
+type DealScanQueueStatus = "waiting" | "processing" | "ready" | "needs_review" | "failed";
+type DealScanQueueItem = {
+  id: string;
+  itemId: string;
+  file: File;
+  previewUrl: string;
+  filename: string;
+  uploadOrder: number;
+  direction: DealSide;
+  signature: string;
+  imageHash?: string;
+  possibleDuplicate: boolean;
+  status: DealScanQueueStatus;
+  stage?: string;
+  suggestion?: CardScanSuggestion;
+  error?: string;
+};
 
 function localDateTime() {
   const now = new Date();
@@ -114,6 +134,9 @@ export function NewDealPage() {
   const [editing, setEditing] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
   const [scanFile, setScanFile] = useState<File>();
+  const [scanQueue, setScanQueue] = useState<DealScanQueueItem[]>([]);
+  const [scanQueueOpen, setScanQueueOpen] = useState(false);
+  const [mobileScanner] = useState(isLikelyMobileScanner);
   const [inventoryPicker, setInventoryPicker] = useState(false);
   const [inventorySearch, setInventorySearch] = useState("");
   const [inventorySort, setInventorySort] = useState<"name" | "cost" | "market" | "age">("name");
@@ -130,7 +153,8 @@ export function NewDealPage() {
   const [saveComplete, setSaveComplete] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "warning" | "info" }>();
   const completionInFlight = useRef(false);
-  const quickScanInput = useRef<HTMLInputElement>(null);
+  const scanQueueRef = useRef<DealScanQueueItem[]>([]);
+  const scanQueueProcessingRef = useRef(false);
   const summary = dealSummary(transaction);
   const classification = summary.classification;
   const payments = transaction.payments || [];
@@ -185,15 +209,28 @@ export function NewDealPage() {
     });
   }, []);
 
+  const replaceScanQueue = useCallback((updater: (current: DealScanQueueItem[]) => DealScanQueueItem[]) => {
+    const next = updater(scanQueueRef.current);
+    scanQueueRef.current = next;
+    setScanQueue(next);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const row of scanQueueRef.current) URL.revokeObjectURL(row.previewUrl);
+    };
+  }, []);
+
   function updateItem(item: TradeItem) {
     updateTransaction({ ...transaction, items: transaction.items.map((current) => current.id === item.id ? item : current) });
     setEditing(item);
   }
 
-  function addBlankItem(side: DealSide, itemType: PokemonProductCategory = "raw_card", openSearch = false) {
+  function createBlankItem(side: DealSide, itemType: PokemonProductCategory = "raw_card") {
     const defaultOwner = workers[0] ? [{ workerId: workers[0].id, ownershipPercentage: 100 }] : [];
     const base = blankTradeItem(transaction.id, side);
-    const item: TradeItem = {
+    return {
       ...base,
       itemType,
       cardGame: itemType === "raw_card" || itemType === "graded_card" ? "pokemon" : "other",
@@ -202,7 +239,11 @@ export function NewDealPage() {
       cardCondition: "Near Mint / NM",
       targetBuyPercentage: side === "incoming" ? 70 : 100,
       ownershipShares: defaultOwner,
-    };
+    } satisfies TradeItem;
+  }
+
+  function addBlankItem(side: DealSide, itemType: PokemonProductCategory = "raw_card", openSearch = false) {
+    const item = createBlankItem(side, itemType);
     updateTransaction({ ...transaction, items: [...transaction.items, item] });
     setEditing(item);
     setManualSearch(openSearch);
@@ -213,6 +254,96 @@ export function NewDealPage() {
     addBlankItem(side);
     setScanFile(file);
   }
+
+  function enqueueScanFiles(side: DealSide, files: FileList | File[]) {
+    const selected = appendBulkScanSelection(scanQueueRef.current, files);
+    if (!selected.length) return;
+    const startOrder = scanQueueRef.current.length;
+    const rows = selected.map((selection, index): DealScanQueueItem => {
+      const item = createBlankItem(side);
+      return {
+        id: crypto.randomUUID(),
+        itemId: item.id,
+        file: selection.file,
+        previewUrl: URL.createObjectURL(selection.file),
+        filename: selection.file.name || `card-${startOrder + index + 1}`,
+        uploadOrder: startOrder + index,
+        direction: side,
+        signature: selection.signature,
+        possibleDuplicate: selection.possibleDuplicate,
+        status: "waiting",
+        stage: "Waiting",
+      };
+    });
+    replaceScanQueue((current) => [...current, ...rows]);
+    setSelectedSide(side);
+    setScanQueueOpen(true);
+    setToast({ message: `${rows.length} photo${rows.length === 1 ? "" : "s"} selected and added to the scan queue.`, tone: "info" });
+  }
+
+  async function processScanQueue() {
+    if (scanQueueProcessingRef.current) return;
+    scanQueueProcessingRef.current = true;
+    try {
+      while (true) {
+        const queued = scanQueueRef.current.find((row) => row.status === "waiting");
+        if (!queued) break;
+        replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, status: "processing", stage: "Preparing image", error: undefined } : row));
+        try {
+          const { confirmPokemonCardMatch, imageHash, scanPokemonCard } = await import("../services/sales/cardScanService");
+          const originalHash = await imageHash(queued.file);
+          const duplicateHash = scanQueueRef.current.some((row) => row.id !== queued.id && row.imageHash === originalHash);
+          replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, imageHash: originalHash, possibleDuplicate: row.possibleDuplicate || duplicateHash } : row));
+          const result = await scanPokemonCard(queued.file, "raw_card", undefined, false, {
+            game: "pokemon",
+            language: "en",
+            onStage: (stage) => replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, stage } : row)),
+          });
+          let suggestion = result.suggestion;
+          let status: DealScanQueueStatus = "needs_review";
+          const topMatch = suggestion.possibleMatches?.[0];
+          if (topMatch?.matchConfidence === "high" && topMatch.matchScore >= 85 && suggestion.overallConfidence !== "low") {
+            try {
+              suggestion = await confirmPokemonCardMatch(suggestion, topMatch);
+              status = "ready";
+            } catch {
+              status = "needs_review";
+            }
+          }
+          const draftSuggestion: CardScanSuggestion = {
+            ...suggestion,
+            cardName: suggestion.cardName || suggestion.correctedNameCandidate || topMatch?.name || null,
+            cardSet: suggestion.cardSet || topMatch?.setName || null,
+          };
+          setTransaction((current) => {
+            const base = current.items.find((item) => item.id === queued.itemId) || { ...createBlankItem(queued.direction), id: queued.itemId };
+            const identified = applyCardSuggestionToItem(base, draftSuggestion, "scanner");
+            const priced = applyDealPercentage(identified, queued.direction, queued.direction === "incoming" ? 70 : 100);
+            const exists = current.items.some((item) => item.id === queued.itemId);
+            return normalizeDealForSave({ ...current, items: exists ? current.items.map((item) => item.id === queued.itemId ? priced : item) : [...current.items, priced] });
+          });
+          replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, status, stage: status === "ready" ? "Ready" : "Review required", suggestion: draftSuggestion } : row));
+        } catch (unknownError) {
+          setTransaction((current) => current.items.some((item) => item.id === queued.itemId)
+            ? current
+            : normalizeDealForSave({ ...current, items: [...current.items, { ...createBlankItem(queued.direction), id: queued.itemId }] }));
+          replaceScanQueue((current) => current.map((row) => row.id === queued.id ? {
+            ...row,
+            status: "failed",
+            stage: "Failed",
+            error: unknownError instanceof Error ? unknownError.message : "Recognition failed.",
+          } : row));
+        }
+      }
+    } finally {
+      scanQueueProcessingRef.current = false;
+    }
+  }
+
+  const waitingScanCount = scanQueue.filter((row) => row.status === "waiting").length;
+  useEffect(() => {
+    if (waitingScanCount) void processScanQueue();
+  }, [waitingScanCount]);
 
   function inventoryItem(purchase: InventoryPurchase): TradeItem {
     return {
@@ -466,6 +597,11 @@ export function NewDealPage() {
   const paymentSummary = payments.length
     ? Array.from(new Map(payments.filter((payment) => payment.amount > 0).map((payment) => [payment.paymentMethod, paymentMethodsLabel(payments, payment.paymentMethod)])).values()).join(" · ") || "Payment details pending"
     : "No payment added";
+  const scanReadyCount = scanQueue.filter((row) => row.status === "ready").length;
+  const scanReviewCount = scanQueue.filter((row) => row.status === "needs_review").length;
+  const scanFailedCount = scanQueue.filter((row) => row.status === "failed").length;
+  const scanRemainingCount = scanQueue.filter((row) => row.status === "waiting" || row.status === "processing").length;
+  const scanProcessedCount = scanQueue.length - scanRemainingCount;
 
   function applyPercentageToSide(percentage: number) {
     updateTransaction({
@@ -499,8 +635,11 @@ export function NewDealPage() {
     const cashTotal = directionTotal(payments, cashDirection);
     return <section className={`rounded-2xl border p-3 shadow-sm sm:p-4 ${incomingSide ? "border-sky-200 bg-gradient-to-b from-sky-50 to-white dark:border-sky-900/70 dark:from-sky-950/20 dark:to-night-900" : "border-orange-200 bg-gradient-to-b from-orange-50 to-white dark:border-orange-900/70 dark:from-orange-950/20 dark:to-night-900"}`}>
       <h2 className="text-base font-black text-slate-950 dark:text-white">{incomingSide ? "What 4 Nerds receives" : "What 4 Nerds gives"}</h2>
-      <div className="mt-2 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-        <label className="deal-add-button"><ScanLine size={17} /><span>Scan</span><input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) beginScan(side, file); event.currentTarget.value = ""; }} /></label>
+      <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-7">
+        <label className="deal-add-button"><ScanLine size={17} /><span>Scan</span>{mobileScanner
+          ? <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) beginScan(side, file); event.currentTarget.value = ""; }} />
+          : <input type="file" accept="image/*" multiple className="sr-only" onChange={(event) => { enqueueScanFiles(side, Array.from(event.currentTarget.files || [])); event.currentTarget.value = ""; }} />}</label>
+        <label className="deal-add-button"><Upload size={17} /><span className="text-center">Upload Photos</span><input type="file" accept="image/*" multiple className="sr-only" onChange={(event) => { enqueueScanFiles(side, Array.from(event.currentTarget.files || [])); event.currentTarget.value = ""; }} /></label>
         <button type="button" className="deal-add-button" onClick={() => addBlankItem(side, "raw_card", true)}><Search size={17} />Search</button>
         {!incomingSide ? <button type="button" className="deal-add-button" onClick={() => setInventoryPicker(true)}><PackageCheck size={17} />Inventory</button> : <button type="button" className="deal-add-button" onClick={() => addBlankItem(side)}><Plus size={17} />Manual</button>}
         {incomingSide ? <button type="button" className="deal-add-button" onClick={() => addBlankItem(side, "sealed_product")}><Package size={17} />Sealed</button> : <button type="button" className="deal-add-button" onClick={() => addBlankItem(side)}><Plus size={17} />Manual</button>}
@@ -527,7 +666,6 @@ export function NewDealPage() {
   const compactMetric = classification === "purchase" ? summary.purchaseUnrealizedGain : classification === "sale" ? summary.saleProfit : summary.tradeGainLoss;
 
   return <div className="mx-auto min-w-0 max-w-7xl space-y-3 pb-28">
-    <input ref={quickScanInput} type="file" accept="image/*" capture="environment" className="sr-only" />
     <header className="overflow-hidden rounded-2xl border border-slate-800 bg-[radial-gradient(circle_at_top_right,rgba(124,58,237,.28),transparent_38%),linear-gradient(135deg,#0f172a,#020617)] p-3 text-white shadow-xl sm:p-4">
       <div className="flex items-center justify-between gap-2"><button type="button" onClick={() => navigate("/sales")} aria-label="Back to Sales Control" className="grid size-10 place-items-center rounded-xl bg-white/10 hover:bg-white/15"><ArrowLeft size={18} /></button><h1 className="min-w-0 flex-1 text-xl font-black tracking-tight sm:text-2xl">New Deal</h1><button type="button" onClick={() => setOfferMode(true)} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-white/10 px-2.5 text-xs font-black"><Eye size={15} /> Offer</button><span className={`inline-flex min-h-10 items-center rounded-xl border px-2 text-[10px] font-black ${typeClasses(classification)}`}>{typeLabel(classification)}</span></div>
       <button type="button" onClick={() => setDetailsOpen(true)} className="mt-2 flex w-full items-center justify-between gap-2 rounded-xl bg-white/5 px-3 py-2 text-left text-xs text-slate-300 hover:bg-white/10"><span className="truncate">{detailSummary}</span><ChevronRight className="shrink-0" size={16} /></button>
@@ -538,6 +676,23 @@ export function NewDealPage() {
     {paymentRetry ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"><span><b>The deal already exists.</b> Only its payment record still needs to be saved.</span><button type="button" onClick={() => void retryPaymentOnly()} disabled={busy} className="min-h-10 rounded-xl bg-amber-600 px-3 font-black text-white disabled:opacity-50">Retry payment only</button></div> : null}
     {draftError ? <div role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"><b>Deal draft:</b> {draftError}{debug ? <details className="mt-2"><summary className="cursor-pointer font-black">Developer Debug</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{debug}</pre></details> : null}</div> : null}
     {imageError ? <div role="alert" className="rounded-2xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900"><b>Transaction photos:</b> {imageError}</div> : null}
+    {scanQueue.length ? <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm dark:border-violet-900 dark:bg-night-900">
+      <button type="button" onClick={() => setScanQueueOpen((value) => !value)} className="flex w-full items-center gap-3 p-3 text-left sm:p-4">
+        {scanRemainingCount ? <LoaderCircle className="shrink-0 animate-spin text-violet-600" size={21} /> : <Check className="shrink-0 text-emerald-600" size={21} />}
+        <span className="min-w-0 flex-1"><b className="block">{scanRemainingCount ? "Processing cards" : "Card processing complete"}</b><small className="block text-slate-500">{scanQueue.length} photos selected · {scanProcessedCount} / {scanQueue.length} processed</small></span>
+        <ChevronRight className={`shrink-0 transition ${scanQueueOpen ? "rotate-90" : ""}`} size={18} />
+      </button>
+      <div className="grid grid-cols-4 border-t border-violet-100 text-center text-xs dark:border-violet-900"><span className="p-2"><b className="block text-emerald-600">{scanReadyCount}</b>Ready</span><span className="p-2"><b className="block text-amber-600">{scanReviewCount}</b>Needs Review</span><span className="p-2"><b className="block text-rose-600">{scanFailedCount}</b>Failed</span><span className="p-2"><b className="block text-violet-600">{scanRemainingCount}</b>Remaining</span></div>
+      <div className="h-1.5 bg-slate-100 dark:bg-slate-800"><span className="block h-full bg-violet-600 transition-all" style={{ width: `${scanQueue.length ? scanProcessedCount / scanQueue.length * 100 : 0}%` }} /></div>
+      {scanQueueOpen ? <div className="max-h-80 overflow-y-auto border-t border-slate-100 dark:border-slate-800">{scanQueue.map((row) => {
+        const dealItem = transaction.items.find((item) => item.id === row.itemId);
+        return <article key={row.id} className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-100 p-2 last:border-b-0 dark:border-slate-800">
+          <img loading="lazy" src={row.previewUrl} alt={row.filename} className="h-14 w-11 rounded-lg bg-slate-100 object-cover" />
+          <span className="min-w-0"><b className="block truncate text-xs">{dealItem?.itemName || row.filename}</b><small className="block truncate text-slate-500">#{row.uploadOrder + 1} · {row.stage || row.status.replace(/_/g, " ")}</small>{row.possibleDuplicate ? <small className="block font-black text-amber-700">Possible duplicate</small> : null}{row.error ? <small className="block truncate font-bold text-rose-600" title={row.error}>{row.error}</small> : null}</span>
+          <span className="flex gap-1">{row.status === "failed" ? <button type="button" onClick={() => replaceScanQueue((current) => current.map((item) => item.id === row.id ? { ...item, status: "waiting", stage: "Waiting", error: undefined } : item))} className="rounded-lg bg-amber-100 px-2 py-2 text-xs font-black text-amber-900">Retry</button> : null}{row.status === "ready" || row.status === "needs_review" || row.status === "failed" ? <button type="button" onClick={() => { if (dealItem) setEditing(dealItem); }} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-800">Review</button> : null}</span>
+        </article>;
+      })}</div> : null}
+    </section> : null}
 
     {step === "build" ? <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <main className="space-y-2.5">

@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {
   buildPokemonApiQueries,
+  escapePokemonLuceneValue,
   manualCardSearchValidationError,
   normalizeCardSearchText,
   parseCardSearchQuery,
@@ -28,7 +29,7 @@ import {
 const pokemonCardsUrl = "https://api.pokemontcg.io/v2/cards";
 const tcgdexUrl = "https://api.tcgdex.net/v2";
 const optcgUrl = "https://optcgapi.com/api";
-const selectedPokemonFields = "id,name,number,set,rarity,images,tcgplayer,subtypes,supertype";
+const selectedPokemonFields = "id,name,number,set,rarity,images,tcgplayer,subtypes,supertype,hp,types,abilities,attacks";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -206,6 +207,10 @@ function pokemonMatch(
     pricing: pokemonPricing(card),
     supertype: card.supertype,
     subtypes: card.subtypes,
+    hp: card.hp,
+    types: card.types,
+    abilities: card.abilities,
+    attacks: card.attacks,
     matchScore,
     reasons,
     searchConfidence,
@@ -260,10 +265,15 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
     };
   }
 
-  const validation = manualCardSearchValidationError(input);
+  const fingerprintOnly = Boolean(!input.name && !input.collectorNumber && (input.abilityName || input.attackName));
+  const validation = fingerprintOnly ? null : manualCardSearchValidationError(input);
   if (validation) return { error: structuredError("INVALID_QUERY_FORMAT", validation, 400) };
   const parsed = parseCardSearchQuery(input);
-  const queries = buildPokemonApiQueries(parsed);
+  const fingerprintQueries = [
+    input.abilityName ? { label: "ability fingerprint", query: `abilities.name:\"${escapePokemonLuceneValue(input.abilityName)}\"` } : undefined,
+    input.attackName ? { label: "attack fingerprint", query: `attacks.name:\"${escapePokemonLuceneValue(input.attackName)}\"` } : undefined,
+  ].filter((query): query is { label: string; query: string } => Boolean(query));
+  const queries = fingerprintOnly ? fingerprintQueries : buildPokemonApiQueries(parsed);
   const cards = new Map<string, RankablePokemonCard>();
   const warnings: string[] = [];
   let reportedTotal = 0;
@@ -316,9 +326,11 @@ async function searchEnglishPokemon(input: SearchRequest, page: number, pageSize
     };
   }
   if (parsed.correction) warnings.push(`Possible spelling: ${parsed.correction.suggestion}. Original wording was also searched.`);
-  const ranked = rankPokemonCardResults([...cards.values()], parsed)
-    .filter((card) => card.confidence !== "unreliable")
-    .map((card) => pokemonMatch(card, card.matchScore, card.reasons, card.confidence));
+  const ranked = fingerprintOnly
+    ? [...cards.values()].map((card) => pokemonMatch(card, 48, ["Provider content fingerprint candidate"], "possible"))
+    : rankPokemonCardResults([...cards.values()], parsed)
+      .filter((card) => card.confidence !== "unreliable")
+      .map((card) => pokemonMatch(card, card.matchScore, card.reasons, card.confidence));
   return {
     matches: ranked,
     totalCount: Math.max(ranked.length, reportedTotal),
@@ -678,11 +690,17 @@ Deno.serve(async (request) => {
     || input.name?.trim()
     || input.collectorNumber?.trim()
     || input.set?.trim()
+    || input.abilityName?.trim()
+    || input.attackName?.trim()
     || input.providerCardId?.trim()
     || input.id?.trim()
   );
   const initialProviderQuery = provider === "pokemontcg"
-    ? buildPokemonApiQueries(parsed)[0]?.query || ""
+    ? input.abilityName
+      ? `abilities.name:\"${escapePokemonLuceneValue(input.abilityName)}\"`
+      : input.attackName
+        ? `attacks.name:\"${escapePokemonLuceneValue(input.attackName)}\"`
+        : buildPokemonApiQueries(parsed)[0]?.query || ""
     : parsed.normalizedQuery;
   const requestDebug = {
     receivedKeys,

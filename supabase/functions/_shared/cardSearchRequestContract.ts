@@ -8,6 +8,8 @@ export interface CardSearchRequest {
   name?: string | null;
   collectorNumber?: string | null;
   set?: string | null;
+  abilityName?: string | null;
+  attackName?: string | null;
   page?: number;
   pageSize?: number;
 }
@@ -44,13 +46,18 @@ export function buildCardSearchRequest(
   }
 
   const originalQuery = String(input.query ?? "").trim();
-  const fallbackQuery = [optionalText(input.name), optionalText(input.collectorNumber)].filter(Boolean).join(" ");
+  const fallbackQuery = [optionalText(input.name), optionalText(input.collectorNumber), optionalText(input.abilityName), optionalText(input.attackName)].filter(Boolean).join(" ");
   const query = originalQuery || fallbackQuery;
   const parsed = parseCardSearchQuery({ ...input, query });
-  const name = optionalText(input.name) || optionalText(parsed.originalName);
-  const collectorNumber = optionalText(input.collectorNumber) || optionalText(parsed.collector?.normalized);
+  const abilityName = optionalText(input.abilityName);
+  const attackName = optionalText(input.attackName);
+  const explicitName = optionalText(input.name);
+  const explicitCollectorNumber = optionalText(input.collectorNumber);
+  const fingerprintOnly = Boolean(!explicitName && !explicitCollectorNumber && (abilityName || attackName));
+  const name = explicitName || (fingerprintOnly ? null : optionalText(parsed.originalName));
+  const collectorNumber = explicitCollectorNumber || (fingerprintOnly ? null : optionalText(parsed.collector?.normalized));
   const providerCardId = optionalText(input.providerCardId);
-  if (!query && !collectorNumber && !providerCardId) {
+  if (!query && !collectorNumber && !providerCardId && !abilityName && !attackName) {
     throw new Error("Enter a card name, query, or collector number.");
   }
 
@@ -61,6 +68,8 @@ export function buildCardSearchRequest(
     name,
     collectorNumber,
     set: optionalText(input.set),
+    ...(abilityName ? { abilityName } : {}),
+    ...(attackName ? { attackName } : {}),
     page: Math.max(1, Math.floor(Number(input.page) || 1)),
     pageSize: Math.min(30, Math.max(1, Math.floor(Number(input.pageSize) || 30))),
     ...(optionalText(input.finish) ? { finish: optionalText(input.finish)! } : {}),
@@ -93,6 +102,8 @@ export function parseCompatibleCardSearchRequest(body: JsonRecord): BuiltCardSea
     name: name == null ? null : String(name).trim() || null,
     collectorNumber: collectorNumber == null ? null : String(collectorNumber).trim() || null,
     set: body.set == null ? null : String(body.set).trim() || null,
+    ...(body.abilityName == null || !String(body.abilityName).trim() ? {} : { abilityName: String(body.abilityName).trim() }),
+    ...(body.attackName == null || !String(body.attackName).trim() ? {} : { attackName: String(body.attackName).trim() }),
     page: Number(body.page) || 1,
     pageSize: Number(body.pageSize) || 30,
     finish: body.finish == null ? null : String(body.finish).trim() || null,

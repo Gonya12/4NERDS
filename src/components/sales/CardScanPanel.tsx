@@ -110,7 +110,7 @@ function CornerCropEditor({
 }
 
 export function CardScanPanel({ imageFile, backImageFile, category, inventory, initialGame = "pokemon", initialLanguage = "en", onApply, onRetakePhoto }: Props) {
-  const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">("crop");
+  const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">(imageFile && initialGame !== "other" ? "analyzing" : "crop");
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState<CardScanStage>("Preparing image");
   const [hash, setHash] = useState("");
@@ -151,7 +151,7 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
-    setStatus("crop");
+    setStatus(imageFile && cardGame !== "other" ? "analyzing" : "crop");
     setSuggestion(undefined);
     setResolvedCard(undefined);
     setProcessedFile(undefined);
@@ -163,6 +163,8 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setSourceDimensions(undefined);
     setCorners(defaultCorners);
     if (!imageFile) return () => controller.abort();
+    setStage("Detecting and cropping card");
+    setMessage("Preparing the card photo for automatic recognition.");
     setDetectingCrop(true);
     void import("../../services/sales/cardImageProcessor")
       .then(({ detectCardFrame }) => detectCardFrame(imageFile, controller.signal))
@@ -171,13 +173,21 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         setCorners(detection.corners);
         setSourceDimensions({ width: detection.width, height: detection.height });
         setCropConfidence(detection.confidence);
-        setMessage(detection.confidence >= 0.48
-          ? "Card edges detected. Adjust any corner that is not on the printed card."
-          : "Automatic detection is uncertain. Move all four corners onto the card before analyzing.");
+        if (cardGame === "other") {
+          setStatus("crop");
+          setMessage("Automatic card recognition is unavailable for Other / Manual. Adjust the crop or search manually.");
+          return;
+        }
+        void scan(false, detection.confidence < 0.48, detection.corners, { width: detection.width, height: detection.height }, detection.confidence);
       })
       .catch((error) => {
         if (run !== runRef.current || controller.signal.aborted) return;
-        setMessage(error instanceof Error ? error.message : "Adjust the crop corners manually.");
+        if (cardGame === "other") {
+          setStatus("crop");
+          setMessage(error instanceof Error ? error.message : "Adjust the crop corners manually.");
+        } else {
+          void scan(false, true);
+        }
       })
       .finally(() => { if (run === runRef.current) setDetectingCrop(false); });
     return () => controller.abort();
@@ -206,12 +216,19 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     };
   }, []);
 
-  async function scan(force = false, useFullImage = false) {
+  async function scan(
+    force = false,
+    useFullImage = false,
+    cropOverride?: CropPoint[],
+    dimensionsOverride?: { width: number; height: number },
+    confidenceOverride?: number,
+  ) {
     if (!imageFile) { setMessage("Add a front image before scanning."); return; }
     const run = ++runRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
+    setDetectingCrop(false);
     setStatus("analyzing");
     setMessage("");
     setSuggestion(undefined);
@@ -220,16 +237,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     setStage("Preparing image");
     try {
       let source = imageFile;
+      const submittedCorners = cropOverride || corners;
+      const submittedDimensions = dimensionsOverride || sourceDimensions;
       if (import.meta.env.DEV) console.info("[Visual card scanner] crop submission", {
-        imageDimensions: sourceDimensions,
+        imageDimensions: submittedDimensions,
         originalFileSize: imageFile.size,
-        cropCoordinates: useFullImage ? null : corners,
+        cropCoordinates: useFullImage ? null : submittedCorners,
         useFullImage,
       });
       if (!useFullImage) {
         setStage("Detecting and cropping card");
         const { cropCardPerspective } = await import("../../services/sales/cardImageProcessor");
-        source = await cropCardPerspective(imageFile, corners, controller.signal);
+        source = await cropCardPerspective(imageFile, submittedCorners, controller.signal);
       }
       if (run !== runRef.current) return;
       setProcessedFile(source);
@@ -240,11 +259,18 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         skipCrop: true,
         game: cardGame,
         language: cardLanguage,
+        cardBounds: {
+          sourceWidth: submittedDimensions?.width,
+          sourceHeight: submittedDimensions?.height,
+          corners: useFullImage ? null : submittedCorners,
+          confidence: confidenceOverride ?? cropConfidence,
+          cropped: !useFullImage,
+        },
         inputDebug: {
-          originalDimensions: sourceDimensions,
+          originalDimensions: submittedDimensions,
           originalFileSize: imageFile.size,
           originalMimeType: imageFile.type,
-          cropCoordinates: useFullImage ? null : corners,
+          cropCoordinates: useFullImage ? null : submittedCorners,
         },
       });
       if (run !== runRef.current) return;
@@ -259,6 +285,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
         || scanSuggestion.collectorNumber
         || scanSuggestion.cardSet
         || scanSuggestion.aiIdentification?.hp
+        || scanSuggestion.aiIdentification?.stage_or_subtype
+        || scanSuggestion.aiIdentification?.ability_names.length
+        || scanSuggestion.aiIdentification?.attack_names.length
         || scanSuggestion.aiIdentification?.visible_text.length,
       );
       setOutcome(matchCount > 1 ? "Several possible matches" : matchCount === 1 ? "Match found" : recognizedSomething ? "Partial identification" : "No reliable match");
@@ -400,6 +429,9 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
     || reviewSuggestion.collectorNumber
     || reviewSuggestion.cardSet
     || reviewSuggestion.aiIdentification?.hp
+    || reviewSuggestion.aiIdentification?.stage_or_subtype
+    || reviewSuggestion.aiIdentification?.ability_names.length
+    || reviewSuggestion.aiIdentification?.attack_names.length
     || reviewSuggestion.aiIdentification?.visible_text.length
     || reviewSuggestion.condition
     || reviewSuggestion.stickerPrice != null
@@ -488,9 +520,10 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
       </div>
     </div> : null}
 
-    {status === "analyzing" ? <div className="rounded-xl bg-violet-100 p-3 text-sm font-bold text-violet-900 dark:bg-violet-950 dark:text-violet-100">
-      <LoaderCircle className="mr-2 inline animate-spin" size={18} />{stage}…
-      <p className="mt-1 text-xs font-normal">The scan has a hard timeout. Cancel always leaves manual entry available.</p>
+    {status === "analyzing" ? <div aria-live="polite" className="rounded-xl bg-violet-100 p-3 text-sm font-bold text-violet-900 dark:bg-violet-950 dark:text-violet-100">
+      <LoaderCircle className="mr-2 inline animate-spin" size={18} />{stage === "Matching with TCG database" || stage === "Searching card catalog" ? "Searching for matches" : "Scanning card"}…
+      <p className="mt-1 text-xs font-normal">{stage}…</p>
+      <p className="mt-1 text-xs font-normal">Cancel always leaves the photo and manual entry available.</p>
     </div> : null}
 
     {status !== "crop" && processedPreview ? <img src={processedPreview} alt="Processed card crop" className="mx-auto max-h-80 rounded-xl bg-black object-contain" /> : null}
@@ -611,6 +644,13 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
           <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.name || "Unknown"}</dd></div>
           <div><dt className="font-black">Recognized number</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.collectorNumber || "Not recognized"}</dd></div>
           <div><dt className="font-black">Number confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.collectorNumber || "Unknown"}</dd></div>
+          <div className="sm:col-span-2"><dt className="font-black">Card bounds</dt><dd className="break-all">{reviewSuggestion.technicalDetails.scannerDebug.cardBounds ? JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.cardBounds) : "Not available"}</dd></div>
+          <div><dt className="font-black">Top region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.name || "Name unavailable"} · HP {reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.hp ?? "?"} · {reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.stageOrSubtype || "stage unavailable"}</dd></div>
+          <div><dt className="font-black">Top confidence</dt><dd>Name {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.name || "?"} · HP {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.hp || "?"} · Stage {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.stage || "?"}</dd></div>
+          <div><dt className="font-black">Ability region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.abilityNames.join(", ") || "Not recognized"}</dd></div>
+          <div><dt className="font-black">Ability confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.ability || "Unknown"}</dd></div>
+          <div><dt className="font-black">Attack region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.attackNames.join(", ") || "Not recognized"}{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.attackDamage.length ? ` · ${reviewSuggestion.technicalDetails.scannerDebug.search.recognizedFields.attackDamage.join(", ")}` : ""}</dd></div>
+          <div><dt className="font-black">Attack confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.attack || "Unknown"}</dd></div>
           <div className="sm:col-span-2"><dt className="font-black">Query</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.queries.map((entry) => entry.query).join(" → ") || "No query sent"}</dd></div>
           <div><dt className="font-black">Candidates returned</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.providerCandidateCount ?? 0}</dd></div>
           <div><dt className="font-black">Fallback used</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.fallbackUsed ? "Yes" : "No"}</dd></div>

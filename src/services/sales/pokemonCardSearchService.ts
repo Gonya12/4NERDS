@@ -474,6 +474,8 @@ export function searchPokemonCardsManually(input: ManualCardSearchInput, signal?
     name: normalizeCardSearchText(request.name),
     number: normalizeCardSearchText(request.collectorNumber),
     set: normalizeCardSearchText(request.set),
+    abilityName: normalizeCardSearchText(request.abilityName),
+    attackName: normalizeCardSearchText(request.attackName),
     finish: normalizeCardSearchText(request.finish),
     cardType: normalizeCardSearchText(request.cardType),
     disableCorrection: Boolean(request.disableCorrection),

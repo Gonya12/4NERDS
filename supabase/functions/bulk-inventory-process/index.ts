@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
+  assessPokemonIdentification,
   buildPokemonIdentificationSearchAttempts,
   isStrongVisualCatalogMatch,
   normalizePokemonCardIdentification,
@@ -85,7 +86,7 @@ async function findCandidates(baseUrl: string, serviceKey: string, identificatio
   const groups: UnifiedCardMatch[][] = [];
   const queryHistory: string[] = [];
   for (const attempt of buildPokemonIdentificationSearchAttempts(identification)) {
-    const query = [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" ");
+    const query = [attempt.name, attempt.collectorNumber, attempt.set, attempt.abilityName, attempt.attackName].filter(Boolean).join(" ");
     queryHistory.push(query);
     const payload = await edgePost(baseUrl, serviceKey, "pokemon-card-search", {
       game,
@@ -93,6 +94,8 @@ async function findCandidates(baseUrl: string, serviceKey: string, identificatio
       name: attempt.name || null,
       collectorNumber: attempt.collectorNumber || null,
       set: attempt.set || null,
+      abilityName: attempt.abilityName || null,
+      attackName: attempt.attackName || null,
       query,
       page: 1,
       pageSize: 20,
@@ -116,24 +119,54 @@ async function processItem(
     const downloaded = await supabase.storage.from("bulk-inventory-imports").download(item.source_image_path);
     if (downloaded.error || !downloaded.data) throw new Error(downloaded.error?.message || "Source image could not be downloaded.");
     const imageBytes = new Uint8Array(await downloaded.data.arrayBuffer());
-    const recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
+    let recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
       imageBase64: bytesToBase64(imageBytes),
       mimeType: item.mime_type,
+      recognitionStrategy: "standard",
     });
-    if (!recognition.identification) {
+    let rawIdentification = normalizePokemonCardIdentification(recognition.identification);
+    let usefulness = assessPokemonIdentification(rawIdentification);
+    const recognitionAttempts: Array<Record<string, unknown>> = [{
+      strategy: "standard",
+      identification: rawIdentification,
+      useful: usefulness.useful,
+      rejectedFields: usefulness.rejectedFields,
+    }];
+    if (!usefulness.useful) {
+      recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
+        imageBase64: bytesToBase64(imageBytes),
+        mimeType: item.mime_type,
+        recognitionStrategy: "alternate",
+      });
+      rawIdentification = normalizePokemonCardIdentification(recognition.identification);
+      usefulness = assessPokemonIdentification(rawIdentification);
+      recognitionAttempts.push({
+        strategy: "alternate",
+        identification: rawIdentification,
+        useful: usefulness.useful,
+        rejectedFields: usefulness.rejectedFields,
+      });
+    }
+    if (!usefulness.useful) {
       const noDetails = await supabase.from("bulk_inventory_import_items").update({
         status: "needs_review",
         locked_at: null,
-        raw_recognition: recognition,
+        recognized_name: null,
+        recognized_collector_number: usefulness.recognizedCollectorNumber,
+        recognized_set: null,
+        recognized_card_game: rawIdentification.card_game,
+        recognized_language: rawIdentification.language,
+        field_confidence: rawIdentification.field_confidence,
+        raw_recognition: { recognitionAttempts, usefulness },
         overall_confidence: "low",
         error_code: "NO_USEFUL_DETAILS",
-        error_message: "No useful card details were recognized. Use manual card search or retry this photo.",
+        error_message: "Two visual strategies found no safe card name or reliable collector number. Use manual card search, adjust the crop, or retry this photo.",
         updated_at: new Date().toISOString(),
       }).eq("id", item.id);
       if (noDetails.error) throw new Error(noDetails.error.message);
       return { id: item.id, status: "needs_review" };
     }
-    const identification = normalizePokemonCardIdentification(recognition.identification);
+    const identification = usefulness.searchIdentification;
     const { matches, queryHistory } = await findCandidates(baseUrl, serviceKey, identification);
     const selected = matches[0];
     const strong = isStrongVisualCatalogMatch(identification, matches);
@@ -154,7 +187,7 @@ async function processItem(
       recognized_card_game: identification.card_game,
       recognized_language: identification.language,
       field_confidence: identification.field_confidence,
-      raw_recognition: { ...identification, queryHistory },
+      raw_recognition: { ...identification, queryHistory, recognitionAttempts, usefulness },
       selected_candidate: selected || null,
       alternative_candidates: matches.slice(1, 5),
       candidate_score: selected?.matchScore ?? null,

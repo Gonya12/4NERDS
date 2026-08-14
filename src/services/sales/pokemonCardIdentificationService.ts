@@ -26,6 +26,7 @@ type IdentifyPayload = {
 };
 
 export type VisualRecognitionDebug = {
+  strategy: "standard" | "alternate";
   httpStatus: number;
   responseBodyKeys: string[];
   requestId?: string;
@@ -36,8 +37,27 @@ export type VisualRecognitionDebug = {
 };
 
 export type ScannerSearchDebug = {
-  recognizedFields: { name: string | null; collectorNumber: string | null; set: string | null; language: string };
-  fieldConfidence: { name: IdentificationFieldConfidence; collectorNumber: IdentificationFieldConfidence; set: IdentificationFieldConfidence };
+  recognizedFields: {
+    name: string | null;
+    collectorNumber: string | null;
+    set: string | null;
+    hp: number | null;
+    stageOrSubtype: string | null;
+    abilityNames: string[];
+    attackNames: string[];
+    attackDamage: string[];
+    language: string;
+  };
+  fieldConfidence: {
+    name: IdentificationFieldConfidence;
+    collectorNumber: IdentificationFieldConfidence;
+    set: IdentificationFieldConfidence;
+    hp: IdentificationFieldConfidence;
+    stage: IdentificationFieldConfidence;
+    ability: IdentificationFieldConfidence;
+    attack: IdentificationFieldConfidence;
+    attackDamage: IdentificationFieldConfidence;
+  };
   queries: Array<{
     query: string;
     reason: string;
@@ -94,7 +114,11 @@ function combinedAbortSignal(callerSignal: AbortSignal | undefined, timeoutMs: n
   };
 }
 
-export async function identifyPokemonCardVisually(file: File, signal?: AbortSignal) {
+export async function identifyPokemonCardVisually(
+  file: File,
+  signal?: AbortSignal,
+  strategy: "standard" | "alternate" = "standard",
+) {
   if (!isSupabaseConfigured || !supabaseUrl || !supabasePublishableKey) {
     throw new PokemonCardIdentificationError("Visual identification needs the app's Supabase connection.", "NOT_CONFIGURED");
   }
@@ -113,7 +137,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
         apikey: supabasePublishableKey,
         Authorization: `Bearer ${supabasePublishableKey}`,
       },
-      body: JSON.stringify({ imageBase64, mimeType: file.type }),
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy }),
       signal: request.signal,
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
@@ -122,6 +146,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
       responseBodyKeys: payload ? Object.keys(payload) : [],
       requestId: payload?.requestId || response.headers.get("x-request-id"),
       providerStatus: payload?.providerStatus,
+      strategy,
       elapsedMs: Math.round(performance.now() - startedAt),
       rawIdentification: payload?.identification,
     });
@@ -149,6 +174,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
     }
     const identification = normalizePokemonCardIdentification(payload.identification);
     if (import.meta.env.DEV) visualDebug.set(identification, {
+      strategy,
       httpStatus: response.status,
       responseBodyKeys: Object.keys(payload),
       requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
@@ -167,6 +193,7 @@ export async function identifyPokemonCardVisually(file: File, signal?: AbortSign
       cardGame: identification.card_game,
       confidence: identification.confidence,
       fieldConfidence: identification.field_confidence,
+      strategy,
     });
     return identification;
   } catch (error) {
@@ -197,8 +224,27 @@ function scannerMatchDiagnostics(matches: CardMatch[], evidence: ScannerCandidat
 
 function newSearchDebug(evidence: ScannerCandidateEvidence): ScannerSearchDebug {
   return {
-    recognizedFields: { name: evidence.name || null, collectorNumber: evidence.collectorNumber || null, set: evidence.set || null, language: evidence.language },
-    fieldConfidence: { name: evidence.nameConfidence, collectorNumber: evidence.collectorNumberConfidence, set: evidence.setConfidence },
+    recognizedFields: {
+      name: evidence.name || null,
+      collectorNumber: evidence.collectorNumber || null,
+      set: evidence.set || null,
+      hp: evidence.hp,
+      stageOrSubtype: evidence.stageOrSubtype || null,
+      abilityNames: evidence.abilityNames,
+      attackNames: evidence.attackNames,
+      attackDamage: evidence.attackDamage,
+      language: evidence.language,
+    },
+    fieldConfidence: {
+      name: evidence.nameConfidence,
+      collectorNumber: evidence.collectorNumberConfidence,
+      set: evidence.setConfidence,
+      hp: evidence.hpConfidence,
+      stage: evidence.stageConfidence,
+      ability: evidence.abilityConfidence,
+      attack: evidence.attackConfidence,
+      attackDamage: evidence.attackDamageConfidence,
+    },
     queries: [],
     firstTwentyReturned: [],
     rankings: [],
@@ -223,7 +269,7 @@ async function runSearchAttempts(
     const attempt = attempts[index];
     if (!attempt) return [] as CardMatch[];
     try {
-      const query = [attempt.name, attempt.collectorNumber, attempt.set].filter(Boolean).join(" ");
+      const query = [attempt.name, attempt.collectorNumber, attempt.set, attempt.abilityName, attempt.attackName].filter(Boolean).join(" ");
       debug.queries.push({ query, reason: attempt.reason });
       const result = await searchPokemonCardsManually({
         game: "pokemon",
@@ -231,6 +277,8 @@ async function runSearchAttempts(
         name: attempt.name,
         collectorNumber: attempt.collectorNumber,
         set: attempt.set,
+        abilityName: attempt.abilityName,
+        attackName: attempt.attackName,
         query,
         page: 1,
         pageSize: 12,
@@ -263,12 +311,22 @@ async function runSearchAttempts(
           name: evidence.name || null,
           collectorNumber: evidence.collectorNumber || null,
           set: evidence.set || null,
+          hp: evidence.hp,
+          stageOrSubtype: evidence.stageOrSubtype || null,
+          abilityNames: evidence.abilityNames,
+          attackNames: evidence.attackNames,
+          attackDamage: evidence.attackDamage,
           language: evidence.language,
         },
         fieldConfidence: {
           name: evidence.nameConfidence,
           collectorNumber: evidence.collectorNumberConfidence,
           set: evidence.setConfidence,
+          hp: evidence.hpConfidence,
+          stage: evidence.stageConfidence,
+          ability: evidence.abilityConfidence,
+          attack: evidence.attackConfidence,
+          attackDamage: evidence.attackDamageConfidence,
         },
         query,
         reason: attempt.reason,
@@ -302,10 +360,22 @@ export async function searchRecognizedCardText(input: {
     name,
     collectorNumber,
     set: "",
+    hp: null,
+    stageOrSubtype: "",
+    abilityNames: [],
+    abilityTextFragments: [],
+    attackNames: [],
+    attackDamage: [],
+    attackTextFragments: [],
     language: input.language,
     nameConfidence,
     collectorNumberConfidence,
     setConfidence: "low",
+    hpConfidence: "low",
+    stageConfidence: "low",
+    abilityConfidence: "low",
+    attackConfidence: "low",
+    attackDamageConfidence: "low",
   };
   const debug = newSearchDebug(evidence);
   let attempts: IdentificationSearchAttempt[];
@@ -388,7 +458,7 @@ export async function searchRecognizedCardText(input: {
     candidateCount: candidates.length,
     candidates: diagnostics,
     fallbackTriggered,
-    confidenceThreshold: nameConfidence === "high" ? 0.58 : nameConfidence === "medium" ? 0.42 : 0,
+    confidenceThreshold: nameConfidence === "high" ? 0.62 : nameConfidence === "medium" ? 0.46 : 0,
   });
   return candidates;
 }

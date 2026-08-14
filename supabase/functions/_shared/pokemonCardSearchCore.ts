@@ -83,6 +83,10 @@ export type RankablePokemonCard = {
   };
   subtypes?: string[];
   supertype?: string;
+  hp?: string;
+  types?: string[];
+  abilities?: Array<{ name: string; text?: string; type?: string }>;
+  attacks?: Array<{ name: string; text?: string; damage?: string; cost?: string[] }>;
 };
 
 export type RankedPokemonCard = RankablePokemonCard & {

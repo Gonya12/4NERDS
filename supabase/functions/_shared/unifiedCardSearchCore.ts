@@ -49,6 +49,10 @@ export type UnifiedCardMatch = UnifiedCardResult & {
   setReleaseDate?: string;
   supertype?: string;
   subtypes?: string[];
+  hp?: string;
+  types?: string[];
+  abilities?: Array<{ name: string; text?: string; type?: string }>;
+  attacks?: Array<{ name: string; text?: string; damage?: string; cost?: string[] }>;
   matchConfidence: "high" | "medium" | "low";
   searchConfidence: CardSearchConfidence;
   matchScore: number;
@@ -62,6 +66,8 @@ export type UnifiedCardSearchInput = {
   name?: string | null;
   collectorNumber?: string | null;
   set?: string | null;
+  abilityName?: string | null;
+  attackName?: string | null;
   finish?: string | null;
   cardType?: string | null;
   page?: number;
