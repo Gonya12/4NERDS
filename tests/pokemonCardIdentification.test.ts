@@ -9,6 +9,7 @@ import {
   isStrongVisualCatalogMatch,
   normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
+  normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
   scannerCardNameSimilarity,
@@ -41,6 +42,28 @@ test("normalizes structured identification without losing leading zeros", () => 
   assert.equal(result.collector_number, "056");
   assert.equal(result.confidence, 1);
   assert.deepEqual(result.notes, ["holo glare"]);
+});
+
+test("normalizes the dedicated top-region name and HP response", () => {
+  assert.deepEqual(normalizePokemonTopRegionIdentification({ cardName: " Charizard ex ", hp: 330, confidence: 0.86 }), {
+    cardName: "Charizard ex",
+    hp: 330,
+    confidence: 0.86,
+  });
+});
+
+test("collector number alone is preserved but cannot become a useful automatic identification", () => {
+  const result = assessPokemonIdentification(normalizePokemonCardIdentification({
+    card_name: null,
+    collector_number: "1",
+    confidence: 0.91,
+    field_confidence: { card_name: "low", collector_number: "high" },
+  }));
+  assert.equal(result.useful, false);
+  assert.equal(result.recognizedName, null);
+  assert.equal(result.recognizedCollectorNumber, "1");
+  assert.deepEqual(buildPokemonIdentificationSearchAttempts(result.searchIdentification), []);
+  assert.match(result.reasons.join(" "), /preserved for review/);
 });
 
 test("strips only supported image data URL prefixes", () => {
@@ -315,6 +338,10 @@ test("Edge Function keeps Gemini secret server-side and requests structured visu
   assert.doesNotMatch(edgeSource, /const nullableString = \{ anyOf/);
   assert.match(edgeSource, /imageBase64/);
   assert.match(edgeSource, /recognitionStrategy/);
+  assert.match(edgeSource, /recognitionMode/);
+  assert.match(edgeSource, /topRegionPrompt/);
+  assert.match(edgeSource, /topRegionResponseSchema/);
+  assert.match(edgeSource, /raw visual response before parsing/);
   assert.match(edgeSource, /alternatePrompt/);
   assert.match(edgeSource, /ability_names/);
   assert.match(edgeSource, /attack_names/);
@@ -358,6 +385,9 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /disabled=\{isAiScan && \(!resolvedCard \|\| needsCondition\)\}/);
   assert.match(scannerSource, /import\.meta\.env\.DEV && reviewSuggestion\.technicalDetails\?\.scannerDebug/);
   assert.match(scannerSource, /Scanner Debug/);
+  assert.doesNotMatch(scannerSource, /placeholder="Charizard ex"/);
+  assert.match(scannerSource, /recognizedCardName/);
+  assert.match(scannerSource, /Image actually sent to the full-card scanner/);
   assert.match(serviceSource, /firstTwentyReturned/);
   assert.match(serviceSource, /responseBodyKeys/);
 });
@@ -367,9 +397,12 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v8_/);
+  assert.match(scanService, /4nerds_card_scan_v9_/);
   assert.match(scanService, /Trying alternate recognition/);
   assert.match(scanService, /assessPokemonIdentification/);
+  assert.match(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.28, false/);
+  assert.match(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.4, true/);
+  assert.match(scanService, /identifyPokemonCardTopRegion/);
 });
 
 test("a vision transport failure falls back to local OCR before becoming a processing error", () => {

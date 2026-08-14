@@ -2,6 +2,7 @@ import {
   POKEMON_CARD_IDENTIFY_FUNCTION,
   buildPokemonIdentificationSearchAttempts,
   normalizePokemonCardIdentification,
+  normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
   scoreScannerCandidate,
@@ -9,6 +10,7 @@ import {
   type IdentificationFieldConfidence,
   type IdentificationSearchAttempt,
   type PokemonCardIdentification,
+  type PokemonTopRegionIdentification,
   type ScannerCandidateEvidence,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
@@ -20,6 +22,8 @@ type IdentifyPayload = {
   code?: string;
   message?: string;
   identification?: unknown;
+  topIdentification?: unknown;
+  rawProviderResponse?: unknown;
   requestId?: string;
   providerStatus?: number;
   upstreamErrorCode?: string;
@@ -27,6 +31,7 @@ type IdentifyPayload = {
 
 export type VisualRecognitionDebug = {
   strategy: "standard" | "alternate";
+  recognitionMode: "full";
   httpStatus: number;
   responseBodyKeys: string[];
   requestId?: string;
@@ -34,6 +39,19 @@ export type VisualRecognitionDebug = {
   elapsedMs: number;
   timeout: boolean;
   rawIdentification?: unknown;
+  rawProviderResponse?: unknown;
+};
+
+export type TopRegionRecognitionDebug = {
+  strategy: "standard" | "alternate";
+  recognitionMode: "top_name";
+  httpStatus: number;
+  responseBodyKeys: string[];
+  requestId?: string;
+  providerStatus?: number;
+  elapsedMs: number;
+  rawProviderResponse?: unknown;
+  parsed: PokemonTopRegionIdentification;
 };
 
 export type ScannerSearchDebug = {
@@ -74,14 +92,20 @@ export type ScannerSearchDebug = {
   fallbackUsed: boolean;
   selectedCandidate: string | null;
   candidateListShown: string[];
+  confidenceThreshold: number;
   finalReason: string;
 };
 
 const visualDebug = new WeakMap<PokemonCardIdentification, VisualRecognitionDebug>();
+const topRegionDebug = new WeakMap<PokemonTopRegionIdentification, TopRegionRecognitionDebug>();
 let latestSearchDebug: ScannerSearchDebug | undefined;
 
 export function visualRecognitionDebugFor(identification: PokemonCardIdentification) {
   return visualDebug.get(identification);
+}
+
+export function topRegionRecognitionDebugFor(identification: PokemonTopRegionIdentification) {
+  return topRegionDebug.get(identification);
 }
 
 export function latestScannerSearchDebug() {
@@ -137,7 +161,7 @@ export async function identifyPokemonCardVisually(
         apikey: supabasePublishableKey,
         Authorization: `Bearer ${supabasePublishableKey}`,
       },
-      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy }),
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "full", debug: import.meta.env.DEV }),
       signal: request.signal,
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
@@ -148,7 +172,8 @@ export async function identifyPokemonCardVisually(
       providerStatus: payload?.providerStatus,
       strategy,
       elapsedMs: Math.round(performance.now() - startedAt),
-      rawIdentification: payload?.identification,
+      rawProviderResponse: payload?.rawProviderResponse,
+      normalizedIdentification: payload?.identification,
     });
     if (!response.ok || !payload?.success || !payload.identification) {
       if (import.meta.env.DEV) console.error("[Visual card scanner] recognition request failed", {
@@ -172,9 +197,14 @@ export async function identifyPokemonCardVisually(
         payload?.requestId || response.headers.get("x-request-id") || undefined,
       );
     }
+    if (import.meta.env.DEV) console.info("[Visual card scanner] raw full-region response before parsing", {
+      strategy,
+      rawProviderResponse: payload.rawProviderResponse ?? payload.identification,
+    });
     const identification = normalizePokemonCardIdentification(payload.identification);
     if (import.meta.env.DEV) visualDebug.set(identification, {
       strategy,
+      recognitionMode: "full",
       httpStatus: response.status,
       responseBodyKeys: Object.keys(payload),
       requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
@@ -182,6 +212,7 @@ export async function identifyPokemonCardVisually(
       elapsedMs: Math.round(performance.now() - startedAt),
       timeout: false,
       rawIdentification: payload.identification,
+      rawProviderResponse: payload.rawProviderResponse,
     });
     if (import.meta.env.DEV) console.info("[Visual card scanner] recognition response parsed", {
       visionProcessingSucceeded: true,
@@ -193,6 +224,10 @@ export async function identifyPokemonCardVisually(
       cardGame: identification.card_game,
       confidence: identification.confidence,
       fieldConfidence: identification.field_confidence,
+      abilityNames: identification.ability_names,
+      abilityTextFragments: identification.ability_text_fragments,
+      attackNames: identification.attack_names,
+      attackTextFragments: identification.attack_text_fragments,
       strategy,
     });
     return identification;
@@ -207,6 +242,76 @@ export async function identifyPokemonCardVisually(
       });
       if (signal?.aborted) throw error;
       throw new PokemonCardIdentificationError("Visual identification timed out. Try again or search manually.", "GEMINI_TIMEOUT");
+    }
+    throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
+  } finally {
+    request.cleanup();
+  }
+}
+
+export async function identifyPokemonCardTopRegion(
+  file: File,
+  signal?: AbortSignal,
+  strategy: "standard" | "alternate" = "standard",
+) {
+  if (!isSupabaseConfigured || !supabaseUrl || !supabasePublishableKey) {
+    throw new PokemonCardIdentificationError("Visual identification needs the app's Supabase connection.", "NOT_CONFIGURED");
+  }
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new PokemonCardIdentificationError("Use a JPEG, PNG, or WebP card image.", "UNSUPPORTED_IMAGE_TYPE");
+  }
+  const dataUrl = await fileToDataUrl(file);
+  const imageBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const request = combinedAbortSignal(signal, 26_000);
+  const startedAt = performance.now();
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/${POKEMON_CARD_IDENTIFY_FUNCTION}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: supabasePublishableKey,
+        Authorization: `Bearer ${supabasePublishableKey}`,
+      },
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "top_name", debug: import.meta.env.DEV }),
+      signal: request.signal,
+    });
+    const payload = await response.json().catch(() => null) as IdentifyPayload | null;
+    if (import.meta.env.DEV) console.info("[Visual card scanner] raw top-region response before parsing", {
+      httpStatus: response.status,
+      responseBodyKeys: payload ? Object.keys(payload) : [],
+      requestId: payload?.requestId || response.headers.get("x-request-id"),
+      strategy,
+      rawProviderResponse: payload?.rawProviderResponse ?? payload?.topIdentification,
+    });
+    if (!response.ok || !payload?.success || !payload.topIdentification) {
+      throw new PokemonCardIdentificationError(
+        payload?.message || "The card-name region could not be read.",
+        payload?.code || `HTTP_${response.status}`,
+        payload?.requestId || response.headers.get("x-request-id") || undefined,
+      );
+    }
+    const identification = normalizePokemonTopRegionIdentification(payload.topIdentification);
+    const debug: TopRegionRecognitionDebug = {
+      strategy,
+      recognitionMode: "top_name",
+      httpStatus: response.status,
+      responseBodyKeys: Object.keys(payload),
+      requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
+      providerStatus: payload.providerStatus,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      rawProviderResponse: payload.rawProviderResponse,
+      parsed: identification,
+    };
+    if (import.meta.env.DEV) {
+      topRegionDebug.set(identification, debug);
+      console.info("[Visual card scanner] top-region response parsed", debug);
+    }
+    return identification;
+  } catch (error) {
+    if (error instanceof PokemonCardIdentificationError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      if (signal?.aborted) throw error;
+      throw new PokemonCardIdentificationError("The card-name region timed out. Try again or adjust the crop.", "GEMINI_TIMEOUT");
     }
     throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
   } finally {
@@ -252,6 +357,7 @@ function newSearchDebug(evidence: ScannerCandidateEvidence): ScannerSearchDebug 
     fallbackUsed: false,
     selectedCandidate: null,
     candidateListShown: [],
+    confidenceThreshold: evidence.nameConfidence === "high" ? 0.62 : evidence.nameConfidence === "medium" ? 0.46 : 0,
     finalReason: "Search has not completed.",
   };
 }

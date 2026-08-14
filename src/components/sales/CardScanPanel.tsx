@@ -304,6 +304,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       });
       if (run !== runRef.current) return;
       const scanSuggestion: CardScanSuggestion = result.suggestion;
+      if ("correctedFile" in result && result.correctedFile) setProcessedFile(result.correctedFile);
       setSuggestion(scanSuggestion);
       setHash(result.hash);
       setStatus("review");
@@ -555,7 +556,10 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       <p className="mt-1 text-xs font-normal">Cancel always leaves the photo and manual entry available.</p>
     </div> : null}
 
-    {status !== "crop" && processedPreview ? <img src={processedPreview} alt="Processed card crop" className="mx-auto max-h-80 rounded-xl bg-black object-contain" /> : null}
+    {status !== "crop" && processedPreview ? <div className="space-y-1">
+      {import.meta.env.DEV ? <p className="text-xs font-black text-sky-800 dark:text-sky-200">Image actually sent to the full-card scanner</p> : null}
+      <img src={processedPreview} alt="Processed card crop sent to scanner" className="mx-auto max-h-80 rounded-xl bg-black object-contain" />
+    </div> : null}
     {outcome ? <p role="status" className="inline-flex rounded-full bg-slate-900 px-3 py-1 text-xs font-black text-white dark:bg-white dark:text-slate-900">State: {outcome}</p> : null}
     {message && status !== "crop" ? <p className={`text-sm font-bold ${status === "failed" ? "text-rose-700" : "text-violet-700 dark:text-violet-200"}`}>{message}</p> : null}
     {outcome === "No reliable match" && hasUsefulSuggestion ? <div className="space-y-2">
@@ -607,7 +611,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
               setRecognizedName(next);
               setRecognizedNameEdited(true);
               queueRecognizedSearch(next, recognizedCollectorNumber, "name");
-            }} placeholder="Charizard ex" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
+            }} className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base text-slate-950 dark:border-amber-800 dark:bg-slate-950 dark:text-white" />
             {recognizedNameConfidence === "low" ? <span className="mt-1 block font-medium text-amber-800 dark:text-amber-200">Not sure about this value — edit it if needed.</span> : null}
           </label>
           <label className="text-xs font-black">Collector Number <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] ${confidenceClass[recognizedCollectorConfidence]}`}>{recognizedCollectorConfidence}</span>
@@ -669,23 +673,37 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       {import.meta.env.DEV && reviewSuggestion.technicalDetails?.scannerDebug ? <details className="rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs dark:border-sky-900 dark:bg-sky-950/30">
         <summary className="cursor-pointer font-black text-sky-900 dark:text-sky-100">Scanner Debug</summary>
         <dl className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
-          <div><dt className="font-black">Recognized name</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.name || "Not recognized"}</dd></div>
-          <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.name || "Unknown"}</dd></div>
-          <div><dt className="font-black">Recognized number</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.collectorNumber || "Not recognized"}</dd></div>
-          <div><dt className="font-black">Number confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.collectorNumber || "Unknown"}</dd></div>
+          <div><dt className="font-black">recognizedCardName</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedName ?? null)}</code></dd></div>
+          <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.fieldConfidence.cardName || "Unknown"}</dd></div>
+          <div><dt className="font-black">collectorNumber</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedCollectorNumber ?? reviewSuggestion.collectorNumber ?? null)}</code></dd></div>
+          <div><dt className="font-black">Number confidence</dt><dd className="capitalize">{reviewSuggestion.fieldConfidence.collectorNumber || "Unknown"}</dd></div>
           <div className="sm:col-span-2"><dt className="font-black">Card bounds</dt><dd className="break-all">{reviewSuggestion.technicalDetails.scannerDebug.cardBounds ? JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.cardBounds) : "Not available"}</dd></div>
-          <div><dt className="font-black">Top region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.name || "Name unavailable"} · HP {reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.hp ?? "?"} · {reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.stageOrSubtype || "stage unavailable"}</dd></div>
-          <div><dt className="font-black">Top confidence</dt><dd>Name {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.name || "?"} · HP {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.hp || "?"} · Stage {reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.stage || "?"}</dd></div>
-          <div><dt className="font-black">Ability region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.abilityNames.join(", ") || "Not recognized"}</dd></div>
-          <div><dt className="font-black">Ability confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.ability || "Unknown"}</dd></div>
-          <div><dt className="font-black">Attack region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.attackNames.join(", ") || "Not recognized"}{reviewSuggestion.technicalDetails.scannerDebug.search?.recognizedFields.attackDamage.length ? ` · ${reviewSuggestion.technicalDetails.scannerDebug.search.recognizedFields.attackDamage.join(", ")}` : ""}</dd></div>
-          <div><dt className="font-black">Attack confidence</dt><dd className="capitalize">{reviewSuggestion.technicalDetails.scannerDebug.search?.fieldConfidence.attack || "Unknown"}</dd></div>
+          <div><dt className="font-black">Parsed top region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.topRegion?.selectedName || "Name unavailable"} · HP {reviewSuggestion.technicalDetails.scannerDebug.topRegion?.selectedHp ?? "?"}</dd></div>
+          <div><dt className="font-black">Top confidence</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.topRegion?.confidence ?? 0}</dd></div>
+          <div><dt className="font-black">Ability region</dt><dd>{reviewSuggestion.aiIdentification?.ability_names.join(", ") || "Not recognized"}</dd></div>
+          <div><dt className="font-black">Ability confidence</dt><dd className="capitalize">{reviewSuggestion.aiIdentification?.field_confidence.ability || "Unknown"}</dd></div>
+          <div><dt className="font-black">Attack region</dt><dd>{reviewSuggestion.aiIdentification?.attack_names.join(", ") || "Not recognized"}{reviewSuggestion.aiIdentification?.attack_damage.length ? ` · ${reviewSuggestion.aiIdentification.attack_damage.join(", ")}` : ""}</dd></div>
+          <div><dt className="font-black">Attack confidence</dt><dd className="capitalize">{reviewSuggestion.aiIdentification?.field_confidence.attack || "Unknown"}</dd></div>
+          <div className="sm:col-span-2"><dt className="font-black">Name catalog validation</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.nameCatalogValidation ? `${reviewSuggestion.technicalDetails.scannerDebug.nameCatalogValidation.status}: ${reviewSuggestion.technicalDetails.scannerDebug.nameCatalogValidation.reason}` : "Not available"}</dd></div>
           <div className="sm:col-span-2"><dt className="font-black">Query</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.queries.map((entry) => entry.query).join(" → ") || "No query sent"}</dd></div>
           <div><dt className="font-black">Candidates returned</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.providerCandidateCount ?? 0}</dd></div>
+          <div><dt className="font-black">Name threshold</dt><dd>{Math.round((reviewSuggestion.technicalDetails.scannerDebug.search?.confidenceThreshold ?? 0) * 100)}%</dd></div>
           <div><dt className="font-black">Fallback used</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.search?.fallbackUsed ? "Yes" : "No"}</dd></div>
           <div><dt className="font-black">Final state</dt><dd>{outcome || "Pending"}</dd></div>
           <div><dt className="font-black">Candidate list shown</dt><dd>{displayedMatches.length}</dd></div>
         </dl>
+        {reviewSuggestion.technicalDetails.scannerDebug.topRegion?.attempts.length ? <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {reviewSuggestion.technicalDetails.scannerDebug.topRegion.attempts.map((attempt, index) => <div key={`${attempt.topRatio}-${index}`} className="rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
+            <p className="font-black">Top crop {index + 1}: {Math.round(attempt.topRatio * 100)}%{attempt.enhanced ? " · enhanced/sharpened" : ""}</p>
+            {attempt.previewDataUrl ? <img src={attempt.previewDataUrl} alt={`Top-region scanner crop ${index + 1}`} className="mt-2 max-h-40 w-full rounded bg-black object-contain" /> : null}
+            <p className="mt-1">{attempt.outputWidth}×{attempt.outputHeight} from {attempt.sourceWidth}×{attempt.sourceHeight}</p>
+            <details className="mt-1"><summary className="cursor-pointer font-black">Raw top response</summary><pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap">{JSON.stringify(attempt.rawResponse ?? null, null, 2)}</pre></details>
+          </div>)}
+        </div> : null}
+        <details className="mt-3 rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
+          <summary className="cursor-pointer font-black">Raw full-region response</summary>
+          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap">{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.visualRecognition?.rawProviderResponse ?? reviewSuggestion.technicalDetails.scannerDebug.visualRecognition?.rawIdentification ?? null, null, 2)}</pre>
+        </details>
         <details className="mt-3 rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
           <summary className="cursor-pointer font-black">Complete pipeline trace</summary>
           <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap">{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug, null, 2)}</pre>

@@ -184,6 +184,80 @@ export async function automaticallyPrepareCard(file: File, signal?: AbortSignal)
   return { file: await cropCardPerspective(normalized, detection.corners, signal), detection, cropped: true };
 }
 
+export type CardTopRegionCrop = {
+  file: File;
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  topRatio: number;
+  enhanced: boolean;
+};
+
+function sharpenImageData(context: CanvasRenderingContext2D, width: number, height: number) {
+  const source = context.getImageData(0, 0, width, height);
+  const output = context.createImageData(width, height);
+  output.data.set(source.data);
+  const input = source.data;
+  const target = output.data;
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const offset = (y * width + x) * 4;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const sharpened = input[offset + channel] * 5
+          - input[offset - width * 4 + channel]
+          - input[offset + width * 4 + channel]
+          - input[offset - 4 + channel]
+          - input[offset + 4 + channel];
+        target[offset + channel] = Math.max(0, Math.min(255, sharpened));
+      }
+    }
+  }
+  context.putImageData(output, 0, 0);
+}
+
+/** Crop only after the source has been perspective-corrected to the physical card. */
+export async function cropCardTopRegion(
+  cardFile: File,
+  topRatio: number,
+  enhanced = false,
+  signal?: AbortSignal,
+): Promise<CardTopRegionCrop> {
+  if (signal?.aborted) throw new DOMException("Card scan cancelled.", "AbortError");
+  const normalized = await normalizeImageOrientation(cardFile);
+  const image = await imageElement(normalized);
+  const ratio = Math.max(0.2, Math.min(0.4, topRatio));
+  const sourceHeight = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const targetWidth = enhanced ? Math.max(1600, image.naturalWidth * 2) : Math.max(1200, image.naturalWidth);
+  const scale = Math.min(enhanced ? 3 : 2.25, targetWidth / image.naturalWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d", { willReadFrequently: enhanced });
+  if (!context) throw new Error("This browser cannot prepare the card-name region.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  if (enhanced) context.filter = "contrast(1.28) saturate(0.82)";
+  context.drawImage(image, 0, 0, image.naturalWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  context.filter = "none";
+  if (enhanced) sharpenImageData(context, canvas.width, canvas.height);
+  const outputWidth = canvas.width;
+  const outputHeight = canvas.height;
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.94));
+  canvas.width = 1;
+  canvas.height = 1;
+  if (!blob) throw new Error("This browser could not create the card-name region.");
+  return {
+    file: new File([blob], `${enhanced ? "enhanced-" : ""}top-${normalized.name || "card.jpg"}`, { type: "image/jpeg", lastModified: Date.now() }),
+    sourceWidth: image.naturalWidth,
+    sourceHeight: image.naturalHeight,
+    outputWidth,
+    outputHeight,
+    topRatio: ratio,
+    enhanced,
+  };
+}
+
 export function terminateCardImageWorker(reason: Error = new DOMException("Card scan cancelled.", "AbortError")) {
   if (idleTimer) window.clearTimeout(idleTimer);
   idleTimer = undefined;

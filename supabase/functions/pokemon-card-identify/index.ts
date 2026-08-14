@@ -3,6 +3,7 @@ import {
   POKEMON_CARD_IDENTIFY_MODEL,
   assessPokemonIdentification,
   normalizePokemonCardIdentification,
+  normalizePokemonTopRegionIdentification,
   stripPokemonCardImagePrefix,
   supportedPokemonCardImageTypes,
   type PokemonCardImageMimeType,
@@ -17,6 +18,7 @@ const corsHeaders = {
 const maxDecodedBytes = 6 * 1024 * 1024;
 const fieldConfidenceInstruction = "Grade card name, HP, stage, ability, attack, attack damage, collector number, set, language, and artwork independently as high, medium, or low. A readable name and uncertain collector number must be high name confidence and low collector-number confidence.";
 const alternatePrompt = "This is a single automatic alternate pass after an unusable first result. Re-evaluate the image independently. Prioritize the prominent printed card title, character artwork, HP area, and bottom collector-number line. Ignore attack names, ability names, rules, sleeve text, labels, and background text. Return null instead of inventing a card name from fragments.";
+const topRegionPrompt = `This image contains only the TOP band of one physical trading card. Read the prominent printed card title and HP value only. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Ignore evolution labels, stage text, attack text, sleeve text, glare, and background. Do not infer an exact printing, set, or collector number. Return cardName as null when the title itself is not readable; never substitute an example or placeholder. Return hp as null when unreadable.`;
 const prompt = `You are a region-aware visual trading-card identification assistant. First estimate the physical Pokémon or One Piece card boundary and ignore the stand, sleeve outside the printed card, table, monitor, hands, and background. Analyze regions relative to that printed card: TOP (name including ex/EX/V/VMAX/VSTAR/GX suffix, HP, stage/subtype), MIDDLE (ability name and one distinctive ability-text fragment), LOWER-MIDDLE (attack names, damage, and distinctive attack-text fragments), and BOTTOM (collector number, set/code, regulation mark). The top printed name is the primary identity signal. Ability and attack names are secondary content fingerprints. A tiny collector number is secondary and must be null/low-confidence when unclear. Do not treat arbitrary body text as a card name. Read only visible evidence; tolerate sleeves, top loaders, glare, slight perspective, rotation, and background clutter. Never provide prices, accounting values, inventory IDs, provider API IDs, or final confirmation. Preserve collector-number leading zeros and distinguish EX, ex, GX, V, VMAX, VSTAR, promo, and older printings. Detect Japanese rather than forcing English. Stop trying to read tiny bottom text when the name, HP, and distinctive ability/attack fingerprint are already clear. If any field is unreadable, return null or an empty list and lower only that field's confidence instead of guessing.`;
 
 // Gemini 3.6 structured output supports nullable primitives through a JSON
@@ -72,6 +74,15 @@ const responseSchema = {
     "visible_text", "artwork_characteristics", "confidence", "field_confidence", "notes",
   ],
 };
+const topRegionResponseSchema = {
+  type: "object",
+  properties: {
+    cardName: nullableString,
+    hp: nullableInteger,
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: ["cardName", "hp", "confidence"],
+};
 
 function json(body: unknown, status = 200, requestId?: string, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
@@ -119,8 +130,10 @@ Deno.serve(async (request) => {
   let imageBase64 = "";
   let mimeType: PokemonCardImageMimeType;
   let recognitionStrategy: "standard" | "alternate" = "standard";
+  let recognitionMode: "full" | "top_name" = "full";
+  let debug = false;
   try {
-    const body = await request.json() as { imageBase64?: unknown; mimeType?: unknown; recognitionStrategy?: unknown };
+    const body = await request.json() as { imageBase64?: unknown; mimeType?: unknown; recognitionStrategy?: unknown; recognitionMode?: unknown; debug?: unknown };
     if (typeof body.imageBase64 !== "string" || !body.imageBase64.trim()) {
       return errorResponse(requestId, "IMAGE_REQUIRED", "A card image is required.", 400);
     }
@@ -129,6 +142,8 @@ Deno.serve(async (request) => {
     }
     mimeType = body.mimeType as PokemonCardImageMimeType;
     recognitionStrategy = body.recognitionStrategy === "alternate" ? "alternate" : "standard";
+    recognitionMode = body.recognitionMode === "top_name" ? "top_name" : "full";
+    debug = body.debug === true;
     imageBase64 = stripPokemonCardImagePrefix(body.imageBase64);
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(imageBase64)) {
       return errorResponse(requestId, "INVALID_IMAGE", "The card image is not valid base64 data.", 400);
@@ -150,10 +165,10 @@ Deno.serve(async (request) => {
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       signal: controller.signal,
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data: imageBase64 } }, { text: `${prompt} ${fieldConfidenceInstruction}${recognitionStrategy === "alternate" ? ` ${alternatePrompt}` : ""}` }] }],
+        contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data: imageBase64 } }, { text: recognitionMode === "top_name" ? topRegionPrompt : `${prompt} ${fieldConfidenceInstruction}${recognitionStrategy === "alternate" ? ` ${alternatePrompt}` : ""}` }] }],
         generationConfig: {
           thinkingConfig: { thinkingLevel: "low" },
-          responseFormat: { text: { mimeType: "application/json", schema: responseSchema } },
+          responseFormat: { text: { mimeType: "application/json", schema: recognitionMode === "top_name" ? topRegionResponseSchema : responseSchema } },
         },
       }),
     });
@@ -186,12 +201,39 @@ Deno.serve(async (request) => {
     }
     const text = responseText(payload);
     if (!text) throw new Error("Gemini returned no structured identification.");
-    const identification = normalizePokemonCardIdentification(JSON.parse(text));
+    console.info("[pokemon-card-identify] raw visual response before parsing", {
+      requestId,
+      recognitionMode,
+      recognitionStrategy,
+      rawResponse: text,
+    });
+    const rawResponse = JSON.parse(text) as unknown;
+    if (recognitionMode === "top_name") {
+      const topIdentification = normalizePokemonTopRegionIdentification(rawResponse);
+      console.info("[pokemon-card-identify] top-region response parsed", {
+        requestId,
+        recognitionStrategy,
+        parsed: topIdentification,
+        latencyMs: Date.now() - startedAt,
+      });
+      return json({
+        success: true,
+        model: POKEMON_CARD_IDENTIFY_MODEL,
+        topIdentification,
+        recognitionMode,
+        recognitionStrategy,
+        ...(debug ? { rawProviderResponse: rawResponse } : {}),
+        latencyMs: Date.now() - startedAt,
+        requestId,
+      }, 200, requestId);
+    }
+    const identification = normalizePokemonCardIdentification(rawResponse);
     const validation = assessPokemonIdentification(identification);
     console.info("[pokemon-card-identify] Gemini request succeeded", {
       requestId,
       model: POKEMON_CARD_IDENTIFY_MODEL,
       recognitionStrategy,
+      recognitionMode,
       latencyMs: Date.now() - startedAt,
       parsed: {
         card_name: identification.card_name,
@@ -227,6 +269,7 @@ Deno.serve(async (request) => {
       validation: { useful: validation.useful, rejectedFields: validation.rejectedFields },
       latencyMs: Date.now() - startedAt,
       requestId,
+      ...(debug ? { rawProviderResponse: rawResponse } : {}),
     }, 200, requestId);
   } catch (error) {
     const timedOut = error instanceof DOMException && error.name === "AbortError";

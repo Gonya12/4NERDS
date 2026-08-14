@@ -11,12 +11,14 @@ import {
   identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
   normalizePokemonCardIdentification,
+  scannerCardNameSimilarity,
   type PokemonCardIdentification,
+  type PokemonTopRegionIdentification,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
-import { compressSaleImage, prepareCardRecognitionImage } from "../images/saleImageService";
+import { compressSaleImage, fileToDataUrl, prepareCardRecognitionImage } from "../images/saleImageService";
 import { normalizeImageOrientationWithInfo, type ImageOrientationInfo } from "../images/imageOrientation";
-import { automaticallyPrepareCard, terminateCardImageWorker, type CropPoint } from "./cardImageProcessor";
+import { automaticallyPrepareCard, cropCardTopRegion, terminateCardImageWorker, type CropPoint } from "./cardImageProcessor";
 import {
   buildNameEvidence,
   buildPokemonApiQueries,
@@ -118,9 +120,27 @@ export type CardScanSuggestion = {
         normalizedDimensions?: { width: number; height: number };
       };
       visualRecognition?: import("./pokemonCardIdentificationService").VisualRecognitionDebug;
+      topRegion?: {
+        source: "detected_card" | "user_crop" | "unavailable";
+        skippedReason?: string;
+        attempts: Array<{
+          topRatio: number;
+          enhanced: boolean;
+          sourceWidth: number;
+          sourceHeight: number;
+          outputWidth: number;
+          outputHeight: number;
+          previewDataUrl?: string;
+          rawResponse?: unknown;
+          parsed: PokemonTopRegionIdentification;
+        }>;
+        selectedName: string | null;
+        selectedHp: number | null;
+        confidence: number;
+      };
       recognitionAttempts?: Array<{
-        strategy: "standard" | "alternate";
-        raw: PokemonCardIdentification;
+        strategy: "full" | "top_name" | "top_name_enhanced";
+        raw: PokemonCardIdentification | PokemonTopRegionIdentification;
         useful: boolean;
         rejectedFields: Array<{ field: string; value: string; reason: string }>;
       }>;
@@ -130,6 +150,11 @@ export type CardScanSuggestion = {
         recognizedCollectorNumber: string | null;
         rejectedFields: Array<{ field: string; value: string; reason: string }>;
         reasons: string[];
+      };
+      nameCatalogValidation?: {
+        name: string | null;
+        status: "valid" | "rejected" | "not_applicable" | "unverified";
+        reason: string;
       };
       search?: import("./pokemonCardIdentificationService").ScannerSearchDebug;
     };
@@ -141,6 +166,7 @@ export type CardScanStage =
   | "Preparing image"
   | "Detecting and cropping card"
   | "Reading card"
+  | "Reading card name and HP"
   | "Validating recognition"
   | "Trying alternate recognition"
   | "Matching with TCG database"
@@ -683,40 +709,134 @@ async function scanPokemonCardWithVisualAi(
 ) {
   options.onStage?.("Reading card");
   const {
+    identifyPokemonCardTopRegion,
     identifyPokemonCardVisually,
     latestScannerSearchDebug,
     matchPokemonIdentification,
+    topRegionRecognitionDebugFor,
     visualRecognitionDebugFor,
   } = await import("./pokemonCardIdentificationService");
   const recognitionAttempts: Array<{
-    strategy: "standard" | "alternate";
-    raw: PokemonCardIdentification;
+    strategy: "full" | "top_name" | "top_name_enhanced";
+    raw: PokemonCardIdentification | PokemonTopRegionIdentification;
     useful: boolean;
     rejectedFields: Array<{ field: string; value: string; reason: string }>;
   }> = [];
-  let rawIdentification = await identifyPokemonCardVisually(preparedFront, options.signal, "standard");
+  const topRegionAttempts: Array<{
+    topRatio: number;
+    enhanced: boolean;
+    sourceWidth: number;
+    sourceHeight: number;
+    outputWidth: number;
+    outputHeight: number;
+    previewDataUrl?: string;
+    rawResponse?: unknown;
+    parsed: PokemonTopRegionIdentification;
+  }> = [];
+  let cardRelativeFront: File | undefined;
+  let topRegionSource: "detected_card" | "user_crop" | "unavailable" = "unavailable";
+  let topRegionSkippedReason: string | undefined;
+  if (options.cardBounds?.cropped) {
+    cardRelativeFront = preparedFront;
+    topRegionSource = "user_crop";
+  } else if (options.cardBounds?.cropped === false) {
+    const detected = await automaticallyPrepareCard(preparedFront, options.signal);
+    if (detected.cropped) {
+      cardRelativeFront = detected.file;
+      topRegionSource = "detected_card";
+    } else {
+      topRegionSkippedReason = "No reliable physical card boundary was available; a phone-photo top strip was not sent as though it were the card top.";
+    }
+  } else {
+    cardRelativeFront = preparedFront;
+    topRegionSource = "detected_card";
+  }
+
+  const fullRecognitionPromise = identifyPokemonCardVisually(preparedFront, options.signal, "standard")
+    .then((value) => ({ value, error: undefined as unknown }))
+    .catch((error: unknown) => ({ value: undefined, error }));
+  let topIdentification: PokemonTopRegionIdentification | undefined;
+  if (cardRelativeFront) {
+    options.onStage?.("Reading card name and HP");
+    const primaryCrop = await cropCardTopRegion(cardRelativeFront, 0.28, false, options.signal);
+    try {
+      topIdentification = await identifyPokemonCardTopRegion(primaryCrop.file, options.signal, "standard");
+      const topAssessment = assessPokemonIdentification(normalizePokemonCardIdentification({
+        card_name: topIdentification.cardName,
+        hp: topIdentification.hp,
+        confidence: topIdentification.confidence,
+        field_confidence: { card_name: identificationConfidenceLabel(topIdentification.confidence), hp: identificationConfidenceLabel(topIdentification.confidence) },
+      }));
+      recognitionAttempts.push({ strategy: "top_name", raw: topIdentification, useful: Boolean(topAssessment.recognizedName), rejectedFields: topAssessment.rejectedFields });
+      topRegionAttempts.push({
+        topRatio: primaryCrop.topRatio,
+        enhanced: false,
+        sourceWidth: primaryCrop.sourceWidth,
+        sourceHeight: primaryCrop.sourceHeight,
+        outputWidth: primaryCrop.outputWidth,
+        outputHeight: primaryCrop.outputHeight,
+        ...(import.meta.env.DEV ? { previewDataUrl: await fileToDataUrl(primaryCrop.file) } : {}),
+        rawResponse: topRegionRecognitionDebugFor(topIdentification)?.rawProviderResponse,
+        parsed: topIdentification,
+      });
+      if (!topAssessment.recognizedName) topIdentification = undefined;
+    } catch (error) {
+      devCardScanLog("primary top-region recognition failed", { message: error instanceof Error ? error.message : String(error) });
+    }
+    if (!topIdentification?.cardName) {
+      options.onStage?.("Trying alternate recognition");
+      const enhancedCrop = await cropCardTopRegion(cardRelativeFront, 0.4, true, options.signal);
+      try {
+        const retryIdentification = await identifyPokemonCardTopRegion(enhancedCrop.file, options.signal, "alternate");
+        const retryAssessment = assessPokemonIdentification(normalizePokemonCardIdentification({
+          card_name: retryIdentification.cardName,
+          hp: retryIdentification.hp,
+          confidence: retryIdentification.confidence,
+          field_confidence: { card_name: identificationConfidenceLabel(retryIdentification.confidence), hp: identificationConfidenceLabel(retryIdentification.confidence) },
+        }));
+        recognitionAttempts.push({ strategy: "top_name_enhanced", raw: retryIdentification, useful: Boolean(retryAssessment.recognizedName), rejectedFields: retryAssessment.rejectedFields });
+        topRegionAttempts.push({
+          topRatio: enhancedCrop.topRatio,
+          enhanced: true,
+          sourceWidth: enhancedCrop.sourceWidth,
+          sourceHeight: enhancedCrop.sourceHeight,
+          outputWidth: enhancedCrop.outputWidth,
+          outputHeight: enhancedCrop.outputHeight,
+          ...(import.meta.env.DEV ? { previewDataUrl: await fileToDataUrl(enhancedCrop.file) } : {}),
+          rawResponse: topRegionRecognitionDebugFor(retryIdentification)?.rawProviderResponse,
+          parsed: retryIdentification,
+        });
+        if (retryAssessment.recognizedName) topIdentification = retryIdentification;
+      } catch (error) {
+        devCardScanLog("enhanced top-region recognition failed", { message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  const fullRecognition = await fullRecognitionPromise;
+  if (!fullRecognition.value) throw fullRecognition.error;
+  const fullIdentification = fullRecognition.value;
+  const topConfidence = topIdentification ? identificationConfidenceLabel(topIdentification.confidence) : undefined;
+  const rawIdentification = normalizePokemonCardIdentification({
+    ...fullIdentification,
+    card_name: topIdentification?.cardName || fullIdentification.card_name,
+    hp: topIdentification?.hp ?? fullIdentification.hp,
+    confidence: Math.max(fullIdentification.confidence, topIdentification?.confidence || 0),
+    field_confidence: {
+      ...fullIdentification.field_confidence,
+      ...(topIdentification?.cardName && topConfidence ? { card_name: topConfidence } : {}),
+      ...(topIdentification?.hp != null && topConfidence ? { hp: topConfidence } : {}),
+    },
+  });
   options.onStage?.("Validating recognition");
   let usefulness = assessPokemonIdentification(rawIdentification);
   recognitionAttempts.push({
-    strategy: "standard",
-    raw: rawIdentification,
+    strategy: "full",
+    raw: fullIdentification,
     useful: usefulness.useful,
     rejectedFields: usefulness.rejectedFields,
   });
-  if (!usefulness.useful) {
-    options.onStage?.("Trying alternate recognition");
-    const alternatePreparation = await automaticallyPrepareCard(preparedFront, options.signal);
-    rawIdentification = await identifyPokemonCardVisually(alternatePreparation.file, options.signal, "alternate");
-    options.onStage?.("Validating recognition");
-    usefulness = assessPokemonIdentification(rawIdentification);
-    recognitionAttempts.push({
-      strategy: "alternate",
-      raw: rawIdentification,
-      useful: usefulness.useful,
-      rejectedFields: usefulness.rejectedFields,
-    });
-  }
-  const identification = usefulness.searchIdentification;
+  let identification = usefulness.searchIdentification;
   devCardScanLog("vision succeeded", {
     extractedName: rawIdentification.card_name || rawIdentification.pokemon_name,
     extractedCollectorNumber: rawIdentification.collector_number,
@@ -762,9 +882,37 @@ async function scanPokemonCardWithVisualAi(
   checkAbort(options.signal);
   const recognitionConfidence = identificationConfidenceLabel(identification.confidence);
   if (usefulness.useful) options.onStage?.("Matching with TCG database");
-  const possibleMatches = usefulness.useful
+  let possibleMatches = usefulness.useful
     ? await matchPokemonIdentification(identification, options.signal)
     : [];
+  let nameCatalogValidation: { name: string | null; status: "valid" | "rejected" | "not_applicable" | "unverified"; reason: string } = {
+    name: usefulness.recognizedName,
+    status: usefulness.recognizedName ? "unverified" : "not_applicable",
+    reason: usefulness.recognizedName ? "The provider response has not established a catalog name match." : "No plausible visual name was available to validate.",
+  };
+  const initialSearchDebug = usefulness.useful ? latestScannerSearchDebug() : undefined;
+  if (usefulness.recognizedName && initialSearchDebug) {
+    const catalogNameMatch = initialSearchDebug.firstTwentyReturned.some((candidate) => scannerCardNameSimilarity(usefulness.recognizedName || "", candidate.name) >= 0.62);
+    const completedNameQuery = initialSearchDebug.queries.some((query) => query.httpStatus === 200 && query.query.toLocaleLowerCase().includes((usefulness.recognizedName || "").toLocaleLowerCase()));
+    if (catalogNameMatch) {
+      nameCatalogValidation = { name: usefulness.recognizedName, status: "valid", reason: "A returned catalog card passed the scanner name-similarity sanity check." };
+    } else if (completedNameQuery) {
+      const rejectedName = usefulness.recognizedName;
+      nameCatalogValidation = { name: rejectedName, status: "rejected", reason: "A successful catalog lookup returned no plausible card with this name." };
+      const withoutRejectedName = normalizePokemonCardIdentification({
+        ...rawIdentification,
+        card_name: null,
+        pokemon_name: null,
+        visible_text: rawIdentification.visible_text.filter((text) => scannerCardNameSimilarity(rejectedName || "", text) < 0.95),
+        field_confidence: { ...rawIdentification.field_confidence, card_name: "low" },
+      });
+      usefulness = assessPokemonIdentification(withoutRejectedName);
+      identification = usefulness.searchIdentification;
+      possibleMatches = usefulness.useful ? await matchPokemonIdentification(identification, options.signal) : [];
+    } else {
+      nameCatalogValidation = { name: usefulness.recognizedName, status: "unverified", reason: "The catalog lookup did not complete successfully, so the readable name was preserved for manual review." };
+    }
+  }
   devCardScanLog("catalog matching complete", {
     candidateSearchQuery: buildPokemonIdentificationSearchAttempts(identification).map((attempt) => ({
       name: attempt.name,
@@ -779,13 +927,18 @@ async function scanPokemonCardWithVisualAi(
   const likelyMatch = isStrongVisualCatalogMatch(identification, possibleMatches) ? possibleMatches[0] : undefined;
   if (likelyMatch) options.onStage?.("Found likely match");
   const detectedLanguage = identification.language === "ja" ? "ja" : "en";
-  const correctedNameCandidate = usefulness.recognizedName;
+  const fingerprintRecoveredName = !usefulness.recognizedName
+    && (identification.ability_names.length || identification.attack_names.length)
+    ? possibleMatches[0]?.name || null
+    : null;
+  const correctedNameCandidate = usefulness.recognizedName || fingerprintRecoveredName;
   const warnings = [...identification.notes];
-  if (recognitionAttempts.length > 1) warnings.push("The first recognition result was not useful, so one alternate visual pass ran automatically.");
+  if (topRegionAttempts.length > 1) warnings.push("The first card-name pass was unreadable, so one enlarged and enhanced top-region pass ran automatically.");
+  if (fingerprintRecoveredName) warnings.push(`The name ${fingerprintRecoveredName} was recovered from ability or attack evidence and still requires user confirmation.`);
   if (usefulness.rejectedFields.length) warnings.push("Unreliable recognized text was excluded before card search.");
   if (identification.confidence < 0.5) warnings.push("AI recognition confidence is low. Confirm the detected text or search manually.");
   if (!possibleMatches.length && usefulness.useful) warnings.push(`No ${detectedLanguage === "ja" ? "TCGdex" : "Pokémon TCG API"} match was found. Search manually with the detected text.`);
-  if (!usefulness.useful) warnings.push("No safe card-name or collector-number query remained after validation. Use manual search or adjust the crop.");
+  if (!usefulness.useful) warnings.push("No safe card name or content fingerprint remained after two name attempts. The collector number is preserved only for review; adjust the crop or search manually.");
   const fieldConfidence = {
     cardName: correctedNameCandidate ? identification.field_confidence.card_name : "low" as const,
     collectorNumber: identification.collector_number ? identification.field_confidence.collector_number : "low" as const,
@@ -806,7 +959,7 @@ async function scanPokemonCardWithVisualAi(
     suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
     cardName: null,
     correctedNameCandidate,
-    correctedNameConfidence: recognitionConfidence,
+    correctedNameConfidence: fingerprintRecoveredName ? "medium" : identification.field_confidence.card_name,
     collectorNumber: identification.collector_number,
     cardSet: identification.set_name_hint || identification.set_code_hint,
     language: detectedLanguage,
@@ -862,7 +1015,15 @@ async function scanPokemonCardWithVisualAi(
             processedMimeType: preparedFront.type,
             orientationCorrection: options.orientationInfo?.rotationApplied || "upright pixels; metadata ignored downstream",
           } : undefined,
-          visualRecognition: visualRecognitionDebugFor(rawIdentification),
+          visualRecognition: visualRecognitionDebugFor(fullIdentification),
+          topRegion: {
+            source: topRegionSource,
+            ...(topRegionSkippedReason ? { skippedReason: topRegionSkippedReason } : {}),
+            attempts: topRegionAttempts,
+            selectedName: topIdentification?.cardName || null,
+            selectedHp: topIdentification?.hp ?? null,
+            confidence: topIdentification?.confidence || 0,
+          },
           recognitionAttempts,
           usefulness: {
             useful: usefulness.useful,
@@ -871,6 +1032,7 @@ async function scanPokemonCardWithVisualAi(
             rejectedFields: usefulness.rejectedFields,
             reasons: usefulness.reasons,
           },
+          nameCatalogValidation,
           search: usefulness.useful ? latestScannerSearchDebug() : undefined,
         },
       } : {}),
@@ -956,9 +1118,9 @@ export async function scanPokemonCard(
   const hash = `${await imageHash(preparedFront)}:${preparedBack ? await imageHash(preparedBack) : ""}`;
   const scanGame = options.game || "pokemon";
   const scanLanguage = scanGame === "pokemon" ? options.language || "en" : "en";
-  // v8 invalidates results produced before EXIF orientation was normalized to
-  // upright pixels ahead of crop, OCR, and visual recognition.
-  const cacheKey = `4nerds_card_scan_v8_${scanGame}_${scanLanguage}_${hash}`;
+  // v9 invalidates results produced before the dedicated card-relative
+  // name/HP pass and collector-only usefulness guard.
+  const cacheKey = `4nerds_card_scan_v9_${scanGame}_${scanLanguage}_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);

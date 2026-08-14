@@ -4,6 +4,11 @@ export const supportedPokemonCardImageTypes = ["image/jpeg", "image/png", "image
 
 export type PokemonCardImageMimeType = typeof supportedPokemonCardImageTypes[number];
 export type IdentificationFieldConfidence = "high" | "medium" | "low";
+export type PokemonTopRegionIdentification = {
+  cardName: string | null;
+  hp: number | null;
+  confidence: number;
+};
 export type PokemonIdentificationFieldConfidence = {
   card_name: IdentificationFieldConfidence;
   collector_number: IdentificationFieldConfidence;
@@ -181,6 +186,16 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
   };
 }
 
+export function normalizePokemonTopRegionIdentification(value: unknown): PokemonTopRegionIdentification {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const confidence = Number(row.confidence);
+  return {
+    cardName: nullableText(row.cardName ?? row.card_name),
+    hp: nullableInteger(row.hp, 0, 9999),
+    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+  };
+}
+
 export function identificationConfidenceLabel(confidence: number) {
   return confidence >= 0.75 ? "high" as const : confidence >= 0.4 ? "medium" as const : "low" as const;
 }
@@ -271,16 +286,18 @@ export function assessPokemonIdentification(value: PokemonCardIdentification): P
     });
   }
 
-  const numberAloneIsUseful = Boolean(recognizedCollectorNumber && value.field_confidence.collector_number === "high");
   const contentFingerprintIsUseful = Boolean(
     (value.ability_names.length && value.field_confidence.ability !== "low")
     || (value.attack_names.length && value.field_confidence.attack !== "low"),
   );
-  const useful = Boolean(recognizedName || numberAloneIsUseful || contentFingerprintIsUseful);
+  // A collector number without a readable card name is not enough to claim a
+  // useful visual identification. Many unrelated cards share the same printed
+  // number, and the scanner must retry the name region before catalog search.
+  const useful = Boolean(recognizedName || contentFingerprintIsUseful);
   if (recognizedName) reasons.push("A plausible card name is available for catalog search.");
-  else if (numberAloneIsUseful) reasons.push("A high-confidence collector number is available for catalog search.");
   else if (contentFingerprintIsUseful) reasons.push("A medium/high-confidence ability or attack name is available as a provider search hint.");
-  else reasons.push("No safe card name or sufficiently reliable collector number is available for catalog search.");
+  else if (recognizedCollectorNumber) reasons.push("A collector number was preserved for review, but a card name is required before automatic catalog search.");
+  else reasons.push("No safe card name or content fingerprint is available for catalog search.");
 
   return {
     useful,
@@ -316,7 +333,9 @@ export function normalizeIdentificationCollectorNumber(value: string | null) {
 }
 
 export function buildPokemonIdentificationSearchAttempts(value: PokemonCardIdentification) {
-  const safeValue = assessPokemonIdentification(value).searchIdentification;
+  const assessment = assessPokemonIdentification(value);
+  if (!assessment.useful) return [];
+  const safeValue = assessment.searchIdentification;
   const cardName = safeValue.card_name || "";
   const pokemonName = safeValue.pokemon_name || "";
   const collectorNumber = normalizeIdentificationCollectorNumber(safeValue.collector_number);
