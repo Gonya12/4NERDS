@@ -66,7 +66,10 @@ function defaultCorners(width: number, height: number) {
 
 async function bitmapFrom(buffer: ArrayBuffer, mimeType: string) {
   const blob = new Blob([buffer], { type: mimeType || "image/jpeg" });
-  return createImageBitmap(blob, { imageOrientation: "from-image" });
+  // Inputs are normalized to upright pixels before they enter this worker.
+  // Ignoring metadata here prevents a second orientation pass in browsers that
+  // retain or synthesize an EXIF flag while transferring the Blob.
+  return createImageBitmap(blob, { imageOrientation: "none" });
 }
 
 async function detect(buffer: ArrayBuffer, mimeType: string) {
@@ -277,4 +280,3 @@ workerScope.onmessage = async (event: MessageEvent<RequestMessage>) => {
     workerScope.postMessage({ id: request.id, ok: false, error: error instanceof Error ? error.message : "Image processing failed." });
   }
 };
-

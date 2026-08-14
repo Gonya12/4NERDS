@@ -1,3 +1,5 @@
+import { normalizeImageOrientation } from "../images/imageOrientation";
+
 export type CropPoint = { x: number; y: number };
 export type CardFrameDetection = {
   width: number;
@@ -121,6 +123,15 @@ async function fallbackCrop(file: File, corners: CropPoint[], signal?: AbortSign
     canvas.height,
   );
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if (import.meta.env.DEV) console.info("[Card crop]", {
+    method: "canvas fallback",
+    sourceWidth: image.naturalWidth,
+    sourceHeight: image.naturalHeight,
+    cropWidth: sourceWidth,
+    cropHeight: sourceHeight,
+    outputWidth: canvas.width,
+    outputHeight: canvas.height,
+  });
   canvas.width = 1;
   canvas.height = 1;
   if (!blob) throw new Error("This browser could not create the crop. Use the full image instead.");
@@ -128,11 +139,12 @@ async function fallbackCrop(file: File, corners: CropPoint[], signal?: AbortSign
 }
 
 export async function detectCardFrame(file: File, signal?: AbortSignal) {
+  const normalized = await normalizeImageOrientation(file);
   try {
-    return await runWorker("detect", file, signal) as CardFrameDetection;
+    return await runWorker("detect", normalized, signal) as CardFrameDetection;
   } catch (error) {
     if (signal?.aborted) throw error;
-    const image = await imageElement(file);
+    const image = await imageElement(normalized);
     return {
       width: image.naturalWidth,
       height: image.naturalHeight,
@@ -144,24 +156,32 @@ export async function detectCardFrame(file: File, signal?: AbortSignal) {
 }
 
 export async function cropCardPerspective(file: File, corners: CropPoint[], signal?: AbortSignal) {
+  const normalized = await normalizeImageOrientation(file);
   try {
-    const result = await runWorker("crop", file, signal, corners) as { buffer: ArrayBuffer; width: number; height: number };
-    return new File([result.buffer], `cropped-${file.name.replace(/^compressed-/, "") || "card.jpg"}`, {
+    const result = await runWorker("crop", normalized, signal, corners) as { buffer: ArrayBuffer; width: number; height: number };
+    if (import.meta.env.DEV) console.info("[Card crop]", {
+      method: "perspective worker",
+      cropCoordinates: corners,
+      outputWidth: result.width,
+      outputHeight: result.height,
+    });
+    return new File([result.buffer], `cropped-${normalized.name.replace(/^compressed-/, "") || "card.jpg"}`, {
       type: "image/jpeg",
       lastModified: Date.now(),
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    return fallbackCrop(file, corners, signal);
+    return fallbackCrop(normalized, corners, signal);
   }
 }
 
 export async function automaticallyPrepareCard(file: File, signal?: AbortSignal) {
-  const detection = await detectCardFrame(file, signal);
+  const normalized = await normalizeImageOrientation(file);
+  const detection = await detectCardFrame(normalized, signal);
   if (detection.confidence < 0.48) {
-    return { file, detection, cropped: false };
+    return { file: normalized, detection, cropped: false };
   }
-  return { file: await cropCardPerspective(file, detection.corners, signal), detection, cropped: true };
+  return { file: await cropCardPerspective(normalized, detection.corners, signal), detection, cropped: true };
 }
 
 export function terminateCardImageWorker(reason: Error = new DOMException("Card scan cancelled.", "AbortError")) {

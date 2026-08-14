@@ -367,7 +367,7 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v7_/);
+  assert.match(scanService, /4nerds_card_scan_v8_/);
   assert.match(scanService, /Trying alternate recognition/);
   assert.match(scanService, /assessPokemonIdentification/);
 });
@@ -384,8 +384,9 @@ test("recognition preprocessing preserves crop detail and avoids double JPEG los
   const imageService = readFileSync(new URL("../src/services/images/saleImageService.ts", import.meta.url), "utf8");
   const processor = readFileSync(new URL("../src/services/sales/cardImageProcessor.ts", import.meta.url), "utf8");
   assert.match(imageService, /prepareCardRecognitionImage/);
-  assert.match(imageService, /file\.name\.startsWith\("cropped-"\)/);
+  assert.match(imageService, /normalized\.name\.startsWith\("cropped-"\)/);
   assert.match(imageService, /maxLongEdge: 2000, quality: 0\.92/);
-  assert.match(imageService, /imageOrientation: "from-image"/);
+  assert.match(imageService, /normalizeImageOrientation/);
+  assert.match(imageService, /imageOrientation: "none"/);
   assert.match(processor, /maxLongEdge: 1800/);
 });

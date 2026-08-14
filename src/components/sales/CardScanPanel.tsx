@@ -5,6 +5,7 @@ import type { CropPoint } from "../../services/sales/cardImageProcessor";
 import type { CardMatch, CardScanStage, CardScanSuggestion } from "../../services/sales/cardScanService";
 import { cardProviderLabel } from "../../services/sales/pokemonCardSearchService";
 import type { CardGame, CardLanguage } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
+import { normalizeImageOrientation } from "../../services/images/imageOrientation";
 import { ManualCardSearch } from "./ManualCardSearch";
 import { TcgplayerPricingPanel } from "./TcgplayerPricingPanel";
 
@@ -109,8 +110,10 @@ function CornerCropEditor({
   </div>;
 }
 
-export function CardScanPanel({ imageFile, backImageFile, category, inventory, initialGame = "pokemon", initialLanguage = "en", onApply, onRetakePhoto }: Props) {
-  const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">(imageFile && initialGame !== "other" ? "analyzing" : "crop");
+export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputBackImageFile, category, inventory, initialGame = "pokemon", initialLanguage = "en", onApply, onRetakePhoto }: Props) {
+  const [imageFile, setNormalizedImageFile] = useState<File>();
+  const [backImageFile, setNormalizedBackImageFile] = useState<File>();
+  const [status, setStatus] = useState<"crop" | "analyzing" | "review" | "failed">(inputImageFile && initialGame !== "other" ? "analyzing" : "crop");
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState<CardScanStage>("Preparing image");
   const [hash, setHash] = useState("");
@@ -140,6 +143,32 @@ export function CardScanPanel({ imageFile, backImageFile, category, inventory, i
   const controllerRef = useRef<AbortController | null>(null);
   const recognizedEditTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const orientationRunRef = useRef(0);
+
+  useEffect(() => {
+    const run = ++orientationRunRef.current;
+    setNormalizedImageFile(undefined);
+    if (!inputImageFile) return;
+    setStatus(initialGame === "other" ? "crop" : "analyzing");
+    setStage("Preparing image");
+    setMessage("Correcting the photo orientation before preview and recognition.");
+    void normalizeImageOrientation(inputImageFile)
+      .then((normalized) => { if (run === orientationRunRef.current) setNormalizedImageFile(normalized); })
+      .catch((error) => {
+        if (run !== orientationRunRef.current) return;
+        setStatus("failed");
+        setMessage(error instanceof Error ? error.message : "The card image orientation could not be prepared.");
+      });
+  }, [inputImageFile, initialGame]);
+
+  useEffect(() => {
+    const run = orientationRunRef.current;
+    setNormalizedBackImageFile(undefined);
+    if (!inputBackImageFile) return;
+    void normalizeImageOrientation(inputBackImageFile)
+      .then((normalized) => { if (run === orientationRunRef.current) setNormalizedBackImageFile(normalized); })
+      .catch(() => { if (run === orientationRunRef.current) setNormalizedBackImageFile(undefined); });
+  }, [inputBackImageFile]);
 
   useEffect(() => {
     setCardGame(initialGame);

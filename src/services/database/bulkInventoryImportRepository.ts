@@ -3,6 +3,7 @@ import type { CardMatch } from "../sales/cardScanService";
 import { conditionAdjustedMarket } from "../../utils/dealBuilder";
 import { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
 import { compressSaleImage } from "../images/saleImageService";
+import { normalizeImageOrientation } from "../images/imageOrientation";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
 
@@ -155,7 +156,7 @@ async function fileHash(file: File) {
 }
 
 async function thumbnailFile(file: File) {
-  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const bitmap = await createImageBitmap(file, { imageOrientation: "none" });
   try {
     const scale = Math.min(1, 360 / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
@@ -189,8 +190,9 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
   if (![/^image\/jpeg$/i, /^image\/png$/i, /^image\/webp$/i].some((pattern) => pattern.test(file.type))) {
     throw new Error(`${file.name}: use JPEG, PNG, or WebP.`);
   }
+  const normalized = await normalizeImageOrientation(file);
   const itemId = crypto.randomUUID();
-  const [hash, compressed, thumbnail] = await Promise.all([fileHash(file), compressSaleImage(file), thumbnailFile(file)]);
+  const [hash, compressed, thumbnail] = await Promise.all([fileHash(normalized), compressSaleImage(normalized), thumbnailFile(normalized)]);
   const sourcePath = `${job.id}/source/${itemId}.jpg`;
   const thumbnailPath = `${job.id}/thumbnails/${itemId}.jpg`;
   const sourceUpload = await client.storage.from("bulk-inventory-imports").upload(sourcePath, compressed, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });

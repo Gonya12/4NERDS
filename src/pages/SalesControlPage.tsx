@@ -475,6 +475,20 @@ export function SalesControlPage() {
     }
   }
 
+  async function pickBackFile(file?: File) {
+    if (!file) return;
+    setImageStatus("Correcting back image orientation...");
+    try {
+      const normalized = await compressSaleImage(file);
+      if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl);
+      setBackImageFile(normalized);
+      setBackPreviewUrl(URL.createObjectURL(normalized));
+      setImageStatus("Front and back images are upright and ready to scan.");
+    } catch (error) {
+      setImageStatus(error instanceof Error ? error.message : "Could not prepare the back image.");
+    }
+  }
+
   function useProcessedScanFile(file?: File) {
     if (!file) return;
     if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
@@ -1374,7 +1388,7 @@ export function SalesControlPage() {
               <input value={purchaseForm.cardLanguage} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardLanguage: event.target.value })} placeholder="Language" className={compactInputClass()} />
               <select value={purchaseForm.cardCondition} onChange={(event) => setPurchaseForm({ ...purchaseForm, cardCondition: event.target.value })} className={compactInputClass()}><option value="">Condition unknown</option>{["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"].map((condition) => <option key={condition}>{condition}</option>)}</select>
               {moneyInput(purchaseForm.stickerPrice, (value) => setPurchaseForm({ ...purchaseForm, stickerPrice: value }), "Sticker / asking price")}
-              {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (backPreviewUrl.startsWith("blob:")) URL.revokeObjectURL(backPreviewUrl); setBackImageFile(file); setBackPreviewUrl(URL.createObjectURL(file)); }} /></label></> : null}
+              {purchaseForm.category === "graded_card" ? <><input value={purchaseForm.gradingCompany} onChange={(event) => setPurchaseForm({ ...purchaseForm, gradingCompany: event.target.value })} placeholder="Grading company" className={compactInputClass()} /><input value={purchaseForm.grade} onChange={(event) => setPurchaseForm({ ...purchaseForm, grade: event.target.value })} placeholder="Grade" className={compactInputClass()} /><input value={purchaseForm.certificateNumber} onChange={(event) => setPurchaseForm({ ...purchaseForm, certificateNumber: event.target.value })} placeholder="Certificate number" className={compactInputClass()} /><label className="sm:col-span-3 rounded-xl border-2 border-dashed border-slate-300 p-3 text-sm font-black dark:border-slate-700">{backPreviewUrl ? <img src={backPreviewUrl} alt="Slab back preview" className="mb-2 h-40 w-full object-contain" /> : null}Back image for slab <span className="font-normal text-slate-500">(recommended)</span><input type="file" accept="image/png,image/jpeg,image/webp" className="mt-2 block w-full text-xs" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void pickBackFile(file); }} /></label></> : null}
               {purchaseForm.providerCardId || purchaseForm.pokemonTcgCardId || purchaseForm.marketPriceSource ? <p className="sm:col-span-3 text-xs text-slate-500">
                 {purchaseForm.cardRarity ? `${purchaseForm.cardRarity} · ` : ""}{purchaseForm.cardSetCode ? `Set ${purchaseForm.cardSetCode} · ` : ""}
                 {purchaseForm.cardGame ? `${purchaseForm.cardGame === "one_piece" ? "One Piece" : purchaseForm.cardGame === "pokemon" ? "Pokémon" : "Other"} · ` : ""}

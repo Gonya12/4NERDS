@@ -8,6 +8,7 @@ import {
   isTransactionImageMetadataError,
   type ImageUploadStage
 } from "../../services/images/saleImageService";
+import { normalizeImageOrientation } from "../../services/images/imageOrientation";
 import type { TransactionImageAttachment, TransactionImageType } from "../../types/models";
 import { fitImagesWithinLimit } from "../../utils/transactionImages";
 import { ImageLightbox } from "./ImageLightbox";
@@ -215,7 +216,14 @@ export function ImageAttachmentField({
       ? `${accepted.length} image${accepted.length === 1 ? " was" : "s were"} accepted. ${selection.skippedCount} image${selection.skippedCount === 1 ? " was" : "s were"} skipped because only ${accepted.length} space${accepted.length === 1 ? " was" : "s were"} available.`
       : "";
     setMessage(selectionMessage);
-    for (const file of accepted) await uploadFile(file, targetId, undefined, undefined, true);
+    for (const file of accepted) {
+      try {
+        const normalized = await normalizeImageOrientation(file);
+        await uploadFile(normalized, targetId, undefined, undefined, true);
+      } catch (error) {
+        setMessage(`${file.name || "That image"} could not be prepared upright. ${error instanceof Error ? error.message : "Try another image."}`);
+      }
+    }
   }
 
   function chooseReplacement(id: string) {
@@ -248,7 +256,8 @@ export function ImageAttachmentField({
       const response = await fetch(reusableAttachment.imageUrl);
       if (!response.ok) throw new Error("The shared photo could not be loaded for cropping.");
       const source = await response.blob();
-      bitmap = await createImageBitmap(source, { imageOrientation: "from-image" });
+      const normalized = await normalizeImageOrientation(new File([source], `shared-photo-${Date.now()}`, { type: source.type || "image/jpeg" }));
+      bitmap = await createImageBitmap(normalized, { imageOrientation: "none" });
       const cropSize = Math.max(1, Math.min(bitmap.width, bitmap.height) / cropZoom);
       const sourceX = Math.max(0, Math.min(bitmap.width - cropSize, bitmap.width * cropX / 100 - cropSize / 2));
       const sourceY = Math.max(0, Math.min(bitmap.height - cropSize, bitmap.height * cropY / 100 - cropSize / 2));

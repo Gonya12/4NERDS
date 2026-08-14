@@ -1,6 +1,7 @@
 import { isSupabaseConfigured, supabase } from "../../utils/supabase";
 import type { TransactionImageAttachment, TransactionImageType } from "../../types/models";
 import { buildTransactionImagePayload } from "../database/databasePayloads";
+import { normalizeImageOrientation } from "./imageOrientation";
 
 const bucketName = "sale-images";
 const supportedTypes = ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"];
@@ -23,18 +24,20 @@ function extensionFor(file: File) {
   return "jpg";
 }
 
-export function fileToDataUrl(file: File) {
+export async function fileToDataUrl(file: File) {
+  const normalized = await normalizeImageOrientation(file);
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
     reader.onerror = () => reject(new Error("Could not read image file."));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(normalized);
   });
 }
 
 async function resizeImage(file: File, options: { maxLongEdge: number; quality: number; prefix: string }) {
   if (!isSupportedSaleImage(file)) throw new Error("Please use a JPG, JPEG, PNG, WebP, HEIC, or HEIF image.");
-  const imageUrl = URL.createObjectURL(file);
+  const normalized = await normalizeImageOrientation(file);
+  const imageUrl = URL.createObjectURL(normalized);
   let bitmap: ImageBitmap | undefined;
   try {
     let source: CanvasImageSource;
@@ -42,7 +45,7 @@ async function resizeImage(file: File, options: { maxLongEdge: number; quality: 
     let sourceHeight: number;
     if ("createImageBitmap" in window) {
       try {
-        bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+        bitmap = await createImageBitmap(normalized, { imageOrientation: "none" });
       } catch {
         bitmap = undefined;
       }
@@ -72,7 +75,7 @@ async function resizeImage(file: File, options: { maxLongEdge: number; quality: 
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not compress image.")), "image/jpeg", options.quality);
     });
-    return new File([blob], `${options.prefix}-${file.name || "financial-image"}.jpg`, { type: "image/jpeg" });
+    return new File([blob], `${options.prefix}-${normalized.name || "financial-image"}.jpg`, { type: "image/jpeg" });
   } finally {
     bitmap?.close();
     URL.revokeObjectURL(imageUrl);
@@ -80,17 +83,19 @@ async function resizeImage(file: File, options: { maxLongEdge: number; quality: 
 }
 
 export async function compressSaleImage(file: File) {
-  if (file.name.startsWith("compressed-")) return file;
-  return resizeImage(file, { maxLongEdge: 1800, quality: 0.84, prefix: "compressed" });
+  const normalized = await normalizeImageOrientation(file);
+  if (normalized.name.startsWith("compressed-")) return normalized;
+  return resizeImage(normalized, { maxLongEdge: 1800, quality: 0.84, prefix: "compressed" });
 }
 
 export async function prepareCardRecognitionImage(file: File) {
   if (!isSupportedSaleImage(file)) throw new Error("Please use a JPG, JPEG, PNG, or WebP card image.");
+  const normalized = await normalizeImageOrientation(file);
   // The crop worker already corrects perspective at high JPEG quality. Avoid a
   // second lossy encode that can erase tiny collector numbers.
-  if (file.type === "image/jpeg" && file.name.startsWith("cropped-") && file.size <= 6 * 1024 * 1024) return file;
-  if (file.name.startsWith("recognition-")) return file;
-  return resizeImage(file, { maxLongEdge: 2000, quality: 0.92, prefix: "recognition" });
+  if (normalized.type === "image/jpeg" && normalized.name.startsWith("cropped-") && normalized.size <= 6 * 1024 * 1024) return normalized;
+  if (normalized.name.startsWith("recognition-")) return normalized;
+  return resizeImage(normalized, { maxLongEdge: 2000, quality: 0.92, prefix: "recognition" });
 }
 
 export async function uploadSaleImage(file: File, saleId: string) {

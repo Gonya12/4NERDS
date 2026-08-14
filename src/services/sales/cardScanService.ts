@@ -15,6 +15,7 @@ import {
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { compressSaleImage, prepareCardRecognitionImage } from "../images/saleImageService";
+import { normalizeImageOrientationWithInfo, type ImageOrientationInfo } from "../images/imageOrientation";
 import { automaticallyPrepareCard, terminateCardImageWorker, type CropPoint } from "./cardImageProcessor";
 import {
   buildNameEvidence,
@@ -113,6 +114,8 @@ export type CardScanSuggestion = {
         processedFileSize?: number;
         processedMimeType?: string;
         orientationCorrection: string;
+        exifOrientation?: number | null;
+        normalizedDimensions?: { width: number; height: number };
       };
       visualRecognition?: import("./pokemonCardIdentificationService").VisualRecognitionDebug;
       recognitionAttempts?: Array<{
@@ -171,7 +174,11 @@ type ScanOptions = {
     processedDimensions?: { width: number; height: number };
     processedFileSize?: number;
     processedMimeType?: string;
+    exifOrientation?: number | null;
+    normalizedDimensions?: { width: number; height: number };
+    rotationApplied?: string;
   };
+  orientationInfo?: ImageOrientationInfo;
 };
 
 let workerPromise: Promise<Worker> | null = null;
@@ -853,7 +860,7 @@ async function scanPokemonCardWithVisualAi(
             ...options.inputDebug,
             processedFileSize: preparedFront.size,
             processedMimeType: preparedFront.type,
-            orientationCorrection: "createImageBitmap imageOrientation=from-image",
+            orientationCorrection: options.orientationInfo?.rotationApplied || "upright pixels; metadata ignored downstream",
           } : undefined,
           visualRecognition: visualRecognitionDebugFor(rawIdentification),
           recognitionAttempts,
@@ -898,8 +905,30 @@ export async function scanPokemonCard(
     options.onStage?.(name);
   };
   stage("Preparing image");
-  const preparedFront = await prepareCardRecognitionImage(front);
-  const preparedBack = back ? await compressSaleImage(back) : undefined;
+  const [normalizedFront, normalizedBack] = await Promise.all([
+    normalizeImageOrientationWithInfo(front),
+    back ? normalizeImageOrientationWithInfo(back) : Promise.resolve(undefined),
+  ]);
+  options = {
+    ...options,
+    orientationInfo: normalizedFront.info,
+    inputDebug: {
+      originalDimensions: options.inputDebug?.originalDimensions || (normalizedFront.info.originalWidth && normalizedFront.info.originalHeight
+        ? { width: normalizedFront.info.originalWidth, height: normalizedFront.info.originalHeight }
+        : undefined),
+      originalFileSize: options.inputDebug?.originalFileSize ?? front.size,
+      originalMimeType: options.inputDebug?.originalMimeType || front.type,
+      cropCoordinates: options.inputDebug?.cropCoordinates || null,
+      ...options.inputDebug,
+      exifOrientation: normalizedFront.info.exifOrientation,
+      normalizedDimensions: normalizedFront.info.normalizedWidth && normalizedFront.info.normalizedHeight
+        ? { width: normalizedFront.info.normalizedWidth, height: normalizedFront.info.normalizedHeight }
+        : undefined,
+      rotationApplied: normalizedFront.info.rotationApplied,
+    },
+  };
+  const preparedFront = await prepareCardRecognitionImage(normalizedFront.file);
+  const preparedBack = normalizedBack ? await compressSaleImage(normalizedBack.file) : undefined;
   let processedDimensions: { width: number; height: number } | undefined;
   if (import.meta.env.DEV) {
     const processedImage = await imageElement(preparedFront);
@@ -913,7 +942,9 @@ export async function scanPokemonCard(
       processedWidth: processedImage.naturalWidth,
       processedHeight: processedImage.naturalHeight,
       mimeType: preparedFront.type,
-      orientationCorrection: "createImageBitmap imageOrientation=from-image",
+      exifOrientation: normalizedFront.info.exifOrientation,
+      normalizedDimensions: options.inputDebug?.normalizedDimensions,
+      orientationCorrection: normalizedFront.info.rotationApplied,
     });
   }
   if (import.meta.env.DEV && options.inputDebug) options.inputDebug = {
@@ -925,9 +956,9 @@ export async function scanPokemonCard(
   const hash = `${await imageHash(preparedFront)}:${preparedBack ? await imageHash(preparedBack) : ""}`;
   const scanGame = options.game || "pokemon";
   const scanLanguage = scanGame === "pokemon" ? options.language || "en" : "en";
-  // v7 invalidates suggestions produced before region fingerprints and
-  // provider ability/attack ranking were available.
-  const cacheKey = `4nerds_card_scan_v7_${scanGame}_${scanLanguage}_${hash}`;
+  // v8 invalidates results produced before EXIF orientation was normalized to
+  // upright pixels ahead of crop, OCR, and visual recognition.
+  const cacheKey = `4nerds_card_scan_v8_${scanGame}_${scanLanguage}_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);

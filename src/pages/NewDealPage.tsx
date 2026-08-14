@@ -21,6 +21,7 @@ import { transactionTypeDeveloperDebug } from "../services/database/financialTra
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
 import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
+import { normalizeImageOrientation } from "../services/images/imageOrientation";
 import type {
   CardCondition, CardGame, CardLanguage, Event, InventoryPurchase, OwnershipShare, PokemonProductCategory,
   SalePaymentMethod, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType,
@@ -250,35 +251,58 @@ export function NewDealPage() {
     return item;
   }
 
-  function beginScan(side: DealSide, file?: File) {
-    addBlankItem(side);
-    setScanFile(file);
+  async function beginScan(side: DealSide, file?: File) {
+    if (!file) {
+      addBlankItem(side);
+      setScanFile(undefined);
+      return;
+    }
+    try {
+      const normalized = await normalizeImageOrientation(file);
+      addBlankItem(side);
+      setScanFile(normalized);
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : "The card photo could not be prepared upright.", tone: "error" });
+    }
   }
 
-  function enqueueScanFiles(side: DealSide, files: FileList | File[]) {
+  async function enqueueScanFiles(side: DealSide, files: FileList | File[]) {
     const selected = appendBulkScanSelection(scanQueueRef.current, files);
     if (!selected.length) return;
     const startOrder = scanQueueRef.current.length;
-    const rows = selected.map((selection, index): DealScanQueueItem => {
-      const item = createBlankItem(side);
-      return {
-        id: crypto.randomUUID(),
-        itemId: item.id,
-        file: selection.file,
-        previewUrl: URL.createObjectURL(selection.file),
-        filename: selection.file.name || `card-${startOrder + index + 1}`,
-        uploadOrder: startOrder + index,
-        direction: side,
-        signature: selection.signature,
-        possibleDuplicate: selection.possibleDuplicate,
-        status: "waiting",
-        stage: "Waiting",
-      };
-    });
+    const rows: DealScanQueueItem[] = [];
+    let failed = 0;
+    for (let offset = 0; offset < selected.length; offset += 3) {
+      const batch = selected.slice(offset, offset + 3);
+      const normalized = await Promise.allSettled(batch.map((selection) => normalizeImageOrientation(selection.file)));
+      normalized.forEach((result, batchIndex) => {
+        const selection = batch[batchIndex];
+        if (result.status === "rejected") { failed += 1; return; }
+        const index = offset + batchIndex;
+        const item = createBlankItem(side);
+        rows.push({
+          id: crypto.randomUUID(),
+          itemId: item.id,
+          file: result.value,
+          previewUrl: URL.createObjectURL(result.value),
+          filename: selection.file.name || `card-${startOrder + index + 1}`,
+          uploadOrder: startOrder + index,
+          direction: side,
+          signature: selection.signature,
+          possibleDuplicate: selection.possibleDuplicate,
+          status: "waiting",
+          stage: "Waiting",
+        });
+      });
+    }
+    if (!rows.length) {
+      setToast({ message: "The selected photos could not be prepared upright.", tone: "error" });
+      return;
+    }
     replaceScanQueue((current) => [...current, ...rows]);
     setSelectedSide(side);
     setScanQueueOpen(true);
-    setToast({ message: `${rows.length} photo${rows.length === 1 ? "" : "s"} selected and added to the scan queue.`, tone: "info" });
+    setToast({ message: `${rows.length} photo${rows.length === 1 ? "" : "s"} normalized and added to the scan queue.${failed ? ` ${failed} could not be prepared.` : ""}`, tone: failed ? "warning" : "info" });
   }
 
   async function processScanQueue() {
