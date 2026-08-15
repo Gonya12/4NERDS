@@ -10,6 +10,8 @@ export type PokemonTopRegionIdentification = {
   cardName: string | null;
   hp: number | null;
   confidence: number;
+  cardNameConfidence: number;
+  hpConfidence: number;
 };
 export type PokemonIdentificationFieldConfidence = {
   card_name: IdentificationFieldConfidence;
@@ -190,12 +192,42 @@ export function normalizePokemonCardIdentification(value: unknown): PokemonCardI
 
 export function normalizePokemonTopRegionIdentification(value: unknown): PokemonTopRegionIdentification {
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const confidence = Number(row.confidence);
+  const cardNameConfidence = Number(row.cardNameConfidence ?? row.card_name_confidence ?? row.confidence);
+  const hpConfidence = Number(row.hpConfidence ?? row.hp_confidence ?? row.confidence);
+  const confidence = Number(row.confidence ?? Math.max(cardNameConfidence || 0, hpConfidence || 0));
   return {
     cardName: nullableText(row.cardName ?? row.card_name),
     hp: nullableInteger(row.hp, 0, 9999),
     confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+    cardNameConfidence: Number.isFinite(cardNameConfidence) ? Math.max(0, Math.min(1, cardNameConfidence)) : 0,
+    hpConfidence: Number.isFinite(hpConfidence) ? Math.max(0, Math.min(1, hpConfidence)) : 0,
   };
+}
+
+/** Combines independent OCR regions without involving catalog search or ranking. */
+export function mergePokemonRecognition(
+  fullCard: PokemonCardIdentification,
+  topRegion: PokemonTopRegionIdentification | null,
+): PokemonCardIdentification {
+  if (!topRegion) return fullCard;
+  const useTopName = Boolean(topRegion.cardName) && (
+    !fullCard.card_name || topRegion.cardNameConfidence >= 0.4
+  );
+  const useTopHp = topRegion.hp != null && (
+    fullCard.hp == null || topRegion.hpConfidence >= 0.4
+  );
+  return normalizePokemonCardIdentification({
+    ...fullCard,
+    card_name: useTopName ? topRegion.cardName : fullCard.card_name,
+    pokemon_name: useTopName ? topRegion.cardName : fullCard.pokemon_name,
+    hp: useTopHp ? topRegion.hp : fullCard.hp,
+    confidence: Math.max(fullCard.confidence, useTopName ? topRegion.cardNameConfidence : 0),
+    field_confidence: {
+      ...fullCard.field_confidence,
+      card_name: useTopName ? identificationConfidenceLabel(topRegion.cardNameConfidence) : fullCard.field_confidence.card_name,
+      hp: useTopHp ? identificationConfidenceLabel(topRegion.hpConfidence) : fullCard.field_confidence.hp,
+    },
+  });
 }
 
 export function identificationConfidenceLabel(confidence: number) {

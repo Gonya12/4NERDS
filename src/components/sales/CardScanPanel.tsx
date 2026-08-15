@@ -309,7 +309,9 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       setHash(result.hash);
       setStatus("review");
       const matchCount = scanSuggestion.possibleMatches?.length || 0;
-      const recognizedSomething = Boolean(
+      const recognizedSomething = rawPokemonFlow ? Boolean(
+        scanSuggestion.cardName || scanSuggestion.correctedNameCandidate
+      ) : Boolean(
         scanSuggestion.cardName
         || scanSuggestion.correctedNameCandidate
         || scanSuggestion.collectorNumber
@@ -387,8 +389,8 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
   } = {}) {
     const name = (overrides.name ?? recognizedName).trim();
     const collectorNumber = (overrides.collectorNumber ?? recognizedCollectorNumber).trim();
-    if (!name && !collectorNumber) {
-      setRecognizedSearchError("Enter a card name or collector number first.");
+    if ((rawPokemonFlow && !name) || (!name && !collectorNumber)) {
+      setRecognizedSearchError(rawPokemonFlow ? "Enter the card name before searching. The collector number is ignored until a name is available." : "Enter a card name or collector number first.");
       return;
     }
     controllerRef.current?.abort();
@@ -484,6 +486,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
   const recognizedNameConfidence = recognizedNameEdited ? "high" : reviewSuggestion?.fieldConfidence?.cardName || "low";
   const recognizedCollectorConfidence = recognizedCollectorEdited ? "high" : reviewSuggestion?.fieldConfidence?.collectorNumber || "low";
   const recognizedSummary = [recognizedName, recognizedCollectorNumber ? `#${recognizedCollectorNumber.replace(/^#/, "")}` : ""].filter(Boolean).join(" • ");
+  const safeRecognizedSummary = recognizedName ? recognizedSummary : "";
   const edit = (key: keyof CardScanSuggestion, value: string | number | null) => {
     if (resolvedCard) {
       setResolvedCard({ ...resolvedCard, suggestion: { ...resolvedCard.suggestion, [key]: value } });
@@ -619,7 +622,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       {!resolvedCard && hasUsefulSuggestion && (!displayedMatches.length || recognizedNameConfidence === "low" || recognizedCollectorConfidence === "low") ? <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
         <div>
           <p className="font-black text-amber-950 dark:text-amber-100">{displayedMatches.length ? "Review uncertain recognized information." : "We couldn't determine the exact printing."}</p>
-          {recognizedSummary ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Recognized:</span> {recognizedSummary}</p> : null}
+          {safeRecognizedSummary ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Recognized:</span> {safeRecognizedSummary}</p> : <p className="mt-1 text-sm font-black text-amber-900 dark:text-amber-100">Could not read card name.</p>}
           <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
             {[reviewSuggestion.cardSet, reviewSuggestion.aiIdentification?.hp ? `${reviewSuggestion.aiIdentification.hp} HP` : "", reviewSuggestion.cardGame, reviewSuggestion.language].filter(Boolean).join(" • ")}
           </p>
@@ -645,7 +648,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
           </label>
         </div>
         {recognizedSearchError ? <p role="alert" className="text-xs font-bold text-rose-700 dark:text-rose-300">{recognizedSearchError}</p> : null}
-        <button type="button" disabled={searching} onClick={() => void searchRecognizedMatches()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 text-sm font-black text-white disabled:opacity-40">{searching ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />} Update Matches</button>
+        <button type="button" disabled={searching || (rawPokemonFlow && !recognizedName.trim())} onClick={() => void searchRecognizedMatches()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 text-sm font-black text-white disabled:opacity-40">{searching ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />} Update Matches</button>
         <div className="grid gap-2 sm:grid-cols-3">
           <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-10 rounded-xl bg-slate-900 px-3 text-xs font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
           <button type="button" onClick={() => void scan(true, false)} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">{rawPokemonFlow ? "Retry AI Recognition" : "Try Again"}</button>
@@ -693,6 +696,19 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       {reviewSuggestion.warnings.filter((warning) => !resolvedCard || !/no pokémon tcg api match|market price unavailable|raw ocr is available/i.test(warning)).map((warning) => <p key={warning} className="text-xs text-amber-700 dark:text-amber-300">{warning}</p>)}
       {import.meta.env.DEV && reviewSuggestion.technicalDetails?.scannerDebug ? <details className="rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs dark:border-sky-900 dark:bg-sky-950/30">
         <summary className="cursor-pointer font-black text-sky-900 dark:text-sky-100">Scanner Debug</summary>
+        {reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages ? <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.original,
+            reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.normalized,
+            reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.cardCrop,
+            ...reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.topNameCrops,
+          ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => <figure key={entry.label} className="rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
+            <figcaption className="font-black">{entry.label}</figcaption>
+            <img src={entry.previewDataUrl} alt={entry.label} className="mt-2 max-h-52 w-full rounded bg-black object-contain" />
+            <p className="mt-1 text-[10px]">{entry.width}Ã—{entry.height} Â· {Math.round(entry.fileSize / 1024)} KB Â· {entry.mimeType}</p>
+            <p className="text-[10px] text-slate-500">{entry.orientation}</p>
+          </figure>)}
+        </div> : null}
         <dl className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
           <div><dt className="font-black">recognizedCardName</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedName ?? null)}</code></dd></div>
           <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.fieldConfidence.cardName || "Unknown"}</dd></div>

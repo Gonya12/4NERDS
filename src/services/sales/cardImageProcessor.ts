@@ -184,6 +184,41 @@ export async function automaticallyPrepareCard(file: File, signal?: AbortSignal)
   return { file: await cropCardPerspective(normalized, detection.corners, signal), detection, cropped: true };
 }
 
+/** A visible, deterministic fallback when edge detection cannot establish a card frame. */
+export async function cropCenteredCardFallback(file: File, signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Card scan cancelled.", "AbortError");
+  const normalized = await normalizeImageOrientation(file);
+  const image = await imageElement(normalized);
+  const cardAspect = 2.5 / 3.5;
+  let cropHeight = image.naturalHeight * 0.9;
+  let cropWidth = cropHeight * cardAspect;
+  if (cropWidth > image.naturalWidth * 0.86) {
+    cropWidth = image.naturalWidth * 0.86;
+    cropHeight = cropWidth / cardAspect;
+  }
+  const sx = Math.max(0, (image.naturalWidth - cropWidth) / 2);
+  const sy = Math.max(0, (image.naturalHeight - cropHeight) / 2);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(cropWidth));
+  canvas.height = Math.max(1, Math.round(cropHeight));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("This browser cannot prepare the centered card fallback.");
+  context.drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.94));
+  const width = canvas.width;
+  const height = canvas.height;
+  canvas.width = 1;
+  canvas.height = 1;
+  if (!blob) throw new Error("This browser could not create the centered card fallback.");
+  return {
+    file: new File([blob], `centered-${normalized.name || "card.jpg"}`, { type: "image/jpeg", lastModified: Date.now() }),
+    sourceWidth: image.naturalWidth,
+    sourceHeight: image.naturalHeight,
+    outputWidth: width,
+    outputHeight: height,
+  };
+}
+
 export type CardTopRegionCrop = {
   file: File;
   sourceWidth: number;

@@ -14,7 +14,6 @@ import {
   type ScannerCandidateEvidence,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
-import { fileToDataUrl } from "../images/saleImageService";
 import { searchPokemonCardsManually, type CardMatch } from "./pokemonCardSearchService";
 
 type IdentifyPayload = {
@@ -32,7 +31,7 @@ type IdentifyPayload = {
 
 export type OpenAiRecognitionTelemetry = {
   model: string;
-  recognitionMode: "top_name" | "details";
+  recognitionMode: "top_name" | "details" | "name_fingerprint";
   success: boolean;
   retryCount: number;
   cacheHit: boolean;
@@ -41,7 +40,7 @@ export type OpenAiRecognitionTelemetry = {
 
 export type VisualRecognitionDebug = {
   strategy: "standard" | "alternate";
-  recognitionMode: "details";
+  recognitionMode: "details" | "name_fingerprint";
   httpStatus: number;
   responseBodyKeys: string[];
   requestId?: string;
@@ -136,6 +135,16 @@ export class PokemonCardIdentificationError extends Error {
   }
 }
 
+/** Reads the exact File bytes; recognition inputs have already been orientation-normalized. */
+export function recognitionFileDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read the recognition image."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function combinedAbortSignal(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -154,6 +163,7 @@ export async function identifyPokemonCardVisually(
   file: File,
   signal?: AbortSignal,
   strategy: "standard" | "alternate" = "standard",
+  recognitionMode: "details" | "name_fingerprint" = "details",
 ) {
   if (!isSupabaseConfigured || !supabaseUrl || !supabasePublishableKey) {
     throw new PokemonCardIdentificationError("Visual identification needs the app's Supabase connection.", "NOT_CONFIGURED");
@@ -161,7 +171,7 @@ export async function identifyPokemonCardVisually(
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
     throw new PokemonCardIdentificationError("Use a JPEG, PNG, or WebP card image.", "UNSUPPORTED_IMAGE_TYPE");
   }
-  const dataUrl = await fileToDataUrl(file);
+  const dataUrl = await recognitionFileDataUrl(file);
   const imageBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
   const request = combinedAbortSignal(signal, 26_000);
   const startedAt = performance.now();
@@ -173,7 +183,7 @@ export async function identifyPokemonCardVisually(
         apikey: supabasePublishableKey,
         Authorization: `Bearer ${supabasePublishableKey}`,
       },
-      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "details", debug: import.meta.env.DEV }),
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode, debug: import.meta.env.DEV }),
       signal: request.signal,
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
@@ -216,7 +226,7 @@ export async function identifyPokemonCardVisually(
     const identification = normalizePokemonCardIdentification(payload.identification);
     if (import.meta.env.DEV) visualDebug.set(identification, {
       strategy,
-      recognitionMode: "details",
+      recognitionMode,
       httpStatus: response.status,
       responseBodyKeys: Object.keys(payload),
       requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
@@ -273,7 +283,7 @@ export async function identifyPokemonCardTopRegion(
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
     throw new PokemonCardIdentificationError("Use a JPEG, PNG, or WebP card image.", "UNSUPPORTED_IMAGE_TYPE");
   }
-  const dataUrl = await fileToDataUrl(file);
+  const dataUrl = await recognitionFileDataUrl(file);
   const imageBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
   const request = combinedAbortSignal(signal, 26_000);
   const startedAt = performance.now();

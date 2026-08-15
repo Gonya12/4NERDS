@@ -7,6 +7,7 @@ import {
   buildPokemonIdentificationSearchAttempts,
   identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
+  mergePokemonRecognition,
   normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
   normalizePokemonTopRegionIdentification,
@@ -49,7 +50,33 @@ test("normalizes the dedicated top-region name and HP response", () => {
     cardName: "Charizard ex",
     hp: 330,
     confidence: 0.86,
+    cardNameConfidence: 0.86,
+    hpConfidence: 0.86,
   });
+});
+
+test("recognition-only merge preserves the top-band name and full-card fingerprint without a catalog call", () => {
+  const top = normalizePokemonTopRegionIdentification({
+    card_name: "Charizard ex",
+    hp: 330,
+    card_name_confidence: 0.91,
+    hp_confidence: 0.94,
+  });
+  const full = normalizePokemonCardIdentification({
+    card_name: null,
+    hp: 330,
+    ability_names: ["Infernal Reign"],
+    attack_names: ["Burning Darkness"],
+    collector_number: null,
+    confidence: 0.82,
+    field_confidence: { ability: "high", attack: "high", card_name: "low", hp: "high" },
+  });
+  const merged = mergePokemonRecognition(full, top);
+  assert.equal(merged.card_name, "Charizard ex");
+  assert.equal(merged.hp, 330);
+  assert.deepEqual(merged.ability_names, ["Infernal Reign"]);
+  assert.deepEqual(merged.attack_names, ["Burning Darkness"]);
+  assert.equal(merged.collector_number, null);
 });
 
 test("collector number alone is preserved but cannot become a useful automatic identification", () => {
@@ -355,7 +382,12 @@ test("Edge Function keeps the OpenAI secret server-side and enforces the Luna co
 test("single and bulk raw PokÃ©mon scanners share validation and a one-call visual budget", () => {
   assert.match(scanPipelineSource, /assessPokemonIdentification\(rawIdentification\)/);
   assert.match(scanPipelineSource, /prepareOpenAiCardImage/);
-  assert.match(scanPipelineSource, /One bounded AI recognition call was used/);
+  assert.match(scanPipelineSource, /cropCardTopRegion\(cardRelativeFront, 0\.25, false/);
+  assert.match(scanPipelineSource, /cropCardTopRegion\(cardRelativeFront, 0\.4, true/);
+  assert.match(scanPipelineSource, /"name_fingerprint"/);
+  assert.match(scanPipelineSource, /const hasReadableName = Boolean\(usefulness\.recognizedName\)/);
+  assert.match(scanPipelineSource, /const possibleMatches = hasReadableName/);
+  assert.match(scanPipelineSource, /diagnosticImages/);
   assert.match(bulkWorkerSource, /assessPokemonIdentification\(rawIdentification\)/);
   assert.match(bulkWorkerSource, /maximumCalls: 1/);
   assert.match(bulkWorkerSource, /Automatic retries are disabled/);
@@ -405,11 +437,10 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v11_/);
-  assert.doesNotMatch(scanService, /Trying alternate recognition/);
+  assert.match(scanService, /4nerds_card_scan_v12_/);
   assert.match(scanService, /assessPokemonIdentification/);
-  assert.doesNotMatch(scanService, /cropCardTopRegion\(cardRelativeFront/);
-  assert.doesNotMatch(scanService, /identifyPokemonCardTopRegion/);
+  assert.match(scanService, /cropCardTopRegion\(cardRelativeFront/);
+  assert.match(scanService, /identifyPokemonCardTopRegion/);
   assert.match(scanService, /identifyPokemonCardVisually\(recognitionImage/);
 });
 
