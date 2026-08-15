@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { appendBulkScanSelection } from "../src/utils/dealScanQueue.ts";
+import { bulkReviewProviderImage, bulkReviewSourceImage } from "../src/utils/bulkImportReview.ts";
 
 type MockFile = { name: string; size: number; type: string; lastModified: number };
 const photo = (index: number, type = "image/jpeg"): MockFile => ({ name: `card-${index}.${type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg"}`, size: 1_000 + index, type, lastModified: 1_700_000_000_000 + index });
@@ -40,4 +41,43 @@ test("New Deal uses desktop multiple inputs and a failure-isolated controlled qu
   assert.match(source, /while \(true\)[\s\S]*?find\(\(row\) => row\.status === "waiting"\)/);
   assert.match(source, /catch \(unknownError\)[\s\S]*?status: "failed"/);
   assert.doesNotMatch(source.slice(source.indexOf("async function processScanQueue"), source.indexOf("const waitingScanCount")), /Promise\.all/);
+});
+
+test("the active New Deal bulk Review route opens match verification instead of the generic Deal Item editor", () => {
+  const page = readFileSync(new URL("../src/pages/NewDealPage.tsx", import.meta.url), "utf8");
+  const review = readFileSync(new URL("../src/components/sales/BulkImportCardReview.tsx", import.meta.url), "utf8");
+  const queueMarkup = page.slice(page.indexOf("{scanQueue.length ?"), page.indexOf("{step === \"build\""));
+  assert.match(queueMarkup, /openBulkImportReview\(row, dealItem\)/);
+  assert.doesNotMatch(queueMarkup, /setEditing\(dealItem\)/);
+  assert.match(page, /<BulkImportCardReview/);
+  assert.match(page, /open=\{Boolean\(editing\) && !bulkReviewId\}/);
+  assert.match(review, /Review Card Match/);
+  assert.match(review, /Original Upload/);
+  assert.match(review, /TCG Database Match/);
+  assert.match(review, /Correct/);
+  assert.match(review, /Wrong Card/);
+});
+
+test("bulk review prefers a persisted item photo and keeps provider identity and price fields", () => {
+  const page = readFileSync(new URL("../src/pages/NewDealPage.tsx", import.meta.url), "utf8");
+  const review = readFileSync(new URL("../src/components/sales/BulkImportCardReview.tsx", import.meta.url), "utf8");
+  assert.match(review, /bulkReviewSourceImage\(item, record\)/);
+  assert.match(review, /bulkReviewProviderImage/);
+  assert.match(review, /item\.marketPriceVariant/);
+  assert.match(page, /preserveScanPhoto\(item, row\.file\)/);
+  assert.match(page, /scanQueueDraftKey/);
+  assert.match(page, /previewUrl: item\?\.imageUrl \|\| persistedPreview/);
+  assert.match(page, /\[Bulk Import Review\] open/);
+});
+
+test("four different review items keep their own original and provider photos across refresh", () => {
+  const records = ["Gholdengo ex", "Rillaboom VMAX", "another card", "Dudunsparce ex"].map((name, index) => ({
+    item: { id: `item-${index}`, imageUrl: `https://storage.test/source-${index}.jpg`, imagePath: `job/source-${index}.jpg`, officialCardImageUrl: `https://provider.test/card-${index}.jpg` },
+    record: { id: `row-${index}`, itemId: `item-${index}`, previewUrl: `blob:session-${index}`, providerImageUrl: `https://provider.test/fallback-${index}.jpg`, name },
+  }));
+  assert.deepEqual(records.map(({ item, record }) => bulkReviewSourceImage(item, record)), records.map((_, index) => `https://storage.test/source-${index}.jpg`));
+  assert.deepEqual(records.map(({ item, record }) => bulkReviewProviderImage(item, record)), records.map((_, index) => `https://provider.test/card-${index}.jpg`));
+  const refreshed = records.map(({ item, record }) => bulkReviewSourceImage(item, { ...record, previewUrl: undefined }));
+  assert.deepEqual(refreshed, records.map((_, index) => `https://storage.test/source-${index}.jpg`));
+  assert.notEqual(refreshed[0], refreshed[3]);
 });

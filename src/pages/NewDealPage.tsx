@@ -6,6 +6,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CardScanPanel } from "../components/sales/CardScanPanel";
+import { BulkImportCardReview, type BulkImportReviewRecord } from "../components/sales/BulkImportCardReview";
 import { ImageAttachmentField } from "../components/sales/ImageAttachmentField";
 import { ManualCardSearch } from "../components/sales/ManualCardSearch";
 import { OwnershipEditor } from "../components/sales/OwnershipEditor";
@@ -39,9 +40,10 @@ import { hasKnownHistoricalCostBasis } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
 import { appendBulkScanSelection, isLikelyMobileScanner } from "../utils/dealScanQueue";
-import type { CardScanSuggestion } from "../services/sales/cardScanService";
+import type { CardMatch, CardScanSuggestion } from "../services/sales/cardScanService";
 
 const draftKey = "4nerds:new-deal-draft:v1";
+const scanQueueDraftKey = "4nerds:new-deal-scan-queue:v1";
 const inputClass = "w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-950 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-200 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:ring-violet-900";
 const saveSteps: ProgressStep[] = [
   { id: "transaction", label: "Saving deal" },
@@ -52,24 +54,8 @@ const saveSteps: ProgressStep[] = [
 const conditions: CardCondition[] = ["Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"];
 const paymentMethods = Object.keys(paymentMethodLabels) as SalePaymentMethod[];
 
-type DealScanQueueStatus = "waiting" | "processing" | "ready" | "needs_review" | "failed";
-type DealScanQueueItem = {
-  id: string;
-  itemId: string;
-  file: File;
-  previewUrl: string;
-  filename: string;
-  uploadOrder: number;
-  direction: DealSide;
-  signature: string;
-  imageHash?: string;
-  possibleDuplicate: boolean;
-  status: DealScanQueueStatus;
-  forceRecognition?: boolean;
-  stage?: string;
-  suggestion?: CardScanSuggestion;
-  error?: string;
-};
+type DealScanQueueStatus = BulkImportReviewRecord["status"];
+type DealScanQueueItem = BulkImportReviewRecord;
 
 function localDateTime() {
   const now = new Date();
@@ -86,6 +72,33 @@ function readDealDraft() {
     return migrated?.transaction;
   } catch {
     return undefined;
+  }
+}
+
+function readScanQueueDraft(transaction?: TradeTransaction): DealScanQueueItem[] {
+  if (!transaction) return [];
+  try {
+    const stored = JSON.parse(localStorage.getItem(scanQueueDraftKey) || "[]") as DealScanQueueItem[];
+    const restored = stored.filter((row) => transaction.items.some((item) => item.id === row.itemId)).map((row) => {
+      const item = transaction.items.find((candidate) => candidate.id === row.itemId);
+      const persistedPreview = row.previewUrl?.startsWith("blob:") ? undefined : row.previewUrl;
+      return { ...row, file: undefined, previewUrl: item?.imageUrl || persistedPreview, status: row.status === "waiting" || row.status === "processing" ? "needs_review" as const : row.status, stage: row.status === "waiting" || row.status === "processing" ? "Review required after refresh" : row.stage };
+    });
+    if (restored.length) return restored;
+    return transaction.items.filter((item) => item.cardSelectionSource === "scanner" && item.imageUrl).map((item, index) => ({
+      id: `restored:${item.id}`,
+      itemId: item.id,
+      previewUrl: item.imageUrl,
+      filename: item.itemName || `Scanned card ${index + 1}`,
+      uploadOrder: index,
+      direction: item.direction === "outgoing" ? "outgoing" : "incoming",
+      signature: item.imagePath || item.imageUrl || item.id,
+      possibleDuplicate: false,
+      status: item.providerCardId ? "ready" : "needs_review",
+      stage: item.providerCardId ? "Ready" : "Review required",
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -136,8 +149,9 @@ export function NewDealPage() {
   const [editing, setEditing] = useState<TradeItem>();
   const [manualSearch, setManualSearch] = useState(false);
   const [scanFile, setScanFile] = useState<File>();
-  const [scanQueue, setScanQueue] = useState<DealScanQueueItem[]>([]);
+  const [scanQueue, setScanQueue] = useState<DealScanQueueItem[]>(() => readScanQueueDraft(recovered));
   const [scanQueueOpen, setScanQueueOpen] = useState(false);
+  const [bulkReviewId, setBulkReviewId] = useState("");
   const [mobileScanner] = useState(isLikelyMobileScanner);
   const [inventoryPicker, setInventoryPicker] = useState(false);
   const [inventorySearch, setInventorySearch] = useState("");
@@ -155,7 +169,8 @@ export function NewDealPage() {
   const [saveComplete, setSaveComplete] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "warning" | "info" }>();
   const completionInFlight = useRef(false);
-  const scanQueueRef = useRef<DealScanQueueItem[]>([]);
+  const transactionRef = useRef(transaction);
+  const scanQueueRef = useRef<DealScanQueueItem[]>(scanQueue);
   const scanQueueProcessingRef = useRef(false);
   const scanImageRecordIdsRef = useRef(new Map<string, string>());
   const summary = dealSummary(transaction);
@@ -167,8 +182,11 @@ export function NewDealPage() {
 
   const updateTransaction = useCallback((next: TradeTransaction) => {
     const normalized = normalizeDealForSave(next);
+    transactionRef.current = normalized;
     setTransaction(normalized);
   }, []);
+
+  useEffect(() => { transactionRef.current = transaction; }, [transaction]);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +222,15 @@ export function NewDealPage() {
     return () => window.clearTimeout(timer);
   }, [step, transaction]);
 
+  useEffect(() => {
+    const persisted = scanQueue.map(({ file: _file, previewUrl, suggestion, ...row }) => ({
+      ...row,
+      previewUrl: previewUrl?.startsWith("blob:") ? undefined : previewUrl,
+      suggestion: suggestion ? { ...suggestion, technicalDetails: undefined, possibleMatches: suggestion.possibleMatches?.slice(0, 10) } : undefined,
+    }));
+    try { localStorage.setItem(scanQueueDraftKey, JSON.stringify(persisted)); } catch { /* The transaction draft still preserves saved item images. */ }
+  }, [scanQueue]);
+
   const onImageBusyChange = useCallback((fieldId: string, active: boolean) => {
     setBusyImageFields((current) => {
       const next = new Set(current);
@@ -221,7 +248,7 @@ export function NewDealPage() {
 
   useEffect(() => {
     return () => {
-      for (const row of scanQueueRef.current) URL.revokeObjectURL(row.previewUrl);
+      for (const row of scanQueueRef.current) if (row.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(row.previewUrl);
     };
   }, []);
 
@@ -314,6 +341,10 @@ export function NewDealPage() {
       while (true) {
         const queued = scanQueueRef.current.find((row) => row.status === "waiting");
         if (!queued) break;
+        if (!queued.file) {
+          replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, status: "needs_review", stage: "Original file unavailable after refresh", error: "Choose Retry only after selecting the source photo again." } : row));
+          continue;
+        }
         replaceScanQueue((current) => current.map((row) => row.id === queued.id ? { ...row, status: "processing", stage: "Preparing image", error: undefined } : row));
         try {
           const { confirmPokemonCardMatch, imageHash, scanPokemonCard } = await import("../services/sales/cardScanService");
@@ -455,10 +486,11 @@ export function NewDealPage() {
     setImageError("");
     let persisted: TradeTransaction;
     try {
-      const normalized = normalizeDealForSave(transaction);
+      const normalized = normalizeDealForSave(transactionRef.current);
       persisted = normalized.items.length
         ? await saveTrade(normalized, { syncImages: false, syncPayments: false, syncOwnership: false })
         : await saveFinancialTransactionDraft(normalized);
+      transactionRef.current = persisted;
       setTransaction(persisted);
       setDraftError("");
       setDebug("");
@@ -490,11 +522,14 @@ export function NewDealPage() {
     }
   }
 
-  async function changeItemImages(item: TradeItem, next: TransactionImageAttachment[]) {
+  async function changeItemImages(item: TradeItem, next: TransactionImageAttachment[], syncGenericEditor = true) {
     const front = next.find((image) => image.imageType !== "back");
-    const updatedItem = { ...item, images: next, imageUrl: front?.imageUrl, imagePath: front?.imagePath };
-    const updated = { ...transaction, items: transaction.items.map((current) => current.id === item.id ? updatedItem : current) };
-    setEditing(updatedItem);
+    const currentTransaction = transactionRef.current;
+    const latestItem = currentTransaction.items.find((candidate) => candidate.id === item.id) || item;
+    const updatedItem = { ...latestItem, images: next, imageUrl: front?.imageUrl, imagePath: front?.imagePath };
+    const updated = { ...currentTransaction, items: currentTransaction.items.map((current) => current.id === item.id ? updatedItem : current) };
+    if (syncGenericEditor) setEditing(updatedItem);
+    transactionRef.current = updated;
     setTransaction(updated);
     try {
       await saveTrade(updated, { syncImages: false, syncPayments: false, syncOwnership: !next.some((image) => image.metadataStatus === "pending") });
@@ -515,8 +550,80 @@ export function NewDealPage() {
       attachment = error.attachment;
     }
     const images = [...(item.images || []).filter((image) => image.id !== attachment.id && image.imageType !== "front"), attachment];
-    await changeItemImages(item, images);
+    await changeItemImages(item, images, false);
     scanImageRecordIdsRef.current.delete(item.id);
+  }
+
+  function patchBulkReviewItem(itemId: string, patch: Partial<TradeItem>) {
+    setTransaction((current) => normalizeDealForSave({
+      ...current,
+      items: current.items.map((item) => item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item),
+    }));
+  }
+
+  async function confirmBulkReviewMatch(row: DealScanQueueItem, item: TradeItem, match: CardMatch) {
+    const { confirmPokemonCardMatch } = await import("../services/sales/cardScanService");
+    const seed: CardScanSuggestion = row.suggestion || {
+      suggestedType: item.itemType === "graded_card" ? "graded_card" : "raw_card",
+      cardName: item.itemName || match.name,
+      collectorNumber: item.collectorNumber || item.cardCode || null,
+      cardSet: item.cardSet || null,
+      language: item.cardLanguage || match.language,
+      cardGame: item.cardGame,
+      cardLanguage: item.cardLanguage === "ja" ? "ja" : "en",
+      condition: item.cardCondition || null,
+      stickerPrice: item.stickerPrice ?? null,
+      gradingCompany: item.gradingCompany || null,
+      grade: item.grade || null,
+      certificateNumber: item.certificateNumber || null,
+      labelInformation: null,
+      barcodeText: null,
+      overallConfidence: match.matchConfidence,
+      fieldConfidence: {},
+      possibleMatches: [match],
+      warnings: [],
+    };
+    const confirmed = await confirmPokemonCardMatch(seed, match);
+    setTransaction((current) => {
+      const currentItem = current.items.find((candidate) => candidate.id === item.id) || item;
+      const identified = applyCardSuggestionToItem(currentItem, confirmed, "scanner");
+      const priced = applyDealPercentage(identified, row.direction, identified.targetBuyPercentage ?? (row.direction === "incoming" ? 70 : 100));
+      return normalizeDealForSave({ ...current, items: current.items.map((candidate) => candidate.id === item.id ? priced : candidate) });
+    });
+    replaceScanQueue((current) => current.map((candidate) => candidate.id === row.id ? { ...candidate, suggestion: confirmed, status: "ready", stage: "Match confirmed", error: undefined } : candidate));
+  }
+
+  function openBulkImportReview(row: DealScanQueueItem, item: TradeItem) {
+    const match = row.suggestion?.possibleMatches?.find((candidate) => candidate.providerCardId === item.providerCardId) || row.suggestion?.possibleMatches?.[0];
+    const providerMarket = item.tcgplayerPricing?.variants.find((variant) => variant.variant === item.marketPriceVariant)?.market
+      ?? match?.pricing?.variants?.find((variant) => variant.market != null)?.market
+      ?? match?.pricing?.market
+      ?? (item.marketValue > 0 ? item.marketValue : null);
+    if (import.meta.env.DEV) console.info("[Bulk Import Review] open", {
+      bulkImportItemId: row.id,
+      sourceImagePath: item.imagePath || null,
+      sourceImageUrl: item.imageUrl || row.previewUrl || null,
+      providerCardId: item.providerCardId || match?.providerCardId || null,
+      providerImageUrl: item.officialCardImageUrl || row.suggestion?.officialImageUrl || match?.imageLarge || match?.imageSmall || null,
+      providerMarket,
+    });
+    setBulkReviewId(row.id);
+    setEditing(undefined);
+    setManualSearch(false);
+    if (!item.imageUrl && row.file) {
+      void preserveScanPhoto(item, row.file).catch((error) => setToast({
+        message: error instanceof Error ? error.message : "The original scan photo could not be persisted yet. Its current-session preview is still available.",
+        tone: "warning",
+      }));
+    }
+  }
+
+  function moveBulkImportReview(offset: number) {
+    if (!reviewableScanRows.length || bulkReviewIndex < 0) return;
+    const nextIndex = (bulkReviewIndex + offset + reviewableScanRows.length) % reviewableScanRows.length;
+    const nextRow = reviewableScanRows[nextIndex];
+    const nextItem = transaction.items.find((item) => item.id === nextRow.itemId);
+    if (nextItem) openBulkImportReview(nextRow, nextItem);
   }
 
   function validationError(next: TradeTransaction) {
@@ -644,6 +751,10 @@ export function NewDealPage() {
   const scanFailedCount = scanQueue.filter((row) => row.status === "failed").length;
   const scanRemainingCount = scanQueue.filter((row) => row.status === "waiting" || row.status === "processing").length;
   const scanProcessedCount = scanQueue.length - scanRemainingCount;
+  const reviewableScanRows = scanQueue.filter((row) => row.status === "ready" || row.status === "needs_review" || row.status === "failed");
+  const bulkReviewIndex = reviewableScanRows.findIndex((row) => row.id === bulkReviewId);
+  const bulkReviewRow = bulkReviewIndex >= 0 ? reviewableScanRows[bulkReviewIndex] : undefined;
+  const bulkReviewItem = bulkReviewRow ? transaction.items.find((item) => item.id === bulkReviewRow.itemId) : undefined;
 
   function applyPercentageToSide(percentage: number) {
     updateTransaction({
@@ -729,9 +840,9 @@ export function NewDealPage() {
       {scanQueueOpen ? <div className="max-h-80 overflow-y-auto border-t border-slate-100 dark:border-slate-800">{scanQueue.map((row) => {
         const dealItem = transaction.items.find((item) => item.id === row.itemId);
         return <article key={row.id} className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-100 p-2 last:border-b-0 dark:border-slate-800">
-          <img loading="lazy" src={row.previewUrl} alt={row.filename} className="h-14 w-11 rounded-lg bg-slate-100 object-cover" />
+          {row.previewUrl || dealItem?.imageUrl ? <img loading="lazy" src={dealItem?.imageUrl || row.previewUrl} alt={row.filename} className="h-14 w-11 rounded-lg bg-slate-100 object-cover" /> : <span className="grid h-14 w-11 place-items-center rounded-lg bg-slate-100"><ImagePlus size={17} className="text-slate-400" /></span>}
           <span className="min-w-0"><b className="block truncate text-xs">{dealItem?.itemName || row.filename}</b><small className="block truncate text-slate-500">#{row.uploadOrder + 1} · {row.stage || row.status.replace(/_/g, " ")}</small>{row.possibleDuplicate ? <small className="block font-black text-amber-700">Possible duplicate</small> : null}{row.error ? <small className="block truncate font-bold text-rose-600" title={row.error}>{row.error}</small> : null}</span>
-          <span className="flex gap-1">{row.status === "failed" || row.status === "needs_review" ? <button type="button" onClick={() => replaceScanQueue((current) => current.map((item) => item.id === row.id ? { ...item, status: "waiting", forceRecognition: true, stage: "Waiting", error: undefined } : item))} className="rounded-lg bg-amber-100 px-2 py-2 text-xs font-black text-amber-900">Retry AI Recognition</button> : null}{row.status === "ready" || row.status === "needs_review" || row.status === "failed" ? <button type="button" onClick={() => { if (dealItem) setEditing(dealItem); }} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-800">Review</button> : null}</span>
+          <span className="flex gap-1">{(row.status === "failed" || row.status === "needs_review") && row.file ? <button type="button" onClick={() => replaceScanQueue((current) => current.map((item) => item.id === row.id ? { ...item, status: "waiting", forceRecognition: true, stage: "Waiting", error: undefined } : item))} className="rounded-lg bg-amber-100 px-2 py-2 text-xs font-black text-amber-900">Retry AI Recognition</button> : null}{row.status === "ready" || row.status === "needs_review" || row.status === "failed" ? <button type="button" onClick={() => { if (dealItem) openBulkImportReview(row, dealItem); }} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-800">Review</button> : null}</span>
         </article>;
       })}</div> : null}
     </section> : null}
@@ -763,7 +874,27 @@ export function NewDealPage() {
 
     <ResponsiveModal open={photosOpen} title="Transaction Photos" description="Gallery, camera, paste, drag-and-drop, reordering, deletion, and preview remain available here." onClose={() => setPhotosOpen(false)} size="lg" dismissible={!imageUploading}><ImageAttachmentField label="Photos" description="Up to 20 transaction photos. Item-specific photos use their own limits." attachments={images.filter((image) => image.imageType === "general")} imageType="general" transactionId={transaction.id} multiple maxImages={TRANSACTION_PHOTO_LIMIT} onUpload={(file, imageType, onProgress, stableId, resume) => uploadImage(file, imageType, onProgress, undefined, stableId, resume)} onChange={changeTransactionImages} onBusyChange={onImageBusyChange} retryDisabled={Boolean(draftError)} /></ResponsiveModal>
 
-    <ResponsiveModal open={Boolean(editing)} title={editing?.itemName || "Deal Item"} description="Market, condition, percentage, agreed value, cost basis, ownership, and item photos remain separate." onClose={() => { setEditing(undefined); setManualSearch(false); setScanFile(undefined); }} size="lg" dismissible={!imageUploading} swipeToDismiss={false} closeOnBackdrop={false} mobileEditor>
+    {bulkReviewRow && bulkReviewItem ? <BulkImportCardReview
+      record={bulkReviewRow}
+      item={bulkReviewItem}
+      workers={workers}
+      itemNumber={bulkReviewIndex + 1}
+      itemCount={reviewableScanRows.length}
+      busy={busy || imageUploading}
+      onClose={() => { setBulkReviewId(""); setEditing(undefined); setManualSearch(false); }}
+      onPrevious={() => moveBulkImportReview(-1)}
+      onNext={() => moveBulkImportReview(1)}
+      onPatchItem={(patch) => patchBulkReviewItem(bulkReviewItem.id, patch)}
+      onConfirmMatch={(match) => confirmBulkReviewMatch(bulkReviewRow, bulkReviewItem, match)}
+      onManualSearch={() => { setEditing(bulkReviewItem); setManualSearch(true); }}
+      onSaveNext={() => {
+        replaceScanQueue((current) => current.map((row) => row.id === bulkReviewRow.id ? { ...row, status: "ready", stage: "Reviewed" } : row));
+        if (bulkReviewIndex < reviewableScanRows.length - 1) moveBulkImportReview(1);
+        else { setBulkReviewId(""); setEditing(undefined); setManualSearch(false); }
+      }}
+    /> : null}
+
+    <ResponsiveModal open={Boolean(editing) && !bulkReviewId} title={editing?.itemName || "Deal Item"} description="Market, condition, percentage, agreed value, cost basis, ownership, and item photos remain separate." onClose={() => { setEditing(undefined); setManualSearch(false); setScanFile(undefined); }} size="lg" dismissible={!imageUploading} swipeToDismiss={false} closeOnBackdrop={false} mobileEditor>
       {editing ? <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-[7rem_1fr]"><div className="grid aspect-[2.5/3.5] place-items-center overflow-hidden rounded-2xl bg-slate-100 dark:bg-slate-900">{itemImage(editing) ? <img src={itemImage(editing)} alt="" className="size-full object-contain" /> : <Camera className="text-slate-400" />}</div><div className="space-y-3"><label><span className="text-xs font-black">Item name</span><input value={editing.itemName} onChange={(event) => updateItem({ ...editing, itemName: event.target.value })} className={`${inputClass} mt-1`} /></label><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setManualSearch(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-100 text-sm font-black text-violet-800"><Search size={16} /> Search Cards</button><label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 text-sm font-black"><ScanLine size={16} /> Scan<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { setScanFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label></div></div></div>
         {scanFile ? <div className="rounded-2xl border border-violet-200 p-3"><CardScanPanel imageFile={scanFile} category={editing.itemType} inventory={inventory} initialGame={editing.cardGame || "pokemon"} initialLanguage={editing.cardLanguage === "ja" ? "ja" : editing.cardGame === "other" ? "unknown" : "en"} onRetakePhoto={() => setScanFile(undefined)} onApply={(suggestion) => { const sourcePhoto = scanFile; const item = applyCardSuggestionToItem(editing, suggestion, "scanner"); const priced = applyDealPercentage(item, editing.direction as DealSide, item.targetBuyPercentage ?? (editing.direction === "incoming" ? 70 : 100)); updateItem(priced); void preserveScanPhoto(priced, sourcePhoto).then(() => setScanFile(undefined)).catch(() => undefined); }} /></div> : null}
@@ -777,7 +908,16 @@ export function NewDealPage() {
       </div> : null}
     </ResponsiveModal>
 
-    {manualSearch && editing ? <ManualCardSearch open category={editing.itemType} initialName={editing.itemName} initialCollectorNumber={editing.cardCode || editing.collectorNumber} initialSet={editing.cardSet} initialGame={editing.cardGame} initialLanguage={editing.cardLanguage} onClose={() => setManualSearch(false)} onApply={(suggestion) => { const matched = applyCardSuggestionToItem(editing, suggestion, "manual"); updateItem(applyDealPercentage(matched, editing.direction as DealSide, editing.direction === "incoming" ? 70 : 100)); setManualSearch(false); }} /> : null}
+    {manualSearch && editing ? <ManualCardSearch open category={editing.itemType} initialName={editing.itemName} initialCollectorNumber={editing.cardCode || editing.collectorNumber} initialSet={editing.cardSet} initialGame={editing.cardGame} initialLanguage={editing.cardLanguage} onClose={() => { setManualSearch(false); if (bulkReviewId) setEditing(undefined); }} onApply={(suggestion) => {
+      const matched = applyCardSuggestionToItem(editing, suggestion, "manual");
+      const priced = applyDealPercentage(matched, editing.direction as DealSide, editing.direction === "incoming" ? 70 : 100);
+      if (bulkReviewId) {
+        setTransaction((current) => normalizeDealForSave({ ...current, items: current.items.map((item) => item.id === priced.id ? priced : item) }));
+        replaceScanQueue((current) => current.map((row) => row.id === bulkReviewId ? { ...row, suggestion, status: "ready", stage: "Manual match selected" } : row));
+        setEditing(undefined);
+      } else updateItem(priced);
+      setManualSearch(false);
+    }} /> : null}
 
     <ResponsiveModal open={inventoryPicker} title="Choose from Inventory" description="Only available stock appears. Selection preserves source inventory ID, historical cost basis, and ownership." onClose={() => setInventoryPicker(false)} size="lg">
       <div className="space-y-3"><div className="grid gap-2 sm:grid-cols-[1fr_12rem]"><label className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} /><input value={inventorySearch} onChange={(event) => setInventorySearch(event.target.value)} placeholder="Search item, set, number, condition…" className={`${inputClass} pl-10`} /></label><select value={inventorySort} onChange={(event) => setInventorySort(event.target.value as typeof inventorySort)} className={inputClass}><option value="name">Sort: Item</option><option value="cost">Highest cost</option><option value="market">Highest market</option><option value="age">Oldest inventory</option></select></div><div className="max-h-[60dvh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800"><div className="sticky top-0 z-10 hidden grid-cols-[2rem_minmax(12rem,1fr)_6rem_6rem_5rem_7rem] gap-2 bg-slate-100 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-slate-500 sm:grid"><span /><span>Item</span><span>Cost</span><span>Market</span><span>Age</span><span>Condition</span></div>{availableInventory.map((item) => { const checked = selectedInventory.has(item.id); const days = Math.max(0, Math.floor((Date.now() - new Date(item.purchaseDate).getTime()) / 86_400_000)); return <label key={item.id} className={`grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] items-center gap-2 border-t border-slate-100 px-3 py-3 first:border-t-0 dark:border-slate-800 sm:grid-cols-[2rem_minmax(12rem,1fr)_6rem_6rem_5rem_7rem] ${checked ? "bg-violet-50 dark:bg-violet-950/20" : "bg-white dark:bg-night-900"}`}><input type="checkbox" checked={checked} onChange={() => setSelectedInventory((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} className="size-5 accent-violet-600" /><span className="flex min-w-0 items-center gap-2">{item.imageUrl ? <img src={item.imageUrl} alt="" className="size-10 rounded-lg object-contain" /> : null}<span className="min-w-0"><b className="block truncate text-sm">{item.itemName}</b><small className="block truncate text-slate-500">{[item.cardSet, item.cardCode || item.collectorNumber].filter(Boolean).join(" · ")}</small></span></span><span className="text-sm font-bold">{formatMoney(item.totalCost)}</span><span className="text-sm font-bold">{formatMoney(item.marketValue || 0)}</span><span className="text-xs text-slate-500">{days}d</span><span className="text-xs font-bold">{item.cardCondition || "—"}</span></label>; })}{!availableInventory.length ? <p className="p-8 text-center text-sm font-bold text-slate-500">No available inventory matches this search.</p> : null}</div><AppButton onClick={commitInventorySelection} disabled={!selectedInventory.size} className="w-full"><PackageCheck size={17} /> Add {selectedInventory.size} selected item{selectedInventory.size === 1 ? "" : "s"}</AppButton></div>
