@@ -2,8 +2,9 @@ import type { CardCondition, InventoryPurchase, OwnershipShare } from "../../typ
 import type { CardMatch } from "../sales/cardScanService";
 import { conditionAdjustedMarket } from "../../utils/dealBuilder";
 import { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
-import { compressSaleImage } from "../images/saleImageService";
+import { compressSaleImage, prepareOpenAiCardImage } from "../images/saleImageService";
 import { normalizeImageOrientation } from "../images/imageOrientation";
+import { automaticallyPrepareCard, cropCardTopRegion } from "../sales/cardImageProcessor";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
 
@@ -192,15 +193,34 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
   }
   const normalized = await normalizeImageOrientation(file);
   const itemId = crypto.randomUUID();
+  const detected = await automaticallyPrepareCard(normalized);
   const [hash, compressed, thumbnail] = await Promise.all([fileHash(normalized), compressSaleImage(normalized), thumbnailFile(normalized)]);
   const sourcePath = `${job.id}/source/${itemId}.jpg`;
   const thumbnailPath = `${job.id}/thumbnails/${itemId}.jpg`;
+  const recognitionPath = `${job.id}/recognition/${itemId}.jpg`;
+  const topRegionPath = `${job.id}/top-regions/${itemId}.jpg`;
   const sourceUpload = await client.storage.from("bulk-inventory-imports").upload(sourcePath, compressed, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
   if (sourceUpload.error) throw new Error(sourceUpload.error.message);
   const thumbnailUpload = await client.storage.from("bulk-inventory-imports").upload(thumbnailPath, thumbnail, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
   if (thumbnailUpload.error) {
     await client.storage.from("bulk-inventory-imports").remove([sourcePath]);
     throw new Error(thumbnailUpload.error.message);
+  }
+  let recognitionFile: File | undefined;
+  let topRegionFile: File | undefined;
+  if (detected.cropped) {
+    recognitionFile = await prepareOpenAiCardImage(detected.file);
+    topRegionFile = (await cropCardTopRegion(recognitionFile, 0.28)).file;
+    const recognitionUpload = await client.storage.from("bulk-inventory-imports").upload(recognitionPath, recognitionFile, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
+    if (recognitionUpload.error) {
+      await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath]);
+      throw new Error(recognitionUpload.error.message);
+    }
+    const topUpload = await client.storage.from("bulk-inventory-imports").upload(topRegionPath, topRegionFile, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
+    if (topUpload.error) {
+      await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, recognitionPath]);
+      throw new Error(topUpload.error.message);
+    }
   }
   const sourceUrl = client.storage.from("bulk-inventory-imports").getPublicUrl(sourcePath).data.publicUrl;
   const thumbnailUrl = client.storage.from("bulk-inventory-imports").getPublicUrl(thumbnailPath).data.publicUrl;
@@ -212,7 +232,7 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
     id: itemId,
     job_id: job.id,
     upload_order: uploadOrder,
-    status: "waiting",
+    status: detected.cropped ? "waiting" : "needs_review",
     original_filename: file.name || `image-${uploadOrder + 1}`,
     mime_type: "image/jpeg",
     byte_size: compressed.size,
@@ -223,9 +243,25 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
     image_hash: hash,
     possible_duplicate: Boolean(duplicate.data || inventoryDuplicate.data),
     duplicate_of_item_id: duplicate.data?.id || null,
+    raw_recognition: {
+      preprocessing: {
+        normalizedSourceHash: hash,
+        physicalCardCropped: detected.cropped,
+        detectionConfidence: detected.detection.confidence,
+        recognitionImagePath: detected.cropped ? recognitionPath : null,
+        topRegionImagePath: detected.cropped ? topRegionPath : null,
+        recognitionDimensions: recognitionFile ? { maxLongEdge: 1280 } : null,
+        topRegionRatio: topRegionFile ? 0.28 : null,
+      },
+    },
+    ...(detected.cropped ? {} : {
+      overall_confidence: "low",
+      error_code: "CARD_CROP_REQUIRED",
+      error_message: "No reliable physical card boundary was found, so this phone photo was not sent to OpenAI. Adjust the crop and retry recognition.",
+    }),
   }).select("*").single();
   if (inserted.error) {
-    await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath]);
+    await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, ...(detected.cropped ? [recognitionPath, topRegionPath] : [])]);
     throw new Error(inserted.error.message);
   }
   return itemFromRow(inserted.data as ItemRow);

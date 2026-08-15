@@ -1,4 +1,6 @@
-export const POKEMON_CARD_IDENTIFY_MODEL = "gemini-3.6-flash";
+// Cost guard: visual recognition is pinned to Luna. Do not replace this with
+// a UI-selected model or silently escalate to a larger model.
+export const POKEMON_CARD_IDENTIFY_MODEL = "gpt-5.6-luna";
 export const POKEMON_CARD_IDENTIFY_FUNCTION = "pokemon-card-identify";
 export const supportedPokemonCardImageTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 

@@ -328,12 +328,15 @@ test("name-only possible matches survive scanner candidate selection", () => {
   assert.match(serviceSource, /searchRecognizedCardText/);
 });
 
-test("Edge Function keeps Gemini secret server-side and requests structured visual output", () => {
-  assert.equal(POKEMON_CARD_IDENTIFY_MODEL, "gemini-3.6-flash");
-  assert.match(edgeSource, /Deno\.env\.get\("GEMINI_API_KEY"\)/);
-  assert.doesNotMatch(edgeSource, /VITE_GEMINI_API_KEY/);
-  assert.match(edgeSource, /inline_data/);
-  assert.match(edgeSource, /responseFormat/);
+test("Edge Function keeps the OpenAI secret server-side and enforces the Luna cost contract", () => {
+  assert.equal(POKEMON_CARD_IDENTIFY_MODEL, "gpt-5.6-luna");
+  assert.match(edgeSource, /Deno\.env\.get\("OPENAI_API_KEY"\)/);
+  assert.doesNotMatch(edgeSource, /VITE_OPENAI_API_KEY/);
+  assert.match(edgeSource, /https:\/\/api\.openai\.com\/v1\/responses/);
+  assert.match(edgeSource, /reasoning: \{ effort: "none" \}/);
+  assert.match(edgeSource, /type: "json_schema"/);
+  assert.match(edgeSource, /detail: "high"/);
+  assert.match(edgeSource, /retryCount: 0/);
   assert.match(edgeSource, /type: \["string", "null"\]/);
   assert.doesNotMatch(edgeSource, /const nullableString = \{ anyOf/);
   assert.match(edgeSource, /imageBase64/);
@@ -341,19 +344,21 @@ test("Edge Function keeps Gemini secret server-side and requests structured visu
   assert.match(edgeSource, /recognitionMode/);
   assert.match(edgeSource, /topRegionPrompt/);
   assert.match(edgeSource, /topRegionResponseSchema/);
-  assert.match(edgeSource, /raw visual response before parsing/);
-  assert.match(edgeSource, /alternatePrompt/);
   assert.match(edgeSource, /ability_names/);
   assert.match(edgeSource, /attack_names/);
   assert.match(edgeSource, /LOWER-MIDDLE/);
+  assert.doesNotMatch(edgeSource, /gpt-5\.6-(?:sol|terra)/);
   assert.doesNotMatch(edgeSource, /market.?price|TCGplayer price/i);
 });
 
-test("single and bulk scanners share validation and one alternate visual strategy", () => {
+test("single and bulk scanners share validation and a hard two-call visual budget", () => {
   assert.match(scanPipelineSource, /assessPokemonIdentification\(rawIdentification\)/);
-  assert.equal((scanPipelineSource.match(/"alternate"\)/g) || []).length, 1);
+  assert.match(scanPipelineSource, /firstPassWasDecisive/);
+  assert.match(scanPipelineSource, /prepareOpenAiCardImage/);
   assert.match(bulkWorkerSource, /assessPokemonIdentification\(rawIdentification\)/);
-  assert.equal((bulkWorkerSource.match(/recognitionStrategy: "alternate"/g) || []).length, 1);
+  assert.match(bulkWorkerSource, /maximumCalls: 2/);
+  assert.match(bulkWorkerSource, /Automatic retries are disabled/);
+  assert.doesNotMatch(bulkWorkerSource, /recognitionStrategy: "alternate"/);
   assert.match(bulkWorkerSource, /NO_USEFUL_DETAILS/);
 });
 
@@ -397,11 +402,11 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v9_/);
+  assert.match(scanService, /4nerds_card_scan_v10_/);
   assert.match(scanService, /Trying alternate recognition/);
   assert.match(scanService, /assessPokemonIdentification/);
   assert.match(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.28, false/);
-  assert.match(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.4, true/);
+  assert.doesNotMatch(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.4, true/);
   assert.match(scanService, /identifyPokemonCardTopRegion/);
 });
 

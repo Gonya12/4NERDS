@@ -228,8 +228,10 @@ export async function cropCardTopRegion(
   const image = await imageElement(normalized);
   const ratio = Math.max(0.2, Math.min(0.4, topRatio));
   const sourceHeight = Math.max(1, Math.round(image.naturalHeight * ratio));
-  const targetWidth = enhanced ? Math.max(1600, image.naturalWidth * 2) : Math.max(1200, image.naturalWidth);
-  const scale = Math.min(enhanced ? 3 : 2.25, targetWidth / image.naturalWidth);
+  // The first OpenAI pass receives only this band. Keep it readable while
+  // enforcing the 1280px cost ceiling even for very large phone photos.
+  const targetWidth = Math.min(1280, Math.max(enhanced ? 1120 : 960, image.naturalWidth));
+  const scale = Math.min(enhanced ? 2 : 1.5, targetWidth / image.naturalWidth);
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));

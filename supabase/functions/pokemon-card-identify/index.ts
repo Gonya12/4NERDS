@@ -17,16 +17,15 @@ const corsHeaders = {
 };
 const maxDecodedBytes = 6 * 1024 * 1024;
 const fieldConfidenceInstruction = "Grade card name, HP, stage, ability, attack, attack damage, collector number, set, language, and artwork independently as high, medium, or low. A readable name and uncertain collector number must be high name confidence and low collector-number confidence.";
-const alternatePrompt = "This is a single automatic alternate pass after an unusable first result. Re-evaluate the image independently. Prioritize the prominent printed card title, character artwork, HP area, and bottom collector-number line. Ignore attack names, ability names, rules, sleeve text, labels, and background text. Return null instead of inventing a card name from fragments.";
-const topRegionPrompt = `This image contains only the TOP band of one physical trading card. Read the prominent printed card title and HP value only. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Ignore evolution labels, stage text, attack text, sleeve text, glare, and background. Do not infer an exact printing, set, or collector number. Return cardName as null when the title itself is not readable; never substitute an example or placeholder. Return hp as null when unreadable.`;
-const prompt = `You are a region-aware visual trading-card identification assistant. First estimate the physical Pokémon or One Piece card boundary and ignore the stand, sleeve outside the printed card, table, monitor, hands, and background. Analyze regions relative to that printed card: TOP (name including ex/EX/V/VMAX/VSTAR/GX suffix, HP, stage/subtype), MIDDLE (ability name and one distinctive ability-text fragment), LOWER-MIDDLE (attack names, damage, and distinctive attack-text fragments), and BOTTOM (collector number, set/code, regulation mark). The top printed name is the primary identity signal. Ability and attack names are secondary content fingerprints. A tiny collector number is secondary and must be null/low-confidence when unclear. Do not treat arbitrary body text as a card name. Read only visible evidence; tolerate sleeves, top loaders, glare, slight perspective, rotation, and background clutter. Never provide prices, accounting values, inventory IDs, provider API IDs, or final confirmation. Preserve collector-number leading zeros and distinguish EX, ex, GX, V, VMAX, VSTAR, promo, and older printings. Detect Japanese rather than forcing English. Stop trying to read tiny bottom text when the name, HP, and distinctive ability/attack fingerprint are already clear. If any field is unreadable, return null or an empty list and lower only that field's confidence instead of guessing.`;
+const topRegionPrompt = "This image contains only the TOP band of one physical trading card. Read the prominent printed card title and HP value only. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Ignore evolution labels, stage text, attack text, sleeve text, glare, and background. Do not infer an exact printing, set, collector number, price, or provider ID. Return cardName as null when the title itself is not readable. Return hp as null when unreadable.";
+const detailsPrompt = "This is the one permitted details pass for an ambiguous trading-card match. The image is already cropped to the physical card. Read visible evidence from TOP (name including ex/EX/V/VMAX/VSTAR/GX suffix, HP, stage/subtype), MIDDLE (ability), LOWER-MIDDLE (attacks and damage), and BOTTOM (collector number, set/code, regulation mark). The title is primary; ability and attack names are content fingerprints; tiny bottom text is secondary. Never guess unreadable text. Never provide prices, accounting values, inventory IDs, provider IDs, or a final database-card decision. Preserve leading zeros and detect Japanese rather than forcing English. Return null or empty lists for unreadable fields.";
 
-// Gemini 3.6 structured output supports nullable primitives through a JSON
-// Schema type array. Using anyOf for primitive nullability can be rejected.
 const nullableString = { type: ["string", "null"] };
 const nullableInteger = { type: ["integer", "null"] };
+const confidenceSchema = { type: "string", enum: ["high", "medium", "low"] };
 const responseSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     card_name: nullableString,
     pokemon_name: nullableString,
@@ -51,17 +50,18 @@ const responseSchema = {
     confidence: { type: "number", minimum: 0, maximum: 1 },
     field_confidence: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        card_name: { type: "string", enum: ["high", "medium", "low"] },
-        collector_number: { type: "string", enum: ["high", "medium", "low"] },
-        set: { type: "string", enum: ["high", "medium", "low"] },
-        hp: { type: "string", enum: ["high", "medium", "low"] },
-        stage: { type: "string", enum: ["high", "medium", "low"] },
-        ability: { type: "string", enum: ["high", "medium", "low"] },
-        attack: { type: "string", enum: ["high", "medium", "low"] },
-        attack_damage: { type: "string", enum: ["high", "medium", "low"] },
-        language: { type: "string", enum: ["high", "medium", "low"] },
-        artwork: { type: "string", enum: ["high", "medium", "low"] },
+        card_name: confidenceSchema,
+        collector_number: confidenceSchema,
+        set: confidenceSchema,
+        hp: confidenceSchema,
+        stage: confidenceSchema,
+        ability: confidenceSchema,
+        attack: confidenceSchema,
+        attack_damage: confidenceSchema,
+        language: confidenceSchema,
+        artwork: confidenceSchema,
       },
       required: ["card_name", "collector_number", "set", "hp", "stage", "ability", "attack", "attack_damage", "language", "artwork"],
     },
@@ -76,6 +76,7 @@ const responseSchema = {
 };
 const topRegionResponseSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     cardName: nullableString,
     hp: nullableInteger,
@@ -103,19 +104,38 @@ function errorResponse(requestId: string, code: string, message: string, status:
 
 function responseText(value: unknown) {
   const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const candidates = Array.isArray(root.candidates) ? root.candidates : [];
-  const candidate = candidates[0] && typeof candidates[0] === "object" ? candidates[0] as Record<string, unknown> : {};
-  const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
-  const parts = Array.isArray(content.parts) ? content.parts : [];
-  return parts.map((part) => part && typeof part === "object" ? String((part as Record<string, unknown>).text || "") : "").join("").trim();
+  if (typeof root.output_text === "string") return root.output_text.trim();
+  const output = Array.isArray(root.output) ? root.output : [];
+  return output.flatMap((item) => {
+    const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const content = Array.isArray(row.content) ? row.content : [];
+    return content.map((part) => {
+      const block = part && typeof part === "object" ? part as Record<string, unknown> : {};
+      return block.type === "output_text" && typeof block.text === "string" ? block.text : "";
+    });
+  }).join("").trim();
 }
 
-function geminiError(value: unknown) {
+function openAiError(value: unknown) {
   const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const error = root.error && typeof root.error === "object" ? root.error as Record<string, unknown> : {};
   return {
-    code: typeof error.status === "string" ? error.status : undefined,
+    code: typeof error.code === "string" ? error.code : typeof error.type === "string" ? error.type : undefined,
     message: typeof error.message === "string" ? error.message.slice(0, 300) : undefined,
+  };
+}
+
+function responseUsage(value: unknown) {
+  const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const usage = root.usage && typeof root.usage === "object" ? root.usage as Record<string, unknown> : {};
+  const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+    ? usage.input_tokens_details as Record<string, unknown>
+    : {};
+  return {
+    inputTokens: Number(usage.input_tokens || 0),
+    outputTokens: Number(usage.output_tokens || 0),
+    totalTokens: Number(usage.total_tokens || 0),
+    cachedInputTokens: Number(inputDetails.cached_tokens || 0),
   };
 }
 
@@ -124,13 +144,13 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   if (request.method !== "POST") return errorResponse(requestId, "METHOD_NOT_ALLOWED", "Method not allowed.", 405);
 
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!apiKey) return errorResponse(requestId, "GEMINI_NOT_CONFIGURED", "Visual card identification is not configured.", 503);
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) return errorResponse(requestId, "OPENAI_NOT_CONFIGURED", "Visual card identification is not configured.", 503);
 
   let imageBase64 = "";
   let mimeType: PokemonCardImageMimeType;
   let recognitionStrategy: "standard" | "alternate" = "standard";
-  let recognitionMode: "full" | "top_name" = "full";
+  let recognitionMode: "details" | "top_name" = "details";
   let debug = false;
   try {
     const body = await request.json() as { imageBase64?: unknown; mimeType?: unknown; recognitionStrategy?: unknown; recognitionMode?: unknown; debug?: unknown };
@@ -142,7 +162,7 @@ Deno.serve(async (request) => {
     }
     mimeType = body.mimeType as PokemonCardImageMimeType;
     recognitionStrategy = body.recognitionStrategy === "alternate" ? "alternate" : "standard";
-    recognitionMode = body.recognitionMode === "top_name" ? "top_name" : "full";
+    recognitionMode = body.recognitionMode === "top_name" ? "top_name" : "details";
     debug = body.debug === true;
     imageBase64 = stripPokemonCardImagePrefix(body.imageBase64);
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(imageBase64)) {
@@ -160,30 +180,42 @@ Deno.serve(async (request) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 22_000);
   try {
-    const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${POKEMON_CARD_IDENTIFY_MODEL}:generateContent`, {
+    const schema = recognitionMode === "top_name" ? topRegionResponseSchema : responseSchema;
+    const upstream = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data: imageBase64 } }, { text: recognitionMode === "top_name" ? topRegionPrompt : `${prompt} ${fieldConfidenceInstruction}${recognitionStrategy === "alternate" ? ` ${alternatePrompt}` : ""}` }] }],
-        generationConfig: {
-          thinkingConfig: { thinkingLevel: "low" },
-          responseFormat: { text: { mimeType: "application/json", schema: recognitionMode === "top_name" ? topRegionResponseSchema : responseSchema } },
+        model: POKEMON_CARD_IDENTIFY_MODEL,
+        store: false,
+        reasoning: { effort: "none" },
+        max_output_tokens: recognitionMode === "top_name" ? 180 : 900,
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: recognitionMode === "top_name" ? topRegionPrompt : `${detailsPrompt} ${fieldConfidenceInstruction}` },
+            { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}`, detail: "high" },
+          ],
+        }],
+        text: {
+          verbosity: "low",
+          format: { type: "json_schema", name: recognitionMode === "top_name" ? "card_name_hp" : "card_identification", strict: true, schema },
         },
       }),
     });
     const payload = await upstream.json().catch(() => null);
     if (!upstream.ok) {
-      const providerError = geminiError(payload);
+      const providerError = openAiError(payload);
       const status = upstream.status === 429 ? 429 : upstream.status >= 500 ? 502 : upstream.status === 401 || upstream.status === 403 ? 503 : 400;
       const code = upstream.status === 429
-        ? "GEMINI_RATE_LIMITED"
+        ? "OPENAI_RATE_LIMITED"
         : upstream.status === 401 || upstream.status === 403
-          ? "GEMINI_AUTH_CONFIGURATION"
+          ? "OPENAI_AUTH_CONFIGURATION"
           : upstream.status === 400
-            ? "GEMINI_INVALID_REQUEST"
-            : "GEMINI_UNAVAILABLE";
-      console.warn("[pokemon-card-identify] Gemini request failed", {
+            ? "OPENAI_INVALID_REQUEST"
+            : "OPENAI_UNAVAILABLE";
+      console.warn("[pokemon-card-identify] OpenAI request failed", {
+        requestId,
         model: POKEMON_CARD_IDENTIFY_MODEL,
         providerStatus: upstream.status,
         upstreamErrorCode: providerError.code,
@@ -200,28 +232,26 @@ Deno.serve(async (request) => {
       return json({ success: false, code, message, requestId, providerStatus: upstream.status, upstreamErrorCode: providerError.code }, status, requestId, upstream.headers.get("Retry-After") ? { "Retry-After": upstream.headers.get("Retry-After") as string } : {});
     }
     const text = responseText(payload);
-    if (!text) throw new Error("Gemini returned no structured identification.");
-    console.info("[pokemon-card-identify] raw visual response before parsing", {
-      requestId,
-      recognitionMode,
-      recognitionStrategy,
-      rawResponse: text,
-    });
+    if (!text) throw new Error("OpenAI returned no structured identification.");
     const rawResponse = JSON.parse(text) as unknown;
+    const telemetry = {
+      model: POKEMON_CARD_IDENTIFY_MODEL,
+      recognitionMode,
+      success: true,
+      retryCount: 0,
+      cacheHit: false,
+      usage: responseUsage(payload),
+    };
     if (recognitionMode === "top_name") {
       const topIdentification = normalizePokemonTopRegionIdentification(rawResponse);
-      console.info("[pokemon-card-identify] top-region response parsed", {
-        requestId,
-        recognitionStrategy,
-        parsed: topIdentification,
-        latencyMs: Date.now() - startedAt,
-      });
+      console.info("[pokemon-card-identify] top-region response parsed", { requestId, model: POKEMON_CARD_IDENTIFY_MODEL, parsed: topIdentification, telemetry, latencyMs: Date.now() - startedAt });
       return json({
         success: true,
         model: POKEMON_CARD_IDENTIFY_MODEL,
         topIdentification,
         recognitionMode,
         recognitionStrategy,
+        telemetry,
         ...(debug ? { rawProviderResponse: rawResponse } : {}),
         latencyMs: Date.now() - startedAt,
         requestId,
@@ -229,37 +259,15 @@ Deno.serve(async (request) => {
     }
     const identification = normalizePokemonCardIdentification(rawResponse);
     const validation = assessPokemonIdentification(identification);
-    console.info("[pokemon-card-identify] Gemini request succeeded", {
+    console.info("[pokemon-card-identify] OpenAI request succeeded", {
       requestId,
       model: POKEMON_CARD_IDENTIFY_MODEL,
       recognitionStrategy,
       recognitionMode,
+      telemetry,
       latencyMs: Date.now() - startedAt,
-      parsed: {
-        card_name: identification.card_name,
-        pokemon_name: identification.pokemon_name,
-        collector_number: identification.collector_number,
-        printed_total_number: identification.printed_total_number,
-        set_name_hint: identification.set_name_hint,
-        set_code_hint: identification.set_code_hint,
-        hp: identification.hp,
-        stage_or_subtype: identification.stage_or_subtype,
-        ability_names: identification.ability_names,
-        ability_text_fragments: identification.ability_text_fragments,
-        attack_names: identification.attack_names,
-        attack_damage: identification.attack_damage,
-        attack_text_fragments: identification.attack_text_fragments,
-        card_game: identification.card_game,
-        language: identification.language,
-        confidence: identification.confidence,
-        field_confidence: identification.field_confidence,
-        visible_text: identification.visible_text,
-        artwork_characteristics: identification.artwork_characteristics,
-      },
-      usefulness: {
-        useful: validation.useful,
-        rejectedFields: validation.rejectedFields.map((field) => ({ field: field.field, reason: field.reason })),
-      },
+      useful: validation.useful,
+      rejectedFieldCount: validation.rejectedFields.length,
     });
     return json({
       success: true,
@@ -267,14 +275,15 @@ Deno.serve(async (request) => {
       identification,
       recognitionStrategy,
       validation: { useful: validation.useful, rejectedFields: validation.rejectedFields },
+      telemetry,
       latencyMs: Date.now() - startedAt,
       requestId,
       ...(debug ? { rawProviderResponse: rawResponse } : {}),
     }, 200, requestId);
   } catch (error) {
     const timedOut = error instanceof DOMException && error.name === "AbortError";
-    console.warn("[pokemon-card-identify] Gemini response failed", { model: POKEMON_CARD_IDENTIFY_MODEL, timedOut, latencyMs: Date.now() - startedAt });
-    return errorResponse(requestId, timedOut ? "GEMINI_TIMEOUT" : "MALFORMED_GEMINI_RESPONSE", timedOut ? "Visual identification timed out. Try again or search manually." : "Visual identification returned an unreadable result.", timedOut ? 504 : 502);
+    console.warn("[pokemon-card-identify] OpenAI response failed", { requestId, model: POKEMON_CARD_IDENTIFY_MODEL, timedOut, latencyMs: Date.now() - startedAt });
+    return errorResponse(requestId, timedOut ? "OPENAI_TIMEOUT" : "MALFORMED_OPENAI_RESPONSE", timedOut ? "Visual identification timed out. Try again or search manually." : "Visual identification returned an unreadable result.", timedOut ? 504 : 502);
   } finally {
     clearTimeout(timeout);
   }

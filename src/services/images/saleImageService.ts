@@ -98,6 +98,11 @@ export async function prepareCardRecognitionImage(file: File) {
   return resizeImage(normalized, { maxLongEdge: 2000, quality: 0.92, prefix: "recognition" });
 }
 
+/** Hard cost boundary for images sent to OpenAI visual recognition. */
+export async function prepareOpenAiCardImage(file: File) {
+  return resizeImage(file, { maxLongEdge: 1280, quality: 0.88, prefix: "openai-card" });
+}
+
 export async function uploadSaleImage(file: File, saleId: string) {
   return uploadFinancialImage(file, "sales", saleId);
 }

@@ -3,8 +3,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
   assessPokemonIdentification,
   buildPokemonIdentificationSearchAttempts,
+  identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
   normalizePokemonCardIdentification,
+  normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
   selectScannerCandidates,
@@ -20,7 +22,6 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const batchSize = 2;
-const temporaryCodes = new Set(["GEMINI_TIMEOUT", "GEMINI_RATE_LIMITED", "GEMINI_UNAVAILABLE", "UPSTREAM_TIMEOUT", "UPSTREAM_UNAVAILABLE", "NETWORK_ERROR"]);
 
 type QueueItem = {
   id: string;
@@ -30,6 +31,7 @@ type QueueItem = {
   source_image_path: string;
   mime_type: string;
   image_hash?: string | null;
+  raw_recognition?: Record<string, unknown> | null;
 };
 
 function json(body: unknown, status = 200) {
@@ -59,7 +61,7 @@ function pricingFor(match?: UnifiedCardMatch) {
   };
 }
 
-async function edgePost(baseUrl: string, serviceKey: string, functionName: string, body: unknown) {
+async function edgePost(baseUrl: string, serviceKey: string, functionName: string, body: unknown, allowRetry = true) {
   let lastPayload: Record<string, unknown> | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await fetch(`${baseUrl}/functions/v1/${functionName}`, {
@@ -72,7 +74,7 @@ async function edgePost(baseUrl: string, serviceKey: string, functionName: strin
     const rows = Array.isArray(payload?.results) ? payload.results : [];
     const retryableEmpty = response.ok && rows.length === 0 && Number(payload?.providerResponseStatus || 0) >= 500;
     if (response.ok && !retryableEmpty) return payload || {};
-    if (attempt === 0 && (response.status === 429 || response.status >= 500 || retryableEmpty)) continue;
+    if (allowRetry && attempt === 0 && (response.status === 429 || response.status >= 500 || retryableEmpty)) continue;
     const error = new Error(String(payload?.message || payload?.error || `${functionName} failed with HTTP ${response.status}.`)) as Error & { code?: string };
     error.code = String(payload?.code || `HTTP_${response.status}`);
     throw error;
@@ -109,6 +111,69 @@ async function findCandidates(baseUrl: string, serviceKey: string, identificatio
   return { matches: selectScannerCandidates(groups.flat()), queryHistory };
 }
 
+function objectValue(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+async function downloadBase64(supabase: ReturnType<typeof createClient>, path: string) {
+  const downloaded = await supabase.storage.from("bulk-inventory-imports").download(path);
+  if (downloaded.error || !downloaded.data) throw new Error(downloaded.error?.message || "Prepared recognition image could not be downloaded.");
+  return bytesToBase64(new Uint8Array(await downloaded.data.arrayBuffer()));
+}
+
+async function reuseCachedRecognition(item: QueueItem, supabase: ReturnType<typeof createClient>) {
+  if (!item.image_hash) return null;
+  const cached = await supabase.from("bulk_inventory_import_items")
+    .select("id,status,recognized_name,recognized_collector_number,recognized_set,recognized_card_game,recognized_language,field_confidence,raw_recognition,selected_candidate,alternative_candidates,candidate_score,overall_confidence,condition,base_market,adjusted_market,market_source,market_variant,market_currency,market_checked_at,error_code,error_message")
+    .eq("image_hash", item.image_hash)
+    .neq("id", item.id)
+    .in("status", ["identified", "needs_review"])
+    .order("created_at", { ascending: true })
+    .limit(10);
+  if (cached.error) throw new Error(cached.error.message);
+  const source = (cached.data || []).find((row) => {
+    const raw = objectValue(row.raw_recognition);
+    return objectValue(raw.costPolicy).model === "gpt-5.6-luna";
+  });
+  if (!source) return null;
+  const sourceRaw = objectValue(source.raw_recognition);
+  const targetRaw = objectValue(item.raw_recognition);
+  const updated = await supabase.from("bulk_inventory_import_items").update({
+    status: source.status,
+    locked_at: null,
+    recognized_name: source.recognized_name,
+    recognized_collector_number: source.recognized_collector_number,
+    recognized_set: source.recognized_set,
+    recognized_card_game: source.recognized_card_game,
+    recognized_language: source.recognized_language,
+    field_confidence: source.field_confidence,
+    raw_recognition: {
+      ...sourceRaw,
+      preprocessing: objectValue(targetRaw.preprocessing),
+      cache: { hit: true, sourceItemId: source.id, imageHash: item.image_hash },
+      costPolicy: { ...objectValue(sourceRaw.costPolicy), callsMade: 0, cacheHit: true },
+    },
+    selected_candidate: source.selected_candidate,
+    alternative_candidates: source.alternative_candidates,
+    candidate_score: source.candidate_score,
+    overall_confidence: source.overall_confidence,
+    condition: source.condition,
+    base_market: source.base_market,
+    adjusted_market: source.adjusted_market,
+    market_source: source.market_source,
+    market_variant: source.market_variant,
+    market_currency: source.market_currency,
+    market_checked_at: source.market_checked_at,
+    possible_duplicate: true,
+    duplicate_of_item_id: source.id,
+    error_code: source.error_code,
+    error_message: source.error_message,
+    updated_at: new Date().toISOString(),
+  }).eq("id", item.id);
+  if (updated.error) throw new Error(updated.error.message);
+  return { id: item.id, status: source.status, cached: true };
+}
+
 async function processItem(
   item: QueueItem,
   supabase: ReturnType<typeof createClient>,
@@ -116,36 +181,79 @@ async function processItem(
   serviceKey: string,
 ) {
   try {
-    const downloaded = await supabase.storage.from("bulk-inventory-imports").download(item.source_image_path);
-    if (downloaded.error || !downloaded.data) throw new Error(downloaded.error?.message || "Source image could not be downloaded.");
-    const imageBytes = new Uint8Array(await downloaded.data.arrayBuffer());
-    let recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
-      imageBase64: bytesToBase64(imageBytes),
+    const cached = await reuseCachedRecognition(item, supabase);
+    if (cached) return cached;
+
+    const rawBefore = objectValue(item.raw_recognition);
+    const preprocessing = objectValue(rawBefore.preprocessing);
+    const recognitionImagePath = typeof preprocessing.recognitionImagePath === "string" ? preprocessing.recognitionImagePath : "";
+    const topRegionImagePath = typeof preprocessing.topRegionImagePath === "string" ? preprocessing.topRegionImagePath : "";
+    if (!recognitionImagePath || !topRegionImagePath) {
+      throw Object.assign(new Error("A reliable physical-card crop is required before OpenAI recognition."), { code: "CARD_CROP_REQUIRED" });
+    }
+
+    const topImageBase64 = await downloadBase64(supabase, topRegionImagePath);
+    const topRecognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
+      imageBase64: topImageBase64,
       mimeType: item.mime_type,
       recognitionStrategy: "standard",
+      recognitionMode: "top_name",
+    }, false);
+    const topIdentification = normalizePokemonTopRegionIdentification(topRecognition.topIdentification);
+    const topConfidence = identificationConfidenceLabel(topIdentification.confidence);
+    let rawIdentification = normalizePokemonCardIdentification({
+      card_name: topIdentification.cardName,
+      hp: topIdentification.hp,
+      card_game: "pokemon",
+      language: "unknown",
+      confidence: topIdentification.confidence,
+      field_confidence: { card_name: topConfidence, hp: topConfidence },
     });
-    let rawIdentification = normalizePokemonCardIdentification(recognition.identification);
     let usefulness = assessPokemonIdentification(rawIdentification);
     const recognitionAttempts: Array<Record<string, unknown>> = [{
-      strategy: "standard",
-      identification: rawIdentification,
+      strategy: "top_name",
+      identification: topIdentification,
       useful: usefulness.useful,
       rejectedFields: usefulness.rejectedFields,
+      telemetry: topRecognition.telemetry,
     }];
-    if (!usefulness.useful) {
-      recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
-        imageBase64: bytesToBase64(imageBytes),
+    let identification = usefulness.searchIdentification;
+    let candidateResult = usefulness.useful
+      ? await findCandidates(baseUrl, serviceKey, identification)
+      : { matches: [] as UnifiedCardMatch[], queryHistory: [] as string[] };
+    const firstPassWasDecisive = isStrongVisualCatalogMatch(identification, candidateResult.matches);
+    if (!firstPassWasDecisive) {
+      const detailsImageBase64 = await downloadBase64(supabase, recognitionImagePath);
+      const detailsRecognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
+        imageBase64: detailsImageBase64,
         mimeType: item.mime_type,
-        recognitionStrategy: "alternate",
+        recognitionStrategy: "standard",
+        recognitionMode: "details",
+      }, false);
+      const detailsIdentification = normalizePokemonCardIdentification(detailsRecognition.identification);
+      rawIdentification = normalizePokemonCardIdentification({
+        ...detailsIdentification,
+        card_name: topIdentification.cardName || detailsIdentification.card_name,
+        hp: topIdentification.hp ?? detailsIdentification.hp,
+        confidence: Math.max(topIdentification.confidence, detailsIdentification.confidence),
+        field_confidence: {
+          ...detailsIdentification.field_confidence,
+          ...(topIdentification.cardName ? { card_name: topConfidence } : {}),
+          ...(topIdentification.hp != null ? { hp: topConfidence } : {}),
+        },
       });
-      rawIdentification = normalizePokemonCardIdentification(recognition.identification);
       usefulness = assessPokemonIdentification(rawIdentification);
       recognitionAttempts.push({
-        strategy: "alternate",
-        identification: rawIdentification,
+        strategy: "details",
+        identification: detailsIdentification,
         useful: usefulness.useful,
         rejectedFields: usefulness.rejectedFields,
+        telemetry: detailsRecognition.telemetry,
       });
+      identification = usefulness.searchIdentification;
+      candidateResult = usefulness.useful
+        ? await findCandidates(baseUrl, serviceKey, identification)
+        : { matches: [] as UnifiedCardMatch[], queryHistory: [] as string[] };
     }
     if (!usefulness.useful) {
       const noDetails = await supabase.from("bulk_inventory_import_items").update({
@@ -157,17 +265,21 @@ async function processItem(
         recognized_card_game: rawIdentification.card_game,
         recognized_language: rawIdentification.language,
         field_confidence: rawIdentification.field_confidence,
-        raw_recognition: { recognitionAttempts, usefulness },
+        raw_recognition: {
+          preprocessing,
+          recognitionAttempts,
+          usefulness,
+          costPolicy: { model: "gpt-5.6-luna", callsMade: recognitionAttempts.length, maximumCalls: 2, retryCount: 0, cacheHit: false, firstPassWasDecisive },
+        },
         overall_confidence: "low",
         error_code: "NO_USEFUL_DETAILS",
-        error_message: "Two visual strategies found no safe card name or reliable collector number. Use manual card search, adjust the crop, or retry this photo.",
+        error_message: "The bounded visual passes found no safe card name or content fingerprint. Use manual card search, adjust the crop, or explicitly retry this photo.",
         updated_at: new Date().toISOString(),
       }).eq("id", item.id);
       if (noDetails.error) throw new Error(noDetails.error.message);
       return { id: item.id, status: "needs_review" };
     }
-    const identification = usefulness.searchIdentification;
-    const { matches, queryHistory } = await findCandidates(baseUrl, serviceKey, identification);
+    const { matches, queryHistory } = candidateResult;
     const selected = matches[0];
     const strong = isStrongVisualCatalogMatch(identification, matches);
     const pricing = pricingFor(selected);
@@ -187,7 +299,14 @@ async function processItem(
       recognized_card_game: identification.card_game,
       recognized_language: identification.language,
       field_confidence: identification.field_confidence,
-      raw_recognition: { ...identification, queryHistory, recognitionAttempts, usefulness },
+      raw_recognition: {
+        ...identification,
+        preprocessing,
+        queryHistory,
+        recognitionAttempts,
+        usefulness,
+        costPolicy: { model: "gpt-5.6-luna", callsMade: recognitionAttempts.length, maximumCalls: 2, retryCount: 0, cacheHit: false, firstPassWasDecisive },
+      },
       selected_candidate: selected || null,
       alternative_candidates: matches.slice(1, 5),
       candidate_score: selected?.matchScore ?? null,
@@ -210,17 +329,19 @@ async function processItem(
   } catch (unknownError) {
     const error = unknownError as Error & { code?: string };
     const code = error.code || "PROCESSING_FAILED";
-    const retryable = temporaryCodes.has(code) || /timeout|temporar|rate limit|unavailable|network/i.test(error.message || "");
-    const canRetry = retryable && item.attempt_count < item.max_attempts;
     await supabase.from("bulk_inventory_import_items").update({
-      status: canRetry ? "waiting" : "failed",
+      status: "needs_review",
       locked_at: null,
-      next_retry_at: canRetry ? new Date(Date.now() + 10_000 * item.attempt_count).toISOString() : null,
+      next_retry_at: null,
       error_code: code,
-      error_message: String(error.message || "Bulk recognition failed.").slice(0, 500),
+      error_message: `${String(error.message || "Bulk recognition failed.").slice(0, 430)} Automatic retries are disabled to prevent duplicate OpenAI charges; use Retry Recognition explicitly.`,
+      raw_recognition: {
+        ...objectValue(item.raw_recognition),
+        costPolicy: { model: "gpt-5.6-luna", maximumCalls: 2, automaticRetry: false, cacheHit: false, failed: true },
+      },
       updated_at: new Date().toISOString(),
     }).eq("id", item.id);
-    return { id: item.id, status: canRetry ? "waiting" : "failed", error: error.message };
+    return { id: item.id, status: "needs_review", error: error.message };
   }
 }
 

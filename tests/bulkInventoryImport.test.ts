@@ -62,3 +62,19 @@ test("bulk importer is not coupled to the transaction 20-photo cap", () => {
   assert.doesNotMatch(source, /MAX_TRANSACTION_IMAGES|TRANSACTION_IMAGE_LIMIT|slice\(0,\s*20\)/);
   assert.match(source, /Confirm All High-Confidence/);
 });
+
+test("bulk recognition persists local crops, hash cache state, and bounded Luna usage", () => {
+  const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../supabase/functions/bulk-inventory-process/index.ts", import.meta.url), "utf8");
+  assert.match(repository, /automaticallyPrepareCard\(normalized\)/);
+  assert.match(repository, /recognitionImagePath/);
+  assert.match(repository, /topRegionImagePath/);
+  assert.match(repository, /maxLongEdge: 1280/);
+  assert.match(worker, /reuseCachedRecognition/);
+  assert.match(worker, /model: "gpt-5\.6-luna"/);
+  assert.match(worker, /maximumCalls: 2/);
+  assert.match(worker, /firstPassWasDecisive/);
+  assert.match(worker, /recognitionMode: "top_name"/);
+  assert.match(worker, /recognitionMode: "details"/);
+  assert.doesNotMatch(worker, /gpt-5\.6-(?:sol|terra)/);
+});

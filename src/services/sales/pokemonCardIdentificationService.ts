@@ -27,11 +27,21 @@ type IdentifyPayload = {
   requestId?: string;
   providerStatus?: number;
   upstreamErrorCode?: string;
+  telemetry?: OpenAiRecognitionTelemetry;
+};
+
+export type OpenAiRecognitionTelemetry = {
+  model: string;
+  recognitionMode: "top_name" | "details";
+  success: boolean;
+  retryCount: number;
+  cacheHit: boolean;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number; cachedInputTokens: number };
 };
 
 export type VisualRecognitionDebug = {
   strategy: "standard" | "alternate";
-  recognitionMode: "full";
+  recognitionMode: "details";
   httpStatus: number;
   responseBodyKeys: string[];
   requestId?: string;
@@ -40,6 +50,7 @@ export type VisualRecognitionDebug = {
   timeout: boolean;
   rawIdentification?: unknown;
   rawProviderResponse?: unknown;
+  telemetry?: OpenAiRecognitionTelemetry;
 };
 
 export type TopRegionRecognitionDebug = {
@@ -52,6 +63,7 @@ export type TopRegionRecognitionDebug = {
   elapsedMs: number;
   rawProviderResponse?: unknown;
   parsed: PokemonTopRegionIdentification;
+  telemetry?: OpenAiRecognitionTelemetry;
 };
 
 export type ScannerSearchDebug = {
@@ -161,7 +173,7 @@ export async function identifyPokemonCardVisually(
         apikey: supabasePublishableKey,
         Authorization: `Bearer ${supabasePublishableKey}`,
       },
-      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "full", debug: import.meta.env.DEV }),
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "details", debug: import.meta.env.DEV }),
       signal: request.signal,
     });
     const payload = await response.json().catch(() => null) as IdentifyPayload | null;
@@ -204,7 +216,7 @@ export async function identifyPokemonCardVisually(
     const identification = normalizePokemonCardIdentification(payload.identification);
     if (import.meta.env.DEV) visualDebug.set(identification, {
       strategy,
-      recognitionMode: "full",
+      recognitionMode: "details",
       httpStatus: response.status,
       responseBodyKeys: Object.keys(payload),
       requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
@@ -213,6 +225,7 @@ export async function identifyPokemonCardVisually(
       timeout: false,
       rawIdentification: payload.identification,
       rawProviderResponse: payload.rawProviderResponse,
+      telemetry: payload.telemetry,
     });
     if (import.meta.env.DEV) console.info("[Visual card scanner] recognition response parsed", {
       visionProcessingSucceeded: true,
@@ -241,7 +254,7 @@ export async function identifyPokemonCardVisually(
         mimeType: file.type,
       });
       if (signal?.aborted) throw error;
-      throw new PokemonCardIdentificationError("Visual identification timed out. Try again or search manually.", "GEMINI_TIMEOUT");
+      throw new PokemonCardIdentificationError("Visual identification timed out. Try again or search manually.", "OPENAI_TIMEOUT");
     }
     throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
   } finally {
@@ -301,6 +314,7 @@ export async function identifyPokemonCardTopRegion(
       elapsedMs: Math.round(performance.now() - startedAt),
       rawProviderResponse: payload.rawProviderResponse,
       parsed: identification,
+      telemetry: payload.telemetry,
     };
     if (import.meta.env.DEV) {
       topRegionDebug.set(identification, debug);
@@ -311,7 +325,7 @@ export async function identifyPokemonCardTopRegion(
     if (error instanceof PokemonCardIdentificationError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       if (signal?.aborted) throw error;
-      throw new PokemonCardIdentificationError("The card-name region timed out. Try again or adjust the crop.", "GEMINI_TIMEOUT");
+      throw new PokemonCardIdentificationError("The card-name region timed out. Try again or adjust the crop.", "OPENAI_TIMEOUT");
     }
     throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
   } finally {
