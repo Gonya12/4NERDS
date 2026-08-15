@@ -73,6 +73,24 @@ test("dedicated review separates provider identity from inventory details", () =
   assert.match(source, /Reviewing \{itemNumber\} of \{itemCount\}/);
 });
 
+test("bulk review resolves each item's durable original photo with visible recovery states", () => {
+  const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
+  const lightbox = readFileSync(new URL("../src/components/sales/ImageLightbox.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-bulk-source-item-id=\{item\.id\}/);
+  assert.match(source, /resolveBulkImportSourceImageUrl\(item\.sourceImagePath/);
+  assert.match(source, /Original photo unavailable/);
+  assert.match(source, /> Retry</);
+  assert.match(source, /View Original Photo/);
+  assert.match(source, /object-contain/);
+  assert.match(repository, /getPublicUrl\(sourceImagePath\)/);
+  assert.match(repository, /createSignedUrl\(sourceImagePath, 60 \* 60\)/);
+  assert.doesNotMatch(source, /URL\.createObjectURL/);
+  assert.match(lightbox, /aria-label="Zoom out"/);
+  assert.match(lightbox, /> Fit</);
+  assert.match(lightbox, /aria-label="Zoom in"/);
+});
+
 test("bulk review loads up to ten same-name alternatives and logs provider pricing without financial writes", () => {
   const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
   const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");

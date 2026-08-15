@@ -102,6 +102,14 @@ function jobFromRow(row: JobRow): BulkImportJob {
 }
 
 function itemFromRow(row: ItemRow): BulkImportItem {
+  const sourceImagePath = String(row.source_image_path || "");
+  const thumbnailPath = row.thumbnail_path ? String(row.thumbnail_path) : undefined;
+  const currentPublicSourceUrl = sourceImagePath && supabase
+    ? supabase.storage.from("bulk-inventory-imports").getPublicUrl(sourceImagePath).data.publicUrl
+    : "";
+  const currentPublicThumbnailUrl = thumbnailPath && supabase
+    ? supabase.storage.from("bulk-inventory-imports").getPublicUrl(thumbnailPath).data.publicUrl
+    : "";
   return {
     id: String(row.id),
     jobId: String(row.job_id),
@@ -112,10 +120,10 @@ function itemFromRow(row: ItemRow): BulkImportItem {
     originalFilename: String(row.original_filename || "image"),
     mimeType: String(row.mime_type || "image/jpeg"),
     byteSize: Number(row.byte_size || 0),
-    sourceImagePath: String(row.source_image_path || ""),
-    sourceImageUrl: String(row.source_image_url || ""),
-    thumbnailPath: row.thumbnail_path ? String(row.thumbnail_path) : undefined,
-    thumbnailUrl: row.thumbnail_url ? String(row.thumbnail_url) : undefined,
+    sourceImagePath,
+    sourceImageUrl: currentPublicSourceUrl || String(row.source_image_url || ""),
+    thumbnailPath,
+    thumbnailUrl: currentPublicThumbnailUrl || (row.thumbnail_url ? String(row.thumbnail_url) : undefined),
     imageHash: row.image_hash ? String(row.image_hash) : undefined,
     possibleDuplicate: Boolean(row.possible_duplicate),
     duplicateOfItemId: row.duplicate_of_item_id ? String(row.duplicate_of_item_id) : undefined,
@@ -148,6 +156,20 @@ function itemFromRow(row: ItemRow): BulkImportItem {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+export async function resolveBulkImportSourceImageUrl(sourceImagePath: string, storedUrl?: string) {
+  if (!sourceImagePath) {
+    if (storedUrl) return storedUrl;
+    throw new Error("This bulk-import item has no stored source-image path.");
+  }
+  const client = requireSupabase();
+  const signed = await client.storage.from("bulk-inventory-imports").createSignedUrl(sourceImagePath, 60 * 60);
+  if (!signed.error && signed.data?.signedUrl) return signed.data.signedUrl;
+  const publicUrl = client.storage.from("bulk-inventory-imports").getPublicUrl(sourceImagePath).data.publicUrl;
+  if (publicUrl) return `${publicUrl}${publicUrl.includes("?") ? "&" : "?"}retry=${Date.now()}`;
+  if (storedUrl) return `${storedUrl}${storedUrl.includes("?") ? "&" : "?"}retry=${Date.now()}`;
+  throw new Error(signed.error?.message || "Original photo could not be resolved from Storage.");
 }
 
 async function fileHash(file: File) {

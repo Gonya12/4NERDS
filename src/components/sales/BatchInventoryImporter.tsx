@@ -15,6 +15,7 @@ import {
   listBulkImportItems,
   listBulkImportJobs,
   kickBulkImportWorker,
+  resolveBulkImportSourceImageUrl,
   retryBulkImportItems,
   updateBulkImportItem,
   uploadBulkImportFile,
@@ -819,7 +820,7 @@ function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpe
         onOpenImage={onOpenImage} onPatch={onPatch} onCorrect={() => setStage("inventory")}
         onWrong={() => setStage("alternatives")} onSearch={onSearch} onRetry={onRetry}
       /> : null}
-      {stage === "alternatives" ? <AlternativeMatches item={item} alternatives={alternatives} loading={alternativesLoading} error={alternativesError} onSearch={onSearch} onChoose={onChoose} /> : null}
+      {stage === "alternatives" ? <AlternativeMatches item={item} alternatives={alternatives} loading={alternativesLoading} error={alternativesError} onOpenImage={onOpenImage} onSearch={onSearch} onChoose={onChoose} /> : null}
       {stage === "inventory" ? <InventoryConfirmation
         item={item} workers={workers} candidateImage={candidateImage} pricingVariants={pricingVariants}
         providerMarket={providerMarket} stamped={stamped} costMode={costMode} cost={cost}
@@ -847,11 +848,7 @@ function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, p
 }) {
   return <>
     <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-4">
-      <button type="button" onClick={() => onOpenImage(item.sourceImageUrl, `Uploaded photo · ${item.originalFilename}`)} className="rounded-2xl bg-slate-950 p-2">
-        <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-white">Uploaded Photo</p>
-        <img src={item.sourceImageUrl} alt="Uploaded card" className="h-64 w-full object-contain sm:h-80" />
-        <span className="text-xs font-bold text-white">Tap to enlarge</span>
-      </button>
+      <BulkSourcePhoto item={item} onOpenImage={onOpenImage} />
       <button type="button" disabled={!candidateImage} onClick={() => candidateImage && onOpenImage(candidateImage, `Official provider card · ${candidate?.name || "Card"}`)} className="rounded-2xl bg-slate-50 p-2 text-left disabled:opacity-60 dark:bg-slate-950">
         <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Official Provider Card</p>
         {candidateImage ? <img src={candidateImage} alt="Provider card" className="h-64 w-full object-contain sm:h-80" /> : <div className="flex h-64 items-center justify-center text-sm text-slate-500 sm:h-80">No exact candidate selected</div>}
@@ -874,9 +871,9 @@ function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, p
   </>;
 }
 
-function AlternativeMatches({ item, alternatives, loading, error, onSearch, onChoose }: { item: BulkImportItem; alternatives: BulkCandidate[]; loading: boolean; error: string; onSearch: () => void; onChoose: (match: BulkCandidate) => void }) {
+function AlternativeMatches({ item, alternatives, loading, error, onOpenImage, onSearch, onChoose }: { item: BulkImportItem; alternatives: BulkCandidate[]; loading: boolean; error: string; onOpenImage: (url: string, title: string) => void; onSearch: () => void; onChoose: (match: BulkCandidate) => void }) {
   return <>
-    <div className="mt-4 flex items-center gap-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950"><img src={item.thumbnailUrl || item.sourceImageUrl} alt="Uploaded card" className="h-24 w-16 rounded-lg bg-slate-900 object-contain" /><div className="min-w-0"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Recognized</p><h4 className="truncate text-lg font-black">{item.recognizedName || "Name unavailable"}</h4><p className="truncate text-sm text-slate-500">{item.recognizedSet || "Set unknown"} · #{item.recognizedCollectorNumber || "—"}</p></div></div>
+    <div className="mt-4 grid gap-3 rounded-2xl bg-slate-50 p-3 sm:grid-cols-[10rem_minmax(0,1fr)] dark:bg-slate-950"><BulkSourcePhoto item={item} onOpenImage={onOpenImage} compact /><div className="min-w-0 self-center"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Recognized</p><h4 className="truncate text-lg font-black">{item.recognizedName || "Name unavailable"}</h4><p className="truncate text-sm text-slate-500">{item.recognizedSet || "Set unknown"} · #{item.recognizedCollectorNumber || "—"}</p><p className="mt-2 text-xs text-slate-500">The original uploaded photo remains attached while you compare or search for another match.</p></div></div>
     <div className="mt-4 flex items-end justify-between gap-3"><div><h4 className="text-lg font-black">Other Possible Matches</h4><p className="text-xs text-slate-500">Same-name records are prioritized. Selecting one reuses provider results and does not call AI.</p></div><button type="button" onClick={onSearch} className="shrink-0 text-xs font-black text-violet-700 dark:text-violet-300"><Search size={15} className="inline" /> Search Manually</button></div>
     {loading ? <p className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-violet-700"><LoaderCircle size={15} className="animate-spin" /> Loading up to 10 same-name provider records…</p> : null}
     {error ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Stored alternatives remain available. Additional search failed: {error}</p> : null}
@@ -884,6 +881,53 @@ function AlternativeMatches({ item, alternatives, loading, error, onSearch, onCh
     {!alternatives.length ? <p className="mt-4 rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-500 dark:bg-slate-950">No additional provider candidates were returned. Use the prefilled manual search.</p> : null}
     <button type="button" onClick={onSearch} className="mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 font-black text-white"><Search size={18} /> Search Manually with Recognized Details</button>
   </>;
+}
+
+function BulkSourcePhoto({ item, onOpenImage, compact = false }: { item: BulkImportItem; onOpenImage: (url: string, title: string) => void; compact?: boolean }) {
+  const [imageUrl, setImageUrl] = useState(item.sourceImageUrl);
+  const [loading, setLoading] = useState(Boolean(item.sourceImageUrl || item.sourceImagePath));
+  const [failed, setFailed] = useState(!item.sourceImageUrl && !item.sourceImagePath);
+  const [resolving, setResolving] = useState(false);
+
+  useEffect(() => {
+    setImageUrl(item.sourceImageUrl);
+    setLoading(Boolean(item.sourceImageUrl || item.sourceImagePath));
+    setFailed(!item.sourceImageUrl && !item.sourceImagePath);
+    setResolving(false);
+    if (!item.sourceImageUrl && item.sourceImagePath) {
+      setResolving(true);
+      void resolveBulkImportSourceImageUrl(item.sourceImagePath).then((url) => {
+        setImageUrl(url);
+        setFailed(false);
+        setLoading(true);
+      }).catch(() => {
+        setLoading(false);
+        setFailed(true);
+      }).finally(() => setResolving(false));
+    }
+  }, [item.id, item.sourceImagePath, item.sourceImageUrl]);
+
+  async function retry() {
+    setResolving(true);
+    setLoading(true);
+    setFailed(false);
+    try {
+      const nextUrl = await resolveBulkImportSourceImageUrl(item.sourceImagePath, item.sourceImageUrl);
+      setImageUrl(nextUrl);
+    } catch {
+      setLoading(false);
+      setFailed(true);
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  const imageHeight = compact ? "h-48 sm:h-52" : "h-64 sm:h-80";
+  return <div className={`relative overflow-hidden rounded-2xl bg-slate-950 p-2 ${compact ? "w-full" : ""}`} data-bulk-source-item-id={item.id}>
+    <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-white">Our Uploaded Photo</p>
+    {loading && !failed ? <div role="status" aria-label="Loading original photo" className={`skeleton-shimmer absolute inset-x-2 top-7 z-10 ${imageHeight} rounded-xl bg-slate-800`} /> : null}
+    {failed ? <div className={`flex ${imageHeight} flex-col items-center justify-center rounded-xl bg-slate-900 p-4 text-center text-white`}><ImageIcon size={28} className="text-slate-500" /><p className="mt-2 text-sm font-black">Original photo unavailable</p><button type="button" disabled={resolving} onClick={() => void retry()} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-4 text-xs font-black text-slate-950 disabled:opacity-50"><RefreshCw size={15} className={resolving ? "animate-spin" : ""} /> Retry</button></div> : imageUrl ? <button type="button" disabled={loading} onClick={() => onOpenImage(imageUrl, `View Original Photo · ${item.originalFilename}`)} className="block w-full disabled:cursor-wait"><img key={`${item.id}:${imageUrl}`} src={imageUrl} alt={`Original uploaded photo for ${item.originalFilename}`} onLoad={() => { setLoading(false); setFailed(false); }} onError={() => { setLoading(false); setFailed(true); }} className={`${imageHeight} w-full object-contain`} /><span className="text-xs font-bold text-white">Click to enlarge</span></button> : null}
+  </div>;
 }
 
 function InventoryConfirmation({ item, workers, candidateImage, pricingVariants, providerMarket, stamped, costMode, cost, readyToMark, busy, onPatch, onCostMode, onCost, onBack, onLooksGood }: {
