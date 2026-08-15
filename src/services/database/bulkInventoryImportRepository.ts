@@ -353,6 +353,16 @@ export function bulkItemPatchFromMatch(match: CardMatch) {
     ? null
     : Number.isFinite(priced?.market) ? Number(priced?.market)
       : Number.isFinite(match.pricing?.market) ? Number(match.pricing?.market) : null;
+  const checkedAt = match.pricing?.updatedAt || new Date().toISOString();
+  if (import.meta.env.DEV) console.info("[Bulk Import Review] provider pricing", {
+    providerCardId: match.providerCardId,
+    cardName: match.name,
+    set: match.setName,
+    collectorNumber: match.collectorNumber || match.cardCode,
+    pricingVariants: variants.map((variant) => ({ variant: variant.name, market: variant.market ?? null })),
+    selectedVariant: priced?.name || null,
+    marketPrice: market,
+  });
   return {
     selectedCandidate: match,
     candidateScore: match.matchScore,
@@ -361,8 +371,8 @@ export function bulkItemPatchFromMatch(match: CardMatch) {
     marketSource: match.pricing?.source || (match.provider === "pokemontcg" ? "TCGplayer" : match.provider === "tcgdex" ? "TCGdex" : "OPTCG API"),
     marketVariant: priced?.name || null,
     marketCurrency: match.pricing?.currency || null,
-    marketCheckedAt: new Date().toISOString(),
-    status: "identified" as const,
+    marketCheckedAt: checkedAt,
+    status: "needs_review" as const,
   };
 }
 
@@ -400,11 +410,13 @@ export async function confirmBulkImportItem(item: BulkImportItem) {
   if (!item.selectedCandidate) throw new Error("Choose the exact card before confirming it.");
   if ((item.selectedCandidate.pricing?.variants?.length || 0) > 1 && !item.marketVariant) throw new Error("Choose the physical printing before confirming it.");
   if (!item.condition) throw new Error("Choose the card condition before confirming it.");
+  const ownershipTotal = item.ownershipShares.reduce((sum, share) => sum + Number(share.ownershipPercentage || 0), 0);
+  if (!item.ownershipShares.length || Math.abs(ownershipTotal - 100) >= 0.001) throw new Error("Assign 100% inventory ownership before confirming it.");
   const candidate = item.selectedCandidate;
   const stableInventoryId = item.inventoryPurchaseId || item.id;
   const costKnown = item.costBasis != null || item.zeroCostBasisConfirmed;
   const marketValue = item.condition === "Near Mint / NM" ? item.baseMarket ?? item.adjustedMarket : item.adjustedMarket;
-  if (marketValue == null) throw new Error(item.condition === "Near Mint / NM"
+  if (item.condition !== "Unknown" && marketValue == null) throw new Error(item.condition === "Near Mint / NM"
     ? "This card has no provider NM market. Enter a confirmed market value before approving it."
     : `Enter a confirmed ${item.condition} market value before approving it.`);
   const purchase: Partial<InventoryPurchase> = {
@@ -437,7 +449,7 @@ export async function confirmBulkImportItem(item: BulkImportItem) {
     costBasisKnown: costKnown,
     zeroCostBasisConfirmed: item.zeroCostBasisConfirmed,
     providerBaseMarket: item.baseMarket,
-    marketValue,
+    marketValue: marketValue ?? undefined,
     marketPriceSource: item.marketSource,
     marketPriceVariant: item.marketVariant,
     marketPriceCurrency: item.marketCurrency,

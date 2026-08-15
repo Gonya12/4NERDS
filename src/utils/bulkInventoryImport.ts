@@ -47,6 +47,7 @@ export function bulkItemPricingVariants(item: BulkQueueItemLike) {
 }
 
 export function bulkItemMarketValue(item: BulkQueueItemLike) {
+  if (item.condition === "Unknown") return item.adjustedMarket;
   return item.condition === "Near Mint / NM"
     ? item.baseMarket ?? item.adjustedMarket
     : item.adjustedMarket;
@@ -60,8 +61,10 @@ export function bulkItemReviewIssues(item: BulkQueueItemLike): BulkReviewIssue[]
   if (!item.selectedCandidate) issues.push("match");
   if (bulkItemPricingVariants(item).length > 1 && !item.marketVariant) issues.push("variant");
   if (!item.condition) issues.push("condition");
-  if (item.condition && bulkItemMarketValue(item) == null) issues.push("price");
-  if (item.ownershipShares?.length) {
+  if (item.condition && item.condition !== "Unknown" && bulkItemMarketValue(item) == null) issues.push("price");
+  if (!item.ownershipShares?.length) {
+    issues.push("ownership");
+  } else {
     const total = item.ownershipShares.reduce((sum, share) => sum + Number(share.ownershipPercentage || 0), 0);
     if (Math.abs(total - 100) >= 0.001) issues.push("ownership");
   }

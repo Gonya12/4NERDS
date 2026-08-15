@@ -55,7 +55,32 @@ test("review readiness requires an exact match, physical variant, condition, and
   assert.ok(bulkItemReviewIssues(played).includes("price"));
   assert.equal(isBulkItemImportReady(played), false);
   assert.equal(isBulkItemImportReady({ ...played, adjustedMarket: 14 }), true);
+  assert.equal(isBulkItemImportReady({ ...variantChosen, condition: "Unknown", adjustedMarket: undefined }), true);
+  assert.ok(bulkItemReviewIssues({ ...variantChosen, ownershipShares: [] }).includes("ownership"));
   assert.equal(isStampedBulkItem({ ...variantChosen, marketVariant: "stamped/manual" }), true);
+});
+
+test("dedicated review separates provider identity from inventory details", () => {
+  const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  assert.match(source, /Review Match/);
+  assert.match(source, /Official Provider Card/);
+  assert.match(source, /Is this the correct card and printing\?/);
+  assert.match(source, /Yes, This Is It/);
+  assert.match(source, /No, Wrong Card/);
+  assert.match(source, /Other Possible Matches/);
+  assert.match(source, /Search Manually with Recognized Details/);
+  assert.match(source, /Save & Next/);
+  assert.match(source, /Reviewing \{itemNumber\} of \{itemCount\}/);
+});
+
+test("bulk review loads up to ten same-name alternatives and logs provider pricing without financial writes", () => {
+  const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
+  assert.match(source, /searchPokemonCardsManually/);
+  assert.match(source, /pageSize: 10/);
+  assert.match(repository, /\[Bulk Import Review\] provider pricing/);
+  assert.match(repository, /pricingVariants/);
+  assert.doesNotMatch(repository, /financial_transactions/);
 });
 
 test("issue filters isolate missing fields, stamped cards, low confidence, and source-photo duplicates", () => {

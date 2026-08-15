@@ -34,6 +34,7 @@ import {
   type BulkQueueSort,
 } from "../../utils/bulkInventoryImport";
 import { formatMoney } from "../../utils/paymentMath";
+import { searchPokemonCardsManually } from "../../services/sales/pokemonCardSearchService";
 import { ImageLightbox } from "./ImageLightbox";
 import { ManualCardSearch } from "./ManualCardSearch";
 import { OwnershipEditor } from "./OwnershipEditor";
@@ -48,7 +49,7 @@ type ItemPatch = Parameters<typeof updateBulkImportItem>[1];
 type ReviewScreen = "review" | "summary" | "importing" | "complete";
 type LightboxState = { url: string; title: string } | null;
 
-const conditions: CardCondition[] = ["Mint", "Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged"];
+const conditions: CardCondition[] = ["Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged", "Unknown"];
 const pageSize = 50;
 const filterOptions: Array<{ value: BulkQueueFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -66,9 +67,11 @@ const confirmedMarketForCondition = (baseMarket: number | null | undefined, cond
 const bulkVariantLabels: Record<string, string> = { normal: "Normal", holofoil: "Holofoil", reverseHolofoil: "Reverse Holo", "1stEditionNormal": "First Edition Normal", "1stEditionHolofoil": "First Edition Holo" };
 const bulkVariantLabel = (value?: string | null) => value ? bulkVariantLabels[value] || value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase()) : "Variant needed";
 const confidenceLabel = (value?: BulkImportItem["overallConfidence"]) => value === "high" ? "High Confidence" : value === "medium" ? "Medium Confidence" : "Low Confidence";
+const confidenceShort = (value?: BulkImportItem["overallConfidence"]) => value === "high" ? "High" : value === "medium" ? "Medium" : "Low";
 const conditionLabels: Partial<Record<CardCondition, string>> = {
   "Near Mint / NM": "NM", "Lightly Played / LP": "LP", "Moderately Played / MP": "MP",
   "Heavily Played / HP": "HP", Damaged: "DMG", Mint: "Mint",
+  Unknown: "Unknown",
 };
 const compactCondition = (value?: CardCondition) => value ? conditionLabels[value] || value : "Condition needed";
 
@@ -77,7 +80,7 @@ function statusLabel(item: BulkImportItem) {
   if (item.status === "failed") return "Failed";
   if (item.status === "processing") return "Processing";
   if (item.status === "waiting") return "Waiting";
-  return isBulkItemImportReady(item) ? "Ready" : "Review";
+  return isBulkItemImportReady(item) ? "Ready" : "Review required";
 }
 
 function statusClass(item: BulkImportItem) {
@@ -472,8 +475,8 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
                     <button type="button" onClick={() => setEditingId(item.id)} className="min-w-0 flex-1 text-left">
                       <div className="flex items-start gap-2"><b className="min-w-0 flex-1 truncate text-sm sm:text-base">{item.selectedCandidate?.name || item.recognizedName || (item.status === "processing" ? "Analyzing…" : "Unidentified card")}</b><span className={`hidden items-center gap-1 rounded-full px-2 py-1 text-[10px] font-black sm:inline-flex ${statusClass(item)}`}>{statusIcon(item)} {statusLabel(item)}</span></div>
                       <p className="truncate text-xs text-slate-500">{item.selectedCandidate?.setName || item.recognizedSet || "Set unknown"} · #{item.selectedCandidate?.collectorNumber || item.selectedCandidate?.cardCode || item.recognizedCollectorNumber || "—"}</p>
-                      <p className="mt-1 truncate text-xs font-bold">{compactCondition(item.condition)} · {selectedVariant(item)} · {bulkItemMarketValue(item) == null ? "Price needed" : formatMoney(Number(bulkItemMarketValue(item)))}</p>
-                      <div className="mt-1 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-black sm:hidden ${statusClass(item)}`}>{statusIcon(item)} {statusLabel(item)}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold dark:bg-slate-800">{confidenceLabel(item.overallConfidence)}</span>{labels.slice(0, 3).map((label) => <span key={label} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">{label}</span>)}</div>
+                      <p className="mt-1 truncate text-xs font-bold">{compactCondition(item.condition)} · {selectedVariant(item)} · Market: {bulkItemMarketValue(item) == null ? "—" : formatMoney(Number(bulkItemMarketValue(item)))}</p>
+                      <div className="mt-1 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-black sm:hidden ${statusClass(item)}`}>{statusIcon(item)} {statusLabel(item)}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold dark:bg-slate-800">AI: {confidenceShort(item.overallConfidence)}</span>{labels.slice(0, 3).map((label) => <span key={label} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">{label}</span>)}</div>
                       {item.status === "needs_review" && item.alternativeCandidates.length ? <p className="mt-1 text-[10px] font-bold text-amber-700 dark:text-amber-300">{item.alternativeCandidates.length + 1} possible versions · compare both images</p> : null}
                     </button>
                     <ChevronRight className="shrink-0 text-slate-400" size={18} />
@@ -538,7 +541,7 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
         onApply={(suggestion) => {
           if (!manualItem) return;
           const match = suggestion.possibleMatches?.find((value) => value.providerCardId === suggestion.providerCardId) || suggestion.possibleMatches?.[0];
-          if (match) void patchItem(manualItem, { ...bulkItemPatchFromMatch(match), status: "identified", recognizedName: suggestion.cardName, recognizedCollectorNumber: suggestion.collectorNumber, recognizedSet: suggestion.cardSet });
+          if (match) void patchItem(manualItem, { ...bulkItemPatchFromMatch(match), status: "needs_review", recognizedName: suggestion.cardName, recognizedCollectorNumber: suggestion.collectorNumber, recognizedSet: suggestion.cardSet });
           else void patchItem(manualItem, { status: "needs_review", recognizedName: suggestion.cardName, recognizedCollectorNumber: suggestion.collectorNumber, recognizedSet: suggestion.cardSet });
           setManualSearchId("");
         }}
@@ -574,7 +577,7 @@ function ImportSummary({ total, ready, alreadyImported, skipped, marketValue, ow
   </div>;
 }
 
-function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpenImage, onSearch, onPatch, onLooksGood, onRetry, onChoose, onPrevious, onNext }: {
+function LegacyItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpenImage, onSearch, onPatch, onLooksGood, onRetry, onChoose, onPrevious, onNext }: {
   item: BulkImportItem;
   workers: Worker[];
   itemNumber: number;
@@ -656,4 +659,268 @@ function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpe
       <p className="mt-2 text-center text-[11px] text-slate-500">Looks Good advances to the next card. Normal review, candidate changes, search, variants, condition, and pricing use zero OpenAI credits.</p>
     </section>
   </div>;
+}
+
+type BulkCandidate = NonNullable<BulkImportItem["selectedCandidate"]>;
+
+function providerCandidateMarket(candidate: BulkCandidate, variantName?: string) {
+  const variants = candidate.pricing?.variants || [];
+  if (variantName) return variants.find((variant) => variant.name === variantName)?.market;
+  if (variants.length === 1) return variants[0].market;
+  return variants.length === 0 ? candidate.pricing?.market : undefined;
+}
+
+function prioritizedAlternatives(item: BulkImportItem, searched: BulkCandidate[] = []) {
+  const recognizedName = String(item.recognizedName || item.selectedCandidate?.name || "").trim().toLocaleLowerCase();
+  const unique = new Map<string, BulkCandidate>();
+  [...item.alternativeCandidates, ...searched].forEach((candidate) => unique.set(`${candidate.provider}:${candidate.providerCardId}`, candidate));
+  return [...unique.values()]
+    .filter((candidate) => candidate.providerCardId !== item.selectedCandidate?.providerCardId)
+    .sort((left, right) => {
+      const leftExact = left.name.trim().toLocaleLowerCase() === recognizedName ? 1 : 0;
+      const rightExact = right.name.trim().toLocaleLowerCase() === recognizedName ? 1 : 0;
+      return rightExact - leftExact || Number(right.matchScore || 0) - Number(left.matchScore || 0);
+    })
+    .slice(0, 10);
+}
+
+function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpenImage, onSearch, onPatch, onLooksGood, onRetry, onChoose, onPrevious, onNext }: {
+  item: BulkImportItem;
+  workers: Worker[];
+  itemNumber: number;
+  itemCount: number;
+  busy: boolean;
+  onClose: () => void;
+  onOpenImage: (url: string, title: string) => void;
+  onSearch: () => void;
+  onPatch: (patch: ItemPatch) => void;
+  onLooksGood: () => void;
+  onRetry: () => void;
+  onChoose: (match: BulkCandidate) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const [stage, setStage] = useState<"match" | "alternatives" | "inventory">("match");
+  const [costMode, setCostMode] = useState<"unknown" | "amount" | "zero">(item.zeroCostBasisConfirmed ? "zero" : item.costBasis != null ? "amount" : "unknown");
+  const [cost, setCost] = useState(item.costBasis == null ? "" : String(item.costBasis));
+  const [searchedAlternatives, setSearchedAlternatives] = useState<BulkCandidate[]>([]);
+  const [alternativesLoading, setAlternativesLoading] = useState(false);
+  const [alternativesError, setAlternativesError] = useState("");
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const previousIdentity = useRef(`${item.id}:${item.selectedCandidate?.providerCardId || ""}`);
+  const hydratedIdentity = useRef("");
+
+  useEffect(() => {
+    setStage("match");
+    setCostMode(item.zeroCostBasisConfirmed ? "zero" : item.costBasis != null ? "amount" : "unknown");
+    setCost(item.costBasis == null ? "" : String(item.costBasis));
+    setSearchedAlternatives([]);
+    setAlternativesError("");
+  }, [item.id, item.costBasis, item.zeroCostBasisConfirmed]);
+
+  useEffect(() => {
+    if (stage !== "alternatives" || searchedAlternatives.length || alternativesLoading || !item.recognizedName) return;
+    const controller = new AbortController();
+    setAlternativesLoading(true);
+    setAlternativesError("");
+    void searchPokemonCardsManually({
+      game: item.recognizedCardGame === "one_piece" ? "one_piece" : "pokemon",
+      language: item.recognizedLanguage === "ja" ? "ja" : "en",
+      name: item.recognizedName,
+      query: item.recognizedName,
+      page: 1,
+      pageSize: 10,
+      disableCorrection: true,
+    }, controller.signal).then((result) => setSearchedAlternatives(result.matches)).catch((unknownError) => {
+      if (!controller.signal.aborted) setAlternativesError(unknownError instanceof Error ? unknownError.message : "Additional provider matches could not be loaded.");
+    }).finally(() => { if (!controller.signal.aborted) setAlternativesLoading(false); });
+    return () => controller.abort();
+  }, [alternativesLoading, item.recognizedCardGame, item.recognizedLanguage, item.recognizedName, searchedAlternatives.length, stage]);
+
+  useEffect(() => {
+    const identity = `${item.id}:${item.selectedCandidate?.providerCardId || ""}`;
+    if (identity !== previousIdentity.current) setStage("match");
+    previousIdentity.current = identity;
+  }, [item.id, item.selectedCandidate?.providerCardId]);
+
+  useEffect(() => {
+    const candidate = item.selectedCandidate;
+    if (!candidate) return;
+    const variants = candidate.pricing?.variants || [];
+    const automaticVariant = variants.length === 1 ? variants[0] : undefined;
+    const automaticMarket = automaticVariant?.market ?? (variants.length === 0 ? candidate.pricing?.market : undefined);
+    const identity = `${item.id}:${candidate.providerCardId}`;
+    if (import.meta.env.DEV && hydratedIdentity.current !== identity) console.info("[Bulk Import Review] selected provider record", {
+      providerCardId: candidate.providerCardId,
+      cardName: candidate.name,
+      set: candidate.setName,
+      collectorNumber: candidate.collectorNumber || candidate.cardCode,
+      pricingVariants: variants.map((variant) => ({ variant: variant.name, market: variant.market ?? null })),
+      selectedVariant: item.marketVariant || automaticVariant?.name || null,
+      marketPrice: item.baseMarket ?? automaticMarket ?? null,
+    });
+    if (hydratedIdentity.current === identity) return;
+    hydratedIdentity.current = identity;
+    if ((!item.marketVariant && automaticVariant) || (item.baseMarket == null && automaticMarket != null)) onPatch({
+      marketVariant: item.marketVariant || automaticVariant?.name || null,
+      baseMarket: item.baseMarket ?? automaticMarket ?? null,
+      adjustedMarket: item.condition === "Near Mint / NM" ? item.adjustedMarket ?? automaticMarket ?? null : item.adjustedMarket ?? null,
+      marketSource: item.marketSource || candidate.pricing?.source || (candidate.provider === "pokemontcg" ? "TCGplayer" : candidate.provider),
+      marketCurrency: item.marketCurrency || candidate.pricing?.currency || "USD",
+      marketCheckedAt: item.marketCheckedAt || candidate.pricing?.updatedAt || new Date().toISOString(),
+    });
+  }, [item, onPatch]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (["INPUT", "SELECT", "TEXTAREA"].includes((event.target as HTMLElement).tagName)) return;
+      if (event.key === "ArrowLeft") onPrevious();
+      if (event.key === "ArrowRight") onNext();
+      if (event.key.toLowerCase() === "y" && stage === "match" && item.selectedCandidate) setStage("inventory");
+      if (event.key.toLowerCase() === "n" && stage === "match") setStage("alternatives");
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [item.selectedCandidate, onNext, onPrevious, stage]);
+
+  const candidate = item.selectedCandidate;
+  const candidateImage = candidate?.imageLarge || candidate?.imageSmall;
+  const pricingVariants = bulkItemPricingVariants(item);
+  const providerMarket = candidate ? providerCandidateMarket(candidate, item.marketVariant) ?? item.baseMarket : undefined;
+  const identityReady = Boolean(candidate) && (pricingVariants.length <= 1 || Boolean(item.marketVariant));
+  const ownershipValid = item.ownershipShares.length > 0 && Math.abs(item.ownershipShares.reduce((sum, share) => sum + share.ownershipPercentage, 0) - 100) < 0.001;
+  const pricingReady = Boolean(item.condition) && (item.condition === "Unknown" || bulkItemMarketValue(item) != null);
+  const readyToMark = Boolean(candidate) && ownershipValid && pricingReady && !["failed", "waiting", "processing"].includes(item.status);
+  const alternatives = prioritizedAlternatives(item, searchedAlternatives);
+  const stamped = /stamp/i.test(item.marketVariant || "");
+  const priceUnavailableReason = pricingVariants.length > 1 && !item.marketVariant
+    ? "Choose the finish to load its provider market price."
+    : item.marketVariant && providerMarket == null
+      ? "Pricing unavailable — the selected finish has no mapped market value."
+      : "Market price unavailable — the provider returned no market value.";
+
+  return <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/70 sm:items-center sm:p-4">
+    <section
+      onTouchStart={(event) => { const touch = event.touches[0]; touchStart.current = { x: touch.clientX, y: touch.clientY }; }}
+      onTouchEnd={(event) => { const start = touchStart.current; const touch = event.changedTouches[0]; touchStart.current = null; if (!start || !touch) return; const dx = touch.clientX - start.x; const dy = touch.clientY - start.y; if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (dx > 0) onPrevious(); else onNext(); } }}
+      className="max-h-[96dvh] w-full max-w-5xl overflow-y-auto rounded-t-3xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:rounded-3xl sm:p-5 dark:bg-slate-900"
+    >
+      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 border-b border-slate-100 bg-white/95 p-1 pb-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+        <button type="button" onClick={onPrevious} aria-label="Previous card" className="rounded-lg bg-slate-100 p-2 dark:bg-slate-800"><ChevronLeft size={18} /></button>
+        <div className="min-w-0 flex-1"><p className="eyebrow">Reviewing {itemNumber} of {itemCount}</p><h3 className="truncate text-lg font-black">{stage === "alternatives" ? "Other Possible Matches" : stage === "inventory" ? "Inventory Details" : "Review Match"}</h3></div>
+        <button type="button" onClick={onNext} aria-label="Next card" className="rounded-lg bg-slate-100 p-2 dark:bg-slate-800"><ChevronRight size={18} /></button>
+        <button type="button" onClick={onClose} aria-label="Close review" className="rounded-lg bg-slate-100 p-2 dark:bg-slate-800"><X size={18} /></button>
+      </header>
+      {item.possibleDuplicate ? <p className="mt-3 rounded-xl bg-amber-100 p-3 text-sm font-bold text-amber-900"><CopyCheck size={16} className="mr-1 inline" />Possible Duplicate Photo. The source image hash appeared before; identical card IDs alone are never treated as duplicates.</p> : null}
+
+      {stage === "match" ? <MatchConfirmation
+        item={item} candidate={candidate} candidateImage={candidateImage} pricingVariants={pricingVariants}
+        providerMarket={providerMarket} identityReady={identityReady} priceUnavailableReason={priceUnavailableReason}
+        onOpenImage={onOpenImage} onPatch={onPatch} onCorrect={() => setStage("inventory")}
+        onWrong={() => setStage("alternatives")} onSearch={onSearch} onRetry={onRetry}
+      /> : null}
+      {stage === "alternatives" ? <AlternativeMatches item={item} alternatives={alternatives} loading={alternativesLoading} error={alternativesError} onSearch={onSearch} onChoose={onChoose} /> : null}
+      {stage === "inventory" ? <InventoryConfirmation
+        item={item} workers={workers} candidateImage={candidateImage} pricingVariants={pricingVariants}
+        providerMarket={providerMarket} stamped={stamped} costMode={costMode} cost={cost}
+        readyToMark={readyToMark} busy={busy} onPatch={onPatch} onCostMode={setCostMode}
+        onCost={setCost} onBack={() => setStage("match")} onLooksGood={onLooksGood}
+      /> : null}
+    </section>
+  </div>;
+}
+
+function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, providerMarket, identityReady, priceUnavailableReason, onOpenImage, onPatch, onCorrect, onWrong, onSearch, onRetry }: {
+  item: BulkImportItem;
+  candidate?: BulkCandidate;
+  candidateImage?: string;
+  pricingVariants: ReturnType<typeof bulkItemPricingVariants>;
+  providerMarket?: number;
+  identityReady: boolean;
+  priceUnavailableReason: string;
+  onOpenImage: (url: string, title: string) => void;
+  onPatch: (patch: ItemPatch) => void;
+  onCorrect: () => void;
+  onWrong: () => void;
+  onSearch: () => void;
+  onRetry: () => void;
+}) {
+  return <>
+    <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-4">
+      <button type="button" onClick={() => onOpenImage(item.sourceImageUrl, `Uploaded photo · ${item.originalFilename}`)} className="rounded-2xl bg-slate-950 p-2">
+        <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-white">Uploaded Photo</p>
+        <img src={item.sourceImageUrl} alt="Uploaded card" className="h-64 w-full object-contain sm:h-80" />
+        <span className="text-xs font-bold text-white">Tap to enlarge</span>
+      </button>
+      <button type="button" disabled={!candidateImage} onClick={() => candidateImage && onOpenImage(candidateImage, `Official provider card · ${candidate?.name || "Card"}`)} className="rounded-2xl bg-slate-50 p-2 text-left disabled:opacity-60 dark:bg-slate-950">
+        <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Official Provider Card</p>
+        {candidateImage ? <img src={candidateImage} alt="Provider card" className="h-64 w-full object-contain sm:h-80" /> : <div className="flex h-64 items-center justify-center text-sm text-slate-500 sm:h-80">No exact candidate selected</div>}
+      </button>
+    </div>
+    {candidate ? <section className="mt-4 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1"><h4 className="text-xl font-black">{candidate.name}</h4><p className="font-bold text-slate-600 dark:text-slate-300">{candidate.setName || "Set unavailable"} · #{candidate.collectorNumber || candidate.cardCode || "—"}</p><p className="mt-1 text-xs text-slate-500">{candidate.rarity || "Rarity unavailable"} · {candidate.language === "ja" ? "Japanese" : "English"} · {candidate.provider} · ID {candidate.providerCardId}</p></div>
+        <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-black text-violet-800 dark:bg-violet-950 dark:text-violet-200">AI {confidenceLabel(item.overallConfidence)}</span>
+      </div>
+      {pricingVariants.length > 1 ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Finish / variant</p><div className="mt-2 flex flex-wrap gap-2">{pricingVariants.map((variant) => <button type="button" key={variant.name} onClick={() => { const market = variant.market ?? null; onPatch({ marketVariant: variant.name, baseMarket: market, adjustedMarket: item.condition === "Near Mint / NM" ? market : item.adjustedMarket ?? null, marketSource: candidate.pricing?.source || item.marketSource || "TCGplayer", marketCheckedAt: candidate.pricing?.updatedAt || new Date().toISOString() }); }} className={`rounded-xl border px-3 py-2 text-left text-xs ${item.marketVariant === variant.name ? "border-violet-600 bg-violet-50 font-black text-violet-800 dark:bg-violet-950" : "border-slate-200 dark:border-slate-700"}`}><span className="block font-black">{bulkVariantLabel(variant.name)}</span><span>{variant.market == null ? "Market —" : formatMoney(variant.market)}</span></button>)}</div></div> : <p className="mt-3 text-sm"><b>Finish:</b> {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name || "standard")}</p>}
+      <div className="mt-4 grid gap-3 rounded-2xl bg-slate-950 p-4 text-white sm:grid-cols-2">
+        <div><p className="text-xs font-black uppercase tracking-wide text-slate-400">{item.marketSource || candidate.pricing?.source || "Provider"} Market</p>{providerMarket == null ? <p className="mt-1 text-sm font-bold text-amber-300">{priceUnavailableReason}</p> : <p className="text-3xl font-black">{formatMoney(providerMarket)}</p>}</div>
+        <div className="text-xs text-slate-300"><p><b>Source:</b> {item.marketSource || candidate.pricing?.source || candidate.provider}</p><p><b>Variant:</b> {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name)}</p><p><b>Last checked:</b> {item.marketCheckedAt || candidate.pricing?.updatedAt ? new Date(item.marketCheckedAt || candidate.pricing?.updatedAt || "").toLocaleString() : "Unavailable"}</p></div>
+      </div>
+      <p className="mt-4 text-center text-lg font-black">Is this the correct card and printing?</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2"><button type="button" disabled={!identityReady} onClick={onCorrect} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 font-black text-white disabled:opacity-40"><Check size={19} /> Yes, This Is It <kbd className="rounded bg-emerald-800 px-1.5 py-0.5 text-[10px]">Y</kbd></button><button type="button" onClick={onWrong} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-rose-100 px-4 font-black text-rose-800 dark:bg-rose-950 dark:text-rose-100"><X size={19} /> No, Wrong Card <kbd className="rounded bg-rose-200 px-1.5 py-0.5 text-[10px] dark:bg-rose-900">N</kbd></button></div>
+      {!identityReady ? <p className="mt-2 text-center text-xs font-bold text-amber-700">Choose the physical finish before confirming this provider record.</p> : null}
+    </section> : <section className="mt-4 rounded-2xl bg-amber-50 p-5 text-center dark:bg-amber-950/30"><AlertTriangle className="mx-auto text-amber-600" /><h4 className="mt-2 font-black">Needs Manual Review</h4><p className="text-sm text-slate-600 dark:text-slate-300">The uploaded photo and recognized {item.recognizedName || "card details"} are preserved, but no exact provider record is selected.</p><div className="mt-4 grid gap-2 sm:grid-cols-2"><button type="button" onClick={onWrong} className="min-h-12 rounded-xl bg-slate-950 px-4 font-black text-white">View Possible Matches</button><button type="button" onClick={onSearch} className="min-h-12 rounded-xl bg-violet-600 px-4 font-black text-white">Search Manually</button></div>{item.status === "failed" ? <button type="button" onClick={onRetry} className="mt-2 inline-flex min-h-11 items-center gap-2 rounded-xl bg-amber-100 px-4 font-black text-amber-900"><RefreshCw size={17} /> Retry AI Recognition</button> : null}</section>}
+  </>;
+}
+
+function AlternativeMatches({ item, alternatives, loading, error, onSearch, onChoose }: { item: BulkImportItem; alternatives: BulkCandidate[]; loading: boolean; error: string; onSearch: () => void; onChoose: (match: BulkCandidate) => void }) {
+  return <>
+    <div className="mt-4 flex items-center gap-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-950"><img src={item.thumbnailUrl || item.sourceImageUrl} alt="Uploaded card" className="h-24 w-16 rounded-lg bg-slate-900 object-contain" /><div className="min-w-0"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Recognized</p><h4 className="truncate text-lg font-black">{item.recognizedName || "Name unavailable"}</h4><p className="truncate text-sm text-slate-500">{item.recognizedSet || "Set unknown"} · #{item.recognizedCollectorNumber || "—"}</p></div></div>
+    <div className="mt-4 flex items-end justify-between gap-3"><div><h4 className="text-lg font-black">Other Possible Matches</h4><p className="text-xs text-slate-500">Same-name records are prioritized. Selecting one reuses provider results and does not call AI.</p></div><button type="button" onClick={onSearch} className="shrink-0 text-xs font-black text-violet-700 dark:text-violet-300"><Search size={15} className="inline" /> Search Manually</button></div>
+    {loading ? <p className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-violet-700"><LoaderCircle size={15} className="animate-spin" /> Loading up to 10 same-name provider records…</p> : null}
+    {error ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Stored alternatives remain available. Additional search failed: {error}</p> : null}
+    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{alternatives.map((match) => { const market = providerCandidateMarket(match); return <button type="button" key={`${match.provider}:${match.providerCardId}`} onClick={() => onChoose(match)} className="rounded-2xl border border-slate-200 p-2 text-left transition hover:border-violet-500 hover:bg-violet-50 dark:border-slate-700 dark:hover:bg-violet-950/30">{match.imageSmall || match.imageLarge ? <img loading="lazy" src={match.imageSmall || match.imageLarge} alt={match.name} className="mx-auto h-40 w-full object-contain" /> : <div className="flex h-40 items-center justify-center text-xs text-slate-500">No provider image</div>}<b className="mt-2 block truncate text-sm">{match.name}</b><span className="block truncate text-xs text-slate-500">{match.setName || "Set unknown"} · #{match.collectorNumber || match.cardCode || "—"}</span><span className="mt-1 block text-xs font-black">Market {market == null ? "—" : formatMoney(market)}</span><span className="block text-[10px] text-slate-500">{confidenceLabel(match.matchConfidence)} · score {Math.round(match.matchScore || 0)}</span><span className="mt-2 block rounded-lg bg-violet-600 py-2 text-center text-xs font-black text-white">Use This Card</span></button>; })}</div>
+    {!alternatives.length ? <p className="mt-4 rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-500 dark:bg-slate-950">No additional provider candidates were returned. Use the prefilled manual search.</p> : null}
+    <button type="button" onClick={onSearch} className="mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 font-black text-white"><Search size={18} /> Search Manually with Recognized Details</button>
+  </>;
+}
+
+function InventoryConfirmation({ item, workers, candidateImage, pricingVariants, providerMarket, stamped, costMode, cost, readyToMark, busy, onPatch, onCostMode, onCost, onBack, onLooksGood }: {
+  item: BulkImportItem;
+  workers: Worker[];
+  candidateImage?: string;
+  pricingVariants: ReturnType<typeof bulkItemPricingVariants>;
+  providerMarket?: number;
+  stamped: boolean;
+  costMode: "unknown" | "amount" | "zero";
+  cost: string;
+  readyToMark: boolean;
+  busy: boolean;
+  onPatch: (patch: ItemPatch) => void;
+  onCostMode: (mode: "unknown" | "amount" | "zero") => void;
+  onCost: (value: string) => void;
+  onBack: () => void;
+  onLooksGood: () => void;
+}) {
+  return <>
+    <section className="mt-4 flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/20">
+      {candidateImage ? <img src={candidateImage} alt="Confirmed provider card" className="h-24 w-16 object-contain" /> : null}
+      <div className="min-w-0 flex-1"><p className="text-xs font-black uppercase tracking-wide text-emerald-700">Provider match selected</p><h4 className="truncate text-lg font-black">{item.selectedCandidate?.name}</h4><p className="truncate text-sm text-slate-600 dark:text-slate-300">{item.selectedCandidate?.setName} · #{item.selectedCandidate?.collectorNumber || item.selectedCandidate?.cardCode || "—"} · {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name)}</p><p className="font-black">Provider base market: {providerMarket == null ? "Unavailable" : formatMoney(providerMarket)}</p></div>
+      <button type="button" onClick={onBack} className="rounded-lg bg-white px-3 py-2 text-xs font-black dark:bg-slate-900">Change</button>
+    </section>
+    <section className="mt-4 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+      <h4 className="font-black">Condition</h4><p className="text-xs text-slate-500">Condition is separate from identity. NM starts with provider market; played conditions use your confirmed value.</p>
+      <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">{conditions.map((condition) => <button type="button" key={condition} onClick={() => onPatch({ condition, adjustedMarket: condition === "Near Mint / NM" ? providerMarket ?? null : null })} className={`min-h-11 rounded-xl px-2 text-xs font-black ${item.condition === condition ? "bg-violet-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{compactCondition(condition)}</button>)}</div>
+      {item.condition && item.condition !== "Unknown" ? <label className="mt-3 block text-xs font-bold">Confirmed inventory market<input type="number" min="0" step="0.01" disabled={item.condition === "Near Mint / NM" && providerMarket != null && !stamped} value={item.condition === "Near Mint / NM" && providerMarket != null && !stamped ? providerMarket : item.adjustedMarket ?? ""} onChange={(event) => onPatch({ adjustedMarket: event.target.value === "" ? null : Number(event.target.value) })} placeholder={providerMarket == null ? "Provider price unavailable — enter value if known" : "Required for played condition"} className="mt-1 w-full rounded-xl border p-3 disabled:opacity-60 dark:bg-slate-950" /></label> : item.condition === "Unknown" ? <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">Condition is explicitly unknown. Provider base market is preserved, but no condition-adjusted inventory value is invented.</p> : null}
+    </section>
+    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <label className="text-sm font-black">Quantity<input type="number" min="1" value={item.quantity} onChange={(event) => onPatch({ quantity: Number(event.target.value) })} className="mt-1 w-full rounded-xl border p-3 dark:bg-slate-950" /></label>
+      <div className="rounded-2xl border border-slate-200 p-3 dark:border-slate-800"><p className="font-black">Cost basis</p><p className="text-xs text-slate-500">Optional when unknown; never converted to $0.</p><div className="mt-2 flex flex-wrap gap-2">{([["unknown", "Unknown"], ["amount", "Enter amount"], ["zero", "Confirm $0"]] as const).map(([value, label]) => <button type="button" key={value} onClick={() => { onCostMode(value); if (value === "unknown") onPatch({ costBasis: null, zeroCostBasisConfirmed: false }); if (value === "zero") onPatch({ costBasis: 0, zeroCostBasisConfirmed: true }); }} className={`rounded-lg px-3 py-2 text-xs font-black ${costMode === value ? "bg-violet-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{label}</button>)}</div>{costMode === "amount" ? <div className="mt-2 flex gap-2"><input type="number" min="0" step="0.01" value={cost} onChange={(event) => onCost(event.target.value)} placeholder="Historical cost" className="min-w-0 flex-1 rounded-xl border p-3 dark:bg-slate-950" /><button type="button" disabled={cost === "" || Number(cost) < 0} onClick={() => onPatch({ costBasis: Number(cost), zeroCostBasisConfirmed: Number(cost) === 0 })} className="rounded-xl bg-violet-600 px-4 font-black text-white disabled:opacity-40">Save</button></div> : null}</div>
+    </div>
+    <div className="mt-4"><OwnershipEditor workers={workers} shares={item.ownershipShares} totalCost={item.costBasis || 0} label="Inventory ownership" onChange={(ownershipShares: OwnershipShare[]) => onPatch({ ownershipShares })} /></div>
+    {!readyToMark ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Choose a condition, assign exactly 100% ownership, and provide a confirmed market value when the condition requires one.</p> : null}
+    <div className="mt-4 grid gap-2 sm:grid-cols-2"><button type="button" onClick={onBack} className="min-h-12 rounded-xl bg-slate-100 px-4 font-black dark:bg-slate-800">Back to Match</button><button type="button" disabled={busy || !readyToMark || item.status === "confirmed"} onClick={onLooksGood} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 font-black text-white disabled:opacity-40"><Check size={18} /> {item.status === "confirmed" ? "Already Imported" : "Save & Next →"}</button></div>
+    <p className="mt-2 text-center text-[11px] text-slate-500">Y/N confirm the match. Left/right arrows move between cards. Provider searches and review edits do not rerun AI recognition.</p>
+  </>;
 }
