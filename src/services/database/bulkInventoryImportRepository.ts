@@ -1,10 +1,9 @@
 import type { CardCondition, InventoryPurchase, OwnershipShare } from "../../types/models";
 import type { CardMatch } from "../sales/cardScanService";
-import { conditionAdjustedMarket } from "../../utils/dealBuilder";
 import { isSupabaseConfigured, supabase, supabasePublishableKey, supabaseUrl } from "../../utils/supabase";
 import { compressSaleImage, prepareOpenAiCardImage } from "../images/saleImageService";
 import { normalizeImageOrientation } from "../images/imageOrientation";
-import { automaticallyPrepareCard, cropCardTopRegion } from "../sales/cardImageProcessor";
+import { automaticallyPrepareCard } from "../sales/cardImageProcessor";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
 
@@ -198,7 +197,6 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
   const sourcePath = `${job.id}/source/${itemId}.jpg`;
   const thumbnailPath = `${job.id}/thumbnails/${itemId}.jpg`;
   const recognitionPath = `${job.id}/recognition/${itemId}.jpg`;
-  const topRegionPath = `${job.id}/top-regions/${itemId}.jpg`;
   const sourceUpload = await client.storage.from("bulk-inventory-imports").upload(sourcePath, compressed, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
   if (sourceUpload.error) throw new Error(sourceUpload.error.message);
   const thumbnailUpload = await client.storage.from("bulk-inventory-imports").upload(thumbnailPath, thumbnail, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
@@ -207,19 +205,12 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
     throw new Error(thumbnailUpload.error.message);
   }
   let recognitionFile: File | undefined;
-  let topRegionFile: File | undefined;
   if (detected.cropped) {
     recognitionFile = await prepareOpenAiCardImage(detected.file);
-    topRegionFile = (await cropCardTopRegion(recognitionFile, 0.28)).file;
     const recognitionUpload = await client.storage.from("bulk-inventory-imports").upload(recognitionPath, recognitionFile, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
     if (recognitionUpload.error) {
       await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath]);
       throw new Error(recognitionUpload.error.message);
-    }
-    const topUpload = await client.storage.from("bulk-inventory-imports").upload(topRegionPath, topRegionFile, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
-    if (topUpload.error) {
-      await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, recognitionPath]);
-      throw new Error(topUpload.error.message);
     }
   }
   const sourceUrl = client.storage.from("bulk-inventory-imports").getPublicUrl(sourcePath).data.publicUrl;
@@ -249,9 +240,7 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
         physicalCardCropped: detected.cropped,
         detectionConfidence: detected.detection.confidence,
         recognitionImagePath: detected.cropped ? recognitionPath : null,
-        topRegionImagePath: detected.cropped ? topRegionPath : null,
         recognitionDimensions: recognitionFile ? { maxLongEdge: 1280 } : null,
-        topRegionRatio: topRegionFile ? 0.28 : null,
       },
     },
     ...(detected.cropped ? {} : {
@@ -261,7 +250,7 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
     }),
   }).select("*").single();
   if (inserted.error) {
-    await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, ...(detected.cropped ? [recognitionPath, topRegionPath] : [])]);
+    await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, ...(detected.cropped ? [recognitionPath] : [])]);
     throw new Error(inserted.error.message);
   }
   return itemFromRow(inserted.data as ItemRow);
@@ -358,13 +347,17 @@ export async function updateBulkImportItem(itemId: string, patch: Partial<{
 }
 
 export function bulkItemPatchFromMatch(match: CardMatch) {
-  const priced = match.pricing?.variants?.find((variant) => Number.isFinite(variant.market)) || match.pricing?.variants?.[0];
-  const market = Number.isFinite(match.pricing?.market) ? Number(match.pricing?.market) : Number.isFinite(priced?.market) ? Number(priced?.market) : null;
+  const variants = match.pricing?.variants || [];
+  const priced = variants.length === 1 ? variants[0] : undefined;
+  const market = variants.length > 1
+    ? null
+    : Number.isFinite(priced?.market) ? Number(priced?.market)
+      : Number.isFinite(match.pricing?.market) ? Number(match.pricing?.market) : null;
   return {
     selectedCandidate: match,
     candidateScore: match.matchScore,
     baseMarket: market,
-    adjustedMarket: market,
+    adjustedMarket: null,
     marketSource: match.pricing?.source || (match.provider === "pokemontcg" ? "TCGplayer" : match.provider === "tcgdex" ? "TCGdex" : "OPTCG API"),
     marketVariant: priced?.name || null,
     marketCurrency: match.pricing?.currency || null,
@@ -376,8 +369,21 @@ export function bulkItemPatchFromMatch(match: CardMatch) {
 export async function retryBulkImportItems(itemIds: string[]) {
   if (!itemIds.length) return;
   const client = requireSupabase();
-  const result = await client.from("bulk_inventory_import_items").update({ status: "waiting", attempt_count: 0, next_retry_at: null, locked_at: null, error_code: null, error_message: null, updated_at: new Date().toISOString() }).in("id", itemIds);
-  if (result.error) throw new Error(result.error.message);
+  const rows = await client.from("bulk_inventory_import_items").select("id,raw_recognition").in("id", itemIds).in("status", ["failed", "needs_review", "identified"]);
+  if (rows.error) throw new Error(rows.error.message);
+  const retryRequestedAt = new Date().toISOString();
+  const updates = await Promise.all((rows.data || []).map((row) => client.from("bulk_inventory_import_items").update({
+    status: "waiting",
+    attempt_count: 0,
+    next_retry_at: null,
+    locked_at: null,
+    error_code: null,
+    error_message: null,
+    raw_recognition: { ...((row.raw_recognition || {}) as Record<string, unknown>), retryRequestedAt },
+    updated_at: retryRequestedAt,
+  }).eq("id", row.id)));
+  const failed = updates.find((result) => result.error)?.error;
+  if (failed) throw new Error(failed.message);
   await kickBulkImportWorker();
 }
 
@@ -392,10 +398,15 @@ export async function deleteBulkImportItems(items: BulkImportItem[]) {
 
 export async function confirmBulkImportItem(item: BulkImportItem) {
   if (!item.selectedCandidate) throw new Error("Choose the exact card before confirming it.");
+  if ((item.selectedCandidate.pricing?.variants?.length || 0) > 1 && !item.marketVariant) throw new Error("Choose the physical printing before confirming it.");
+  if (!item.condition) throw new Error("Choose the card condition before confirming it.");
   const candidate = item.selectedCandidate;
   const stableInventoryId = item.inventoryPurchaseId || item.id;
   const costKnown = item.costBasis != null || item.zeroCostBasisConfirmed;
-  const marketValue = item.adjustedMarket ?? item.baseMarket;
+  const marketValue = item.condition === "Near Mint / NM" ? item.baseMarket ?? item.adjustedMarket : item.adjustedMarket;
+  if (marketValue == null) throw new Error(item.condition === "Near Mint / NM"
+    ? "This card has no provider NM market. Enter a confirmed market value before approving it."
+    : `Enter a confirmed ${item.condition} market value before approving it.`);
   const purchase: Partial<InventoryPurchase> = {
     id: stableInventoryId,
     imageUrl: item.sourceImageUrl,
@@ -447,9 +458,4 @@ export async function confirmBulkImportItem(item: BulkImportItem) {
   const updated = await client.from("bulk_inventory_import_items").update({ status: "confirmed", inventory_purchase_id: saved.id, confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", item.id);
   if (updated.error) throw new Error(updated.error.message);
   return saved;
-}
-
-export function adjustedMarketForCondition(baseMarket: number | undefined, condition: CardCondition | undefined) {
-  if (baseMarket == null) return undefined;
-  return condition ? conditionAdjustedMarket(baseMarket, condition) : baseMarket;
 }

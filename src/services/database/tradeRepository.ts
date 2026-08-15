@@ -716,6 +716,7 @@ async function claimOutgoingInventory(
 }
 
 function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partial<InventoryPurchase> {
+  const providerBaseMarket = item.tcgplayerPricing?.variants.find((variant) => variant.variant === item.tcgplayerPricing?.selectedVariant)?.market;
   return {
     id: item.createdInventoryPurchaseId, itemName: item.itemName, category: item.itemType, quantity: item.quantity, quantitySold: 0,
     purchaseDate: trade.tradeDate, totalCost: item.costBasis, marketValue: item.marketValue, purchaseSource: "trade",
@@ -724,7 +725,7 @@ function inventoryFromIncoming(item: TradeItem, trade: TradeTransaction): Partia
     cardSetId: item.cardSetId, cardSetCode: item.cardSetCode, cardRarity: item.cardRarity, cardGame: item.cardGame, cardLanguage: item.cardLanguage,
     dataProvider: item.dataProvider, providerCardId: item.providerCardId, cardCode: item.cardCode, marketPriceCurrency: item.marketPriceCurrency,
     pokemonTcgCardId: item.pokemonTcgCardId, officialCardImageUrl: item.officialCardImageUrl, tcgplayerUrl: item.tcgplayerUrl,
-    marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
+    providerBaseMarket, marketPriceSource: item.marketPriceSource, marketPriceVariant: item.marketPriceVariant,
     marketPriceUpdatedAt: item.marketPriceUpdatedAt, marketPriceCheckedAt: item.marketPriceCheckedAt,
     buyPercentage: item.targetBuyPercentage, targetBuyPrice: item.targetBuyPrice,
     cardCondition: item.cardCondition, stickerPrice: item.stickerPrice,

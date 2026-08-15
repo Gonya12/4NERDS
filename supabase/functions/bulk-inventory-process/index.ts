@@ -3,10 +3,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
   assessPokemonIdentification,
   buildPokemonIdentificationSearchAttempts,
-  identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
   normalizePokemonCardIdentification,
-  normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
   selectScannerCandidates,
@@ -50,8 +48,11 @@ function bytesToBase64(bytes: Uint8Array) {
 function pricingFor(match?: UnifiedCardMatch) {
   if (!match?.pricing) return { market: null, variant: null, source: null, currency: null, checkedAt: null };
   const variants = match.pricing.variants || [];
-  const priced = variants.find((variant) => Number.isFinite(variant.market)) || variants[0];
-  const market = Number.isFinite(match.pricing.market) ? Number(match.pricing.market) : Number.isFinite(priced?.market) ? Number(priced?.market) : null;
+  const priced = variants.length === 1 ? variants[0] : undefined;
+  const market = variants.length > 1
+    ? null
+    : Number.isFinite(priced?.market) ? Number(priced?.market)
+      : Number.isFinite(match.pricing.market) ? Number(match.pricing.market) : null;
   return {
     market,
     variant: priced?.name || null,
@@ -127,7 +128,7 @@ async function reuseCachedRecognition(item: QueueItem, supabase: ReturnType<type
     .select("id,status,recognized_name,recognized_collector_number,recognized_set,recognized_card_game,recognized_language,field_confidence,raw_recognition,selected_candidate,alternative_candidates,candidate_score,overall_confidence,condition,base_market,adjusted_market,market_source,market_variant,market_currency,market_checked_at,error_code,error_message")
     .eq("image_hash", item.image_hash)
     .neq("id", item.id)
-    .in("status", ["identified", "needs_review"])
+    .in("status", ["identified", "needs_review", "failed"])
     .order("created_at", { ascending: true })
     .limit(10);
   if (cached.error) throw new Error(cached.error.message);
@@ -181,83 +182,41 @@ async function processItem(
   serviceKey: string,
 ) {
   try {
-    const cached = await reuseCachedRecognition(item, supabase);
-    if (cached) return cached;
-
     const rawBefore = objectValue(item.raw_recognition);
+    const explicitRetry = typeof rawBefore.retryRequestedAt === "string";
+    if (!explicitRetry) {
+      const cached = await reuseCachedRecognition(item, supabase);
+      if (cached) return cached;
+    }
     const preprocessing = objectValue(rawBefore.preprocessing);
     const recognitionImagePath = typeof preprocessing.recognitionImagePath === "string" ? preprocessing.recognitionImagePath : "";
-    const topRegionImagePath = typeof preprocessing.topRegionImagePath === "string" ? preprocessing.topRegionImagePath : "";
-    if (!recognitionImagePath || !topRegionImagePath) {
+    if (!recognitionImagePath) {
       throw Object.assign(new Error("A reliable physical-card crop is required before OpenAI recognition."), { code: "CARD_CROP_REQUIRED" });
     }
 
-    const topImageBase64 = await downloadBase64(supabase, topRegionImagePath);
-    const topRecognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
-      imageBase64: topImageBase64,
+    const imageBase64 = await downloadBase64(supabase, recognitionImagePath);
+    const recognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
+      imageBase64,
       mimeType: item.mime_type,
       recognitionStrategy: "standard",
-      recognitionMode: "top_name",
+      recognitionMode: "details",
     }, false);
-    const topIdentification = normalizePokemonTopRegionIdentification(topRecognition.topIdentification);
-    const topConfidence = identificationConfidenceLabel(topIdentification.confidence);
-    let rawIdentification = normalizePokemonCardIdentification({
-      card_name: topIdentification.cardName,
-      hp: topIdentification.hp,
-      card_game: "pokemon",
-      language: "unknown",
-      confidence: topIdentification.confidence,
-      field_confidence: { card_name: topConfidence, hp: topConfidence },
-    });
-    let usefulness = assessPokemonIdentification(rawIdentification);
+    const rawIdentification = normalizePokemonCardIdentification(recognition.identification);
+    const usefulness = assessPokemonIdentification(rawIdentification);
     const recognitionAttempts: Array<Record<string, unknown>> = [{
-      strategy: "top_name",
-      identification: topIdentification,
+      strategy: "details",
+      identification: rawIdentification,
       useful: usefulness.useful,
       rejectedFields: usefulness.rejectedFields,
-      telemetry: topRecognition.telemetry,
+      telemetry: recognition.telemetry,
     }];
-    let identification = usefulness.searchIdentification;
-    let candidateResult = usefulness.useful
+    const identification = usefulness.searchIdentification;
+    const candidateResult = usefulness.useful
       ? await findCandidates(baseUrl, serviceKey, identification)
       : { matches: [] as UnifiedCardMatch[], queryHistory: [] as string[] };
-    const firstPassWasDecisive = isStrongVisualCatalogMatch(identification, candidateResult.matches);
-    if (!firstPassWasDecisive) {
-      const detailsImageBase64 = await downloadBase64(supabase, recognitionImagePath);
-      const detailsRecognition = await edgePost(baseUrl, serviceKey, "pokemon-card-identify", {
-        imageBase64: detailsImageBase64,
-        mimeType: item.mime_type,
-        recognitionStrategy: "standard",
-        recognitionMode: "details",
-      }, false);
-      const detailsIdentification = normalizePokemonCardIdentification(detailsRecognition.identification);
-      rawIdentification = normalizePokemonCardIdentification({
-        ...detailsIdentification,
-        card_name: topIdentification.cardName || detailsIdentification.card_name,
-        hp: topIdentification.hp ?? detailsIdentification.hp,
-        confidence: Math.max(topIdentification.confidence, detailsIdentification.confidence),
-        field_confidence: {
-          ...detailsIdentification.field_confidence,
-          ...(topIdentification.cardName ? { card_name: topConfidence } : {}),
-          ...(topIdentification.hp != null ? { hp: topConfidence } : {}),
-        },
-      });
-      usefulness = assessPokemonIdentification(rawIdentification);
-      recognitionAttempts.push({
-        strategy: "details",
-        identification: detailsIdentification,
-        useful: usefulness.useful,
-        rejectedFields: usefulness.rejectedFields,
-        telemetry: detailsRecognition.telemetry,
-      });
-      identification = usefulness.searchIdentification;
-      candidateResult = usefulness.useful
-        ? await findCandidates(baseUrl, serviceKey, identification)
-        : { matches: [] as UnifiedCardMatch[], queryHistory: [] as string[] };
-    }
     if (!usefulness.useful) {
       const noDetails = await supabase.from("bulk_inventory_import_items").update({
-        status: "needs_review",
+        status: "failed",
         locked_at: null,
         recognized_name: null,
         recognized_collector_number: usefulness.recognizedCollectorNumber,
@@ -269,15 +228,15 @@ async function processItem(
           preprocessing,
           recognitionAttempts,
           usefulness,
-          costPolicy: { model: "gpt-5.6-luna", callsMade: recognitionAttempts.length, maximumCalls: 2, retryCount: 0, cacheHit: false, firstPassWasDecisive },
+          costPolicy: { model: "gpt-5.6-luna", callsMade: 1, maximumCalls: 1, retryCount: 0, cacheHit: false },
         },
         overall_confidence: "low",
         error_code: "NO_USEFUL_DETAILS",
-        error_message: "The bounded visual passes found no safe card name or content fingerprint. Use manual card search, adjust the crop, or explicitly retry this photo.",
+        error_message: "The single bounded visual pass found no safe card name or content fingerprint. Use manual card search, adjust the crop, or explicitly retry AI recognition.",
         updated_at: new Date().toISOString(),
       }).eq("id", item.id);
       if (noDetails.error) throw new Error(noDetails.error.message);
-      return { id: item.id, status: "needs_review" };
+      return { id: item.id, status: "failed" };
     }
     const { matches, queryHistory } = candidateResult;
     const selected = matches[0];
@@ -289,7 +248,7 @@ async function processItem(
           supabase.from("inventory_purchases").select("id").eq("image_hash", item.image_hash).limit(1).maybeSingle(),
         ])
       : [{ data: null, error: null }, { data: null, error: null }];
-    const nextStatus = strong ? "identified" : "needs_review";
+    const nextStatus = strong && (selected?.pricing?.variants?.length || 0) <= 1 ? "identified" : "needs_review";
     const update = await supabase.from("bulk_inventory_import_items").update({
       status: nextStatus,
       locked_at: null,
@@ -305,7 +264,7 @@ async function processItem(
         queryHistory,
         recognitionAttempts,
         usefulness,
-        costPolicy: { model: "gpt-5.6-luna", callsMade: recognitionAttempts.length, maximumCalls: 2, retryCount: 0, cacheHit: false, firstPassWasDecisive },
+        costPolicy: { model: "gpt-5.6-luna", callsMade: 1, maximumCalls: 1, retryCount: 0, cacheHit: false },
       },
       selected_candidate: selected || null,
       alternative_candidates: matches.slice(1, 5),
@@ -313,7 +272,7 @@ async function processItem(
       overall_confidence: strong ? "high" : identification.confidence >= 0.4 ? "medium" : "low",
       condition: null,
       base_market: pricing.market,
-      adjusted_market: pricing.market,
+      adjusted_market: null,
       market_source: pricing.source,
       market_variant: pricing.variant,
       market_currency: pricing.currency,
@@ -330,18 +289,18 @@ async function processItem(
     const error = unknownError as Error & { code?: string };
     const code = error.code || "PROCESSING_FAILED";
     await supabase.from("bulk_inventory_import_items").update({
-      status: "needs_review",
+      status: "failed",
       locked_at: null,
       next_retry_at: null,
       error_code: code,
-      error_message: `${String(error.message || "Bulk recognition failed.").slice(0, 430)} Automatic retries are disabled to prevent duplicate OpenAI charges; use Retry Recognition explicitly.`,
+      error_message: `${String(error.message || "Bulk recognition failed.").slice(0, 430)} Automatic retries are disabled to prevent duplicate OpenAI charges; use Retry AI Recognition explicitly.`,
       raw_recognition: {
         ...objectValue(item.raw_recognition),
-        costPolicy: { model: "gpt-5.6-luna", maximumCalls: 2, automaticRetry: false, cacheHit: false, failed: true },
+        costPolicy: { model: "gpt-5.6-luna", maximumCalls: 1, automaticRetry: false, cacheHit: false, failed: true },
       },
       updated_at: new Date().toISOString(),
     }).eq("id", item.id);
-    return { id: item.id, status: "needs_review", error: error.message };
+    return { id: item.id, status: "failed", error: error.message };
   }
 }
 

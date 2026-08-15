@@ -489,15 +489,6 @@ export function SalesControlPage() {
     }
   }
 
-  function useProcessedScanFile(file?: File) {
-    if (!file) return;
-    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
-    setImageFile(file);
-    setImageRemoved(false);
-    setPreviewUrl(URL.createObjectURL(file));
-    setImageStatus(`Perspective-corrected card ready to upload on Save · ${(file.size / 1024).toFixed(0)} KB`);
-  }
-
   function removeImage() {
     stopCamera();
     setCameraMode(false);
@@ -1280,11 +1271,11 @@ export function SalesControlPage() {
 
             {editor === "sale" ? imageActions("Sale Image — Optional") : null}
             {editor === "sale" ? <div className="space-y-3">
-              <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} initialGame={saleForm.cardGame as CardGame} initialLanguage={(saleForm.cardLanguage === "ja" ? "ja" : saleForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan, _hash, processed) => {
-                useProcessedScanFile(processed);
+              <CardScanPanel imageFile={imageFile} category={saleForm.category} inventory={purchases} initialGame={saleForm.cardGame as CardGame} initialLanguage={(saleForm.cardLanguage === "ja" ? "ja" : saleForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan) => {
                 setSaleForm((current) => {
                   const nextCategory = scan.suggestedType || current.category;
-                  const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
+                  const useConfirmedRawMarket = nextCategory === "raw_card" && scan.cardGame === "pokemon" && scan.confirmedMarketValue != null;
+                  const manualMarket = Boolean(scan.manualPricingVariant || (useConfirmedRawMarket && scan.condition !== "Near Mint / NM"));
                   return {
                     ...current,
                     itemName: scan.cardName || current.itemName,
@@ -1308,11 +1299,12 @@ export function SalesControlPage() {
                     officialCardImageUrl: scan.dataProvider === "manual" ? "" : scan.officialImageUrl || current.officialCardImageUrl,
                     category: nextCategory,
                     isRawCard: nextCategory === "raw_card",
-                    marketValue: nextCategory === "raw_card" && selectedPrice?.market != null ? String(selectedPrice.market) : current.marketValue,
-                    marketPriceSource: scan.dataProvider === "manual" ? "Manual" : scan.tcgplayerPricing?.source || current.marketPriceSource,
-                    marketPriceVariant: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.selectedVariant || current.marketPriceVariant,
+                    marketValue: useConfirmedRawMarket ? String(scan.confirmedMarketValue) : current.marketValue,
+                    marketPriceSource: scan.dataProvider === "manual" || manualMarket ? "Manual" : scan.tcgplayerPricing?.source || current.marketPriceSource,
+                    marketPriceVariant: scan.manualPricingVariant || (scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.selectedVariant || current.marketPriceVariant),
                     marketPriceUpdatedAt: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.updatedAt || current.marketPriceUpdatedAt,
                     marketPriceCheckedAt: scan.dataProvider === "manual" ? "" : scan.tcgplayerPricing?.checkedAt || current.marketPriceCheckedAt,
+                    buyPercentage: scan.tcgplayerPricing?.targetPercent == null ? current.buyPercentage : String(scan.tcgplayerPricing.targetPercent),
                     tcgplayerUrl: scan.dataProvider === "manual" ? "" : scan.tcgplayerUrl || scan.tcgplayerPricing?.url || current.tcgplayerUrl
                   };
                 });
@@ -1344,12 +1336,11 @@ export function SalesControlPage() {
               <button onClick={() => void saveSale()} disabled={busy} className="btn-primary min-h-12 w-full"><Save size={18} /> {busy ? "Saving..." : "Save Sale"}</button>
             </div> : null}
 
-            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} initialGame={purchaseForm.cardGame as CardGame} initialLanguage={(purchaseForm.cardLanguage === "ja" ? "ja" : purchaseForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan, hash, processed) => {
-              useProcessedScanFile(processed);
+            {editor === "purchase" ? <CardScanPanel imageFile={imageFile} backImageFile={backImageFile} category={purchaseForm.category} inventory={purchases} initialGame={purchaseForm.cardGame as CardGame} initialLanguage={(purchaseForm.cardLanguage === "ja" ? "ja" : purchaseForm.cardGame === "other" ? "unknown" : "en") as CardLanguage} onApply={(scan, hash) => {
               setPurchaseForm((current) => {
               const nextCategory = scan.suggestedType || current.category;
-              const selectedPrice = scan.tcgplayerPricing?.variants.find((variant) => variant.variant === scan.tcgplayerPricing?.selectedVariant);
-              const useRawMarket = nextCategory === "raw_card" && selectedPrice?.market != null;
+              const useRawMarket = nextCategory === "raw_card" && scan.cardGame === "pokemon" && scan.confirmedMarketValue != null;
+              const manualMarket = Boolean(scan.manualPricingVariant || (useRawMarket && scan.condition !== "Near Mint / NM"));
               return {
               ...current, category: nextCategory, isRawCard: nextCategory === "raw_card",
               itemName: scan.cardName || current.itemName, cardName: scan.cardName || current.cardName,
@@ -1371,11 +1362,12 @@ export function SalesControlPage() {
               stickerPrice: scan.stickerPrice == null ? current.stickerPrice : String(scan.stickerPrice),
               gradingCompany: scan.gradingCompany || current.gradingCompany, grade: scan.grade || current.grade,
               certificateNumber: scan.certificateNumber || current.certificateNumber, scanConfidence: scan.overallConfidence,
-              marketValue: useRawMarket ? String(selectedPrice.market) : current.marketValue,
-              marketPriceSource: scan.dataProvider === "manual" ? "Manual" : useRawMarket ? scan.tcgplayerPricing?.source || current.marketPriceSource : current.marketPriceSource,
-              marketPriceVariant: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant,
+              marketValue: useRawMarket ? String(scan.confirmedMarketValue) : current.marketValue,
+              marketPriceSource: scan.dataProvider === "manual" || manualMarket ? "Manual" : useRawMarket ? scan.tcgplayerPricing?.source || current.marketPriceSource : current.marketPriceSource,
+              marketPriceVariant: scan.manualPricingVariant || (scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.selectedVariant || "" : current.marketPriceVariant),
               marketPriceUpdatedAt: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.updatedAt || "" : current.marketPriceUpdatedAt,
               marketPriceCheckedAt: scan.dataProvider === "manual" ? "" : useRawMarket ? scan.tcgplayerPricing?.checkedAt || "" : current.marketPriceCheckedAt,
+              buyPercentage: scan.tcgplayerPricing?.targetPercent == null ? current.buyPercentage : String(scan.tcgplayerPricing.targetPercent),
               scanStatus: "needs_review", imageHash: hash, scanResult: scan as unknown as Record<string, unknown>
             };});
             }} onRetakePhoto={() => { setFacingMode("environment"); enterCameraMode(); }} /> : null}

@@ -344,21 +344,23 @@ test("Edge Function keeps the OpenAI secret server-side and enforces the Luna co
   assert.match(edgeSource, /recognitionMode/);
   assert.match(edgeSource, /topRegionPrompt/);
   assert.match(edgeSource, /topRegionResponseSchema/);
-  assert.match(edgeSource, /ability_names/);
-  assert.match(edgeSource, /attack_names/);
-  assert.match(edgeSource, /LOWER-MIDDLE/);
+  assert.match(edgeSource, /abilityNames/);
+  assert.match(edgeSource, /attackNames/);
+  assert.match(edgeSource, /collectorNumber/);
+  assert.match(edgeSource, /Do not provide price, value, condition grade/);
   assert.doesNotMatch(edgeSource, /gpt-5\.6-(?:sol|terra)/);
   assert.doesNotMatch(edgeSource, /market.?price|TCGplayer price/i);
 });
 
-test("single and bulk scanners share validation and a hard two-call visual budget", () => {
+test("single and bulk raw PokÃ©mon scanners share validation and a one-call visual budget", () => {
   assert.match(scanPipelineSource, /assessPokemonIdentification\(rawIdentification\)/);
-  assert.match(scanPipelineSource, /firstPassWasDecisive/);
   assert.match(scanPipelineSource, /prepareOpenAiCardImage/);
+  assert.match(scanPipelineSource, /One bounded AI recognition call was used/);
   assert.match(bulkWorkerSource, /assessPokemonIdentification\(rawIdentification\)/);
-  assert.match(bulkWorkerSource, /maximumCalls: 2/);
+  assert.match(bulkWorkerSource, /maximumCalls: 1/);
   assert.match(bulkWorkerSource, /Automatic retries are disabled/);
   assert.doesNotMatch(bulkWorkerSource, /recognitionStrategy: "alternate"/);
+  assert.doesNotMatch(bulkWorkerSource, /recognitionMode: "top_name"/);
   assert.match(bulkWorkerSource, /NO_USEFUL_DETAILS/);
 });
 
@@ -377,7 +379,7 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scanPipelineSource, /Matching with TCG database/);
   assert.match(scannerSource, /Likely Match/);
   assert.match(scannerSource, /See Other Matches/);
-  assert.match(scannerSource, /Try Again/);
+  assert.match(scannerSource, /Retry AI Recognition/);
   assert.match(scannerSource, /Search Card Manually/);
   assert.match(scannerSource, /We found a few possible matches/);
   assert.match(scannerSource, /Card recognition could not complete/);
@@ -385,9 +387,10 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /void scan\(false, detection\.confidence < 0\.48/);
   assert.match(scannerSource, />Card Name/);
   assert.match(scannerSource, />Collector Number/);
-  assert.match(scannerSource, /Search Matches/);
+  assert.match(scannerSource, /Update Matches/);
   assert.match(scannerSource, /initialName=\{recognizedName \|\| suggestion\?\.cardName \|\| suggestion\?\.correctedNameCandidate/);
-  assert.match(scannerSource, /disabled=\{isAiScan && \(!resolvedCard \|\| needsCondition\)\}/);
+  assert.match(scannerSource, /rawPokemonFlow \|\| isAiScan/);
+  assert.match(scannerSource, /needsVariant \|\| needsConfirmedMarket/);
   assert.match(scannerSource, /import\.meta\.env\.DEV && reviewSuggestion\.technicalDetails\?\.scannerDebug/);
   assert.match(scannerSource, /Scanner Debug/);
   assert.doesNotMatch(scannerSource, /placeholder="Charizard ex"/);
@@ -402,12 +405,12 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v10_/);
-  assert.match(scanService, /Trying alternate recognition/);
+  assert.match(scanService, /4nerds_card_scan_v11_/);
+  assert.doesNotMatch(scanService, /Trying alternate recognition/);
   assert.match(scanService, /assessPokemonIdentification/);
-  assert.match(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.28, false/);
-  assert.doesNotMatch(scanService, /cropCardTopRegion\(cardRelativeFront, 0\.4, true/);
-  assert.match(scanService, /identifyPokemonCardTopRegion/);
+  assert.doesNotMatch(scanService, /cropCardTopRegion\(cardRelativeFront/);
+  assert.doesNotMatch(scanService, /identifyPokemonCardTopRegion/);
+  assert.match(scanService, /identifyPokemonCardVisually\(recognitionImage/);
 });
 
 test("a vision transport failure falls back to local OCR before becoming a processing error", () => {

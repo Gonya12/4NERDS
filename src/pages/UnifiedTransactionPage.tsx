@@ -30,7 +30,7 @@ import {
 } from "../services/database/transactionDraft";
 import { listWorkers } from "../services/database/workerRepository";
 import { listPlannerEventOptions } from "../services/planner/plannerRepository";
-import { saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
+import { isTransactionImageMetadataError, saveTransactionImage, type ImageUploadStage } from "../services/images/saleImageService";
 import type { BusinessExpenseCategory, CardCondition, CardGame, CardLanguage, Event, FinancialTransactionType, InventoryPurchase, OwnershipShare, PokemonProductCategory, PurchaseSource, SalePaymentMethod, TradeItem, TradeTransaction, TransactionImageAttachment, TransactionImageType, Worker } from "../types/models";
 import { formatMoney } from "../utils/paymentMath";
 import { applyCardSuggestionToItem, pricingFromInventory } from "../utils/cardPricing";
@@ -108,6 +108,7 @@ export function UnifiedTransactionPage() {
   const [busyImageFields, setBusyImageFields] = useState<Set<string>>(() => new Set());
   const autoLinkAttemptedForDate = useRef("");
   const completionInFlight = useRef(false);
+  const scanImageRecordIdsRef = useRef(new Map<string, string>());
   const review = transactionReview(transaction);
   const typeLabel = transaction.transactionType === "sale" ? "Sold" : transaction.transactionType === "purchase" ? "Inventory Purchase" : "Business Cost";
   const workflowTitle = transaction.itemMode === "multiple"
@@ -220,6 +221,20 @@ export function UnifiedTransactionPage() {
       setDraftSaveError(error instanceof Error ? error.message : "The transaction draft could not be updated.");
       setDraftSaveDebug(transactionTypeDeveloperDebug(error) || "");
     }
+  }
+
+  async function preserveScanPhoto(item: TradeItem, file: File) {
+    const stableImageId = scanImageRecordIdsRef.current.get(item.id) || crypto.randomUUID();
+    scanImageRecordIdsRef.current.set(item.id, stableImageId);
+    let attachment: TransactionImageAttachment;
+    try {
+      attachment = await uploadImage(file, "front", () => undefined, item.id, stableImageId);
+    } catch (error) {
+      if (!isTransactionImageMetadataError(error)) throw error;
+      attachment = error.attachment;
+    }
+    await changeItemImages(item, ["front", "item", "crop"], [attachment]);
+    scanImageRecordIdsRef.current.delete(item.id);
   }
 
   useEffect(() => {
@@ -585,10 +600,11 @@ export function UnifiedTransactionPage() {
             <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 text-sm font-black text-slate-800"><ScanLine size={16} /> Scan Card<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(event) => { setScanFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
           </div>
           {scanFile ? <div className="rounded-2xl border border-violet-200 p-3"><CardScanPanel imageFile={scanFile} category={editing.itemType} inventory={inventory} initialGame={editing.cardGame || "pokemon"} initialLanguage={editing.cardLanguage === "ja" ? "ja" : editing.cardGame === "other" ? "unknown" : "en"} onRetakePhoto={() => setScanFile(undefined)} onApply={(suggestion) => {
+            const sourcePhoto = scanFile;
             const item = applyCardSuggestionToItem(editing, suggestion, "scanner");
             setEditing(item);
             updateItem(item);
-            setScanFile(undefined);
+            void preserveScanPhoto(item, sourcePhoto).then(() => setScanFile(undefined)).catch(() => undefined);
           }} /></div> : null}
           <div className="grid grid-cols-2 gap-2">
             <label><span className="text-xs font-black">Item type</span><select value={editing.itemType} onChange={(event) => {

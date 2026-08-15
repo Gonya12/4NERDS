@@ -369,7 +369,9 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       setSuggestion(confirmed);
       setResolvedCard({ source: "automatic_match", suggestion: confirmed, confirmedByUser: true });
       setOutcome("Match found");
-      setMessage("Exact card confirmed. Choose a finish when needed, then apply the suggestions.");
+      setMessage(category === "raw_card" && cardGame === "pokemon"
+        ? "Exact card confirmed. Choose its printing, condition, and pricing."
+        : "Exact card confirmed. Choose a finish when needed, then apply the suggestions.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load pricing for that card.");
     } finally {
@@ -468,11 +470,17 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
     || reviewSuggestion.possibleMatches?.length
   ));
   const isAiScan = Boolean(reviewSuggestion?.aiIdentification);
+  const rawPokemonFlow = category === "raw_card" && cardGame === "pokemon";
   const likelyMatch = reviewSuggestion?.possibleMatches?.find((match) => match.providerCardId === reviewSuggestion.likelyMatchProviderId);
   const displayedMatches = reviewSuggestion?.possibleMatches
-    ? likelyMatch && !showAllMatches ? [likelyMatch] : reviewSuggestion.possibleMatches
+    ? rawPokemonFlow
+      ? reviewSuggestion.possibleMatches.slice(0, 5)
+      : likelyMatch && !showAllMatches ? [likelyMatch] : reviewSuggestion.possibleMatches
     : [];
   const needsCondition = Boolean(resolvedCard && category !== "graded_card" && !reviewSuggestion?.condition);
+  const selectedPricing = reviewSuggestion?.tcgplayerPricing?.variants.find((variant) => variant.variant === reviewSuggestion.tcgplayerPricing?.selectedVariant);
+  const needsVariant = Boolean(rawPokemonFlow && resolvedCard && reviewSuggestion?.tcgplayerPricing?.variants.length && !selectedPricing);
+  const needsConfirmedMarket = Boolean(rawPokemonFlow && resolvedCard && reviewSuggestion?.condition && reviewSuggestion.confirmedMarketValue == null);
   const recognizedNameConfidence = recognizedNameEdited ? "high" : reviewSuggestion?.fieldConfidence?.cardName || "low";
   const recognizedCollectorConfidence = recognizedCollectorEdited ? "high" : reviewSuggestion?.fieldConfidence?.collectorNumber || "low";
   const recognizedSummary = [recognizedName, recognizedCollectorNumber ? `#${recognizedCollectorNumber.replace(/^#/, "")}` : ""].filter(Boolean).join(" • ");
@@ -482,6 +490,18 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       return;
     }
     setSuggestion((current) => current ? { ...current, [key]: value } : current);
+  };
+  const selectCondition = (condition: CardCondition) => {
+    if (!reviewSuggestion) return;
+    const next: CardScanSuggestion = {
+      ...reviewSuggestion,
+      condition,
+      confirmedMarketValue: condition === "Near Mint / NM" && reviewSuggestion.manualPricingVariant !== "stamped/manual"
+        ? selectedPricing?.market ?? null
+        : null,
+    };
+    if (resolvedCard) setResolvedCard({ ...resolvedCard, suggestion: next });
+    else setSuggestion(next);
   };
   const field = (key: keyof CardScanSuggestion, label: string, type: "text" | "number" = "text") => {
     const value = reviewSuggestion?.[key];
@@ -505,8 +525,8 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
   return <section className="space-y-3 rounded-2xl border border-violet-200 bg-violet-50/70 p-3 dark:border-violet-900 dark:bg-violet-950/20">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <p className="font-black text-violet-900 dark:text-violet-100">Multi-game card scanner</p>
-        <p className="text-xs text-violet-700 dark:text-violet-300">Pokémon photos use AI visual reading, then the existing official catalog search. Suggestions are never saved until you confirm them.</p>
+        <p className="font-black text-violet-900 dark:text-violet-100">{rawPokemonFlow ? "Raw Pokémon card scanner" : "Multi-game card scanner"}</p>
+        <p className="text-xs text-violet-700 dark:text-violet-300">{rawPokemonFlow ? "One visual recognition pass reads the card, then local catalog matching finds candidates for you to confirm." : "Card photos use visual reading, then the existing official catalog search. Suggestions are never saved until you confirm them."}</p>
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" onClick={() => setManualSearchOpen(true)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900"><Search size={17} />Search Card Manually</button>
@@ -545,13 +565,13 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
         {detectingCrop ? "Detecting card edges…" : message}
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        <button type="button" disabled={detectingCrop || cardGame === "other"} onClick={() => void scan(false, false)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><Crop size={17} />Analyze Selected Crop</button>
-        <button type="button" disabled={cardGame === "other"} onClick={() => void scan(false, true)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-40 dark:bg-slate-800">Use Full Image</button>
+        <button type="button" disabled={detectingCrop || cardGame === "other"} onClick={() => void scan(false, false)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><Crop size={17} />{rawPokemonFlow ? "Retry AI Recognition with Crop" : "Analyze Selected Crop"}</button>
+        <button type="button" disabled={cardGame === "other"} onClick={() => void scan(false, true)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black disabled:opacity-40 dark:bg-slate-800">{rawPokemonFlow ? "Retry AI Recognition with Full Image" : "Use Full Image"}</button>
       </div>
     </div> : null}
 
     {status === "analyzing" ? <div aria-live="polite" className="rounded-xl bg-violet-100 p-3 text-sm font-bold text-violet-900 dark:bg-violet-950 dark:text-violet-100">
-      <LoaderCircle className="mr-2 inline animate-spin" size={18} />{stage === "Matching with TCG database" || stage === "Searching card catalog" ? "Searching for matches" : "Scanning card"}…
+      <LoaderCircle className="mr-2 inline animate-spin" size={18} />{stage === "Matching with TCG database" || stage === "Searching card catalog" ? "Searching for matches" : rawPokemonFlow ? "Identifying card" : "Scanning card"}…
       <p className="mt-1 text-xs font-normal">{stage}…</p>
       <p className="mt-1 text-xs font-normal">Cancel always leaves the photo and manual entry available.</p>
     </div> : null}
@@ -566,7 +586,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       <p className="text-sm font-bold text-amber-700 dark:text-amber-300">We couldn't identify this card confidently. Search manually with the recognized text or adjust the crop.</p>
       <div className="grid gap-2 sm:grid-cols-2">
       <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
-      <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Try Again</button>
+      <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">{rawPokemonFlow ? "Retry AI Recognition" : "Try Again"}</button>
       <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40">Retake Photo</button>
       <button type="button" onClick={() => { setSuggestion(undefined); setMessage("Continue with the normal form. No OCR text was copied into the record."); }} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Enter Everything Manually</button>
       </div>
@@ -625,10 +645,10 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
           </label>
         </div>
         {recognizedSearchError ? <p role="alert" className="text-xs font-bold text-rose-700 dark:text-rose-300">{recognizedSearchError}</p> : null}
-        <button type="button" disabled={searching} onClick={() => void searchRecognizedMatches()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 text-sm font-black text-white disabled:opacity-40">{searching ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />} Search Matches</button>
+        <button type="button" disabled={searching} onClick={() => void searchRecognizedMatches()} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 text-sm font-black text-white disabled:opacity-40">{searching ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />} Update Matches</button>
         <div className="grid gap-2 sm:grid-cols-3">
           <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-10 rounded-xl bg-slate-900 px-3 text-xs font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
-          <button type="button" onClick={() => void scan(true, false)} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">Try Again</button>
+          <button type="button" onClick={() => void scan(true, false)} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">{rawPokemonFlow ? "Retry AI Recognition" : "Try Again"}</button>
           <button type="button" onClick={() => setStatus("crop")} className="min-h-10 rounded-xl bg-white px-3 text-xs font-black text-slate-800 dark:bg-slate-900 dark:text-white">Adjust Crop</button>
         </div>
       </section> : null}
@@ -653,6 +673,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
             {match.providerCardId === reviewSuggestion.likelyMatchProviderId ? <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Likely Match · AI Match: High</p> : null}
             <p className="font-black">{match.name} · {match.cardCode || match.collectorNumber}</p>
             <p>{match.setName}{match.rarity ? ` · ${match.rarity}` : ""}</p>
+            {match.hp ? <p>{match.hp} HP</p> : null}
             <p>{match.matchScore}% match{match.pricing?.market != null ? ` · ${match.pricing.currency || "USD"} ${match.pricing.market.toFixed(2)} market` : ""}</p>
             <p className="text-slate-500">{match.reasons.join(" · ")}</p>
             <button type="button" disabled={searching} onClick={() => void chooseMatch(match)} className="mt-2 rounded-lg bg-violet-600 px-3 py-2 font-black text-white disabled:opacity-40">Use This Card</button>
@@ -664,7 +685,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       {resolvedCard && category !== "graded_card" ? <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
         <p className="text-xs font-black uppercase tracking-wide text-emerald-800 dark:text-emerald-200">Choose condition</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          {scanConditions.map((condition) => <button type="button" key={condition} onClick={() => edit("condition", condition)} className={`min-h-10 rounded-xl px-3 text-xs font-black ${reviewSuggestion.condition === condition ? "bg-emerald-600 text-white" : "bg-white text-slate-700 dark:bg-slate-900 dark:text-slate-200"}`}>{condition.replace(/.*\/ /, "")}</button>)}
+          {scanConditions.map((condition) => <button type="button" key={condition} onClick={() => selectCondition(condition)} className={`min-h-10 rounded-xl px-3 text-xs font-black ${reviewSuggestion.condition === condition ? "bg-emerald-600 text-white" : "bg-white text-slate-700 dark:bg-slate-900 dark:text-slate-200"}`}>{condition.replace(/.*\/ /, "")}</button>)}
         </div>
         {needsCondition ? <p className="mt-2 text-xs font-bold text-amber-700 dark:text-amber-300">Select a condition before applying this card.</p> : null}
       </section> : null}
@@ -716,7 +737,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
       {duplicateCertificate ? <p className="rounded-xl bg-rose-100 p-2 text-sm font-black text-rose-800">Possible duplicate slab certificate.</p> : null}
       <div className="grid gap-2 sm:grid-cols-2">
         <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop / Rescan</button>
-        <button type="button" disabled={isAiScan && (!resolvedCard || needsCondition)} onClick={() => { onApply(reviewSuggestion, hash, processedFile); setMessage("Suggestions applied. Confirm the normal form, then press Save."); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white disabled:opacity-40"><Sparkles size={17} />Apply Suggestions</button>
+        <button type="button" disabled={(rawPokemonFlow || isAiScan) && (!resolvedCard || needsCondition || needsVariant || needsConfirmedMarket)} onClick={() => { onApply(reviewSuggestion, hash, processedFile); setMessage("Card and pricing confirmed. Review the normal form, then press Save."); }} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white disabled:opacity-40"><Sparkles size={17} />{rawPokemonFlow ? "Confirm Card & Pricing" : "Apply Suggestions"}</button>
       </div>
       <p className="text-xs text-slate-500">Sticker price never fills Cash Paid or Cost Basis. A single photo is not a physical condition grade.</p>
     </div> : null}
@@ -724,7 +745,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
     {status === "failed" ? <div className="space-y-2">
       <p className="text-sm font-black text-rose-700 dark:text-rose-300">Card recognition could not complete.</p>
       <div className="grid gap-2 sm:grid-cols-2">
-        <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white">Try Again</button>
+        <button type="button" onClick={() => void scan(true, false)} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white">{rawPokemonFlow ? "Retry AI Recognition" : "Try Again"}</button>
         <button type="button" onClick={() => setManualSearchOpen(true)} className="min-h-11 rounded-xl bg-slate-900 px-3 text-sm font-black text-white dark:bg-white dark:text-slate-900">Search Card Manually</button>
         <button type="button" onClick={() => setStatus("crop")} className="min-h-11 rounded-xl bg-slate-200 px-3 text-sm font-black dark:bg-slate-800">Adjust Crop</button>
         <button type="button" onClick={onRetakePhoto} disabled={!onRetakePhoto} className="min-h-11 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-40"><ScanLine className="mr-1 inline" size={17} />Retake Photo</button>

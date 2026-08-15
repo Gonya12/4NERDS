@@ -27,6 +27,12 @@ test("purchase percentage keeps market and agreed value separate", () => {
   assert.equal(result.boughtPrice, 11.2);
 });
 
+test("non-NM percentages use the manually confirmed market without an invented condition discount", () => {
+  const result = applyDealPercentage(item("incoming", { marketValue: 80, cardCondition: "Lightly Played / LP" }), "incoming", 75);
+  assert.equal(result.marketValue, 80);
+  assert.equal(result.agreedTradeValue, 60);
+});
+
 test("purchase summary labels market less cost as unrealized", () => {
   const transaction = normalizeDealForSave(deal([item("incoming", { marketValue: 16, agreedTradeValue: 11, boughtPrice: 11, costBasis: 11 })], 11));
   const summary = dealSummary(transaction);

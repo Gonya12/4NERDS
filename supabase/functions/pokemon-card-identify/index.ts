@@ -16,63 +16,40 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "x-request-id, retry-after",
 };
 const maxDecodedBytes = 6 * 1024 * 1024;
-const fieldConfidenceInstruction = "Grade card name, HP, stage, ability, attack, attack damage, collector number, set, language, and artwork independently as high, medium, or low. A readable name and uncertain collector number must be high name confidence and low collector-number confidence.";
 const topRegionPrompt = "This image contains only the TOP band of one physical trading card. Read the prominent printed card title and HP value only. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Ignore evolution labels, stage text, attack text, sleeve text, glare, and background. Do not infer an exact printing, set, collector number, price, or provider ID. Return cardName as null when the title itself is not readable. Return hp as null when unreadable.";
-const detailsPrompt = "This is the one permitted details pass for an ambiguous trading-card match. The image is already cropped to the physical card. Read visible evidence from TOP (name including ex/EX/V/VMAX/VSTAR/GX suffix, HP, stage/subtype), MIDDLE (ability), LOWER-MIDDLE (attacks and damage), and BOTTOM (collector number, set/code, regulation mark). The title is primary; ability and attack names are content fingerprints; tiny bottom text is secondary. Never guess unreadable text. Never provide prices, accounting values, inventory IDs, provider IDs, or a final database-card decision. Preserve leading zeros and detect Japanese rather than forcing English. Return null or empty lists for unreadable fields.";
+const detailsPrompt = "Identify this raw Pokémon card from the already normalized, physical-card-only crop. In one concise response read: printed card title first, HP, ability names, attack names and printed attack damage, collector number, set hint, and language. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR and collector-number leading zeros. The title is the strongest signal. Never substitute attack/body text for the title and never guess tiny collector text. Return null or empty lists for unreadable fields with independent numeric confidence. Do not provide price, value, condition grade, buy percentage, profit, inventory IDs, provider IDs, or explanations.";
 
 const nullableString = { type: ["string", "null"] };
 const nullableInteger = { type: ["integer", "null"] };
-const confidenceSchema = { type: "string", enum: ["high", "medium", "low"] };
+const numericConfidence = { type: "number", minimum: 0, maximum: 1 };
 const responseSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    card_name: nullableString,
-    pokemon_name: nullableString,
-    collector_number: nullableString,
-    printed_total_number: nullableString,
-    set_name_hint: nullableString,
-    set_code_hint: nullableString,
-    card_game: { type: "string", enum: ["pokemon", "one_piece", "unknown"] },
+    cardName: nullableString,
+    collectorNumber: nullableString,
+    setHint: nullableString,
     language: { type: "string", enum: ["en", "ja", "unknown"] },
-    rarity_hint: nullableString,
     hp: nullableInteger,
-    stage_or_subtype: nullableString,
-    ability_names: { type: "array", items: { type: "string" }, maxItems: 3 },
-    ability_text_fragments: { type: "array", items: { type: "string" }, maxItems: 4 },
-    attack_names: { type: "array", items: { type: "string" }, maxItems: 4 },
-    attack_damage: { type: "array", items: { type: "string" }, maxItems: 4 },
-    attack_text_fragments: { type: "array", items: { type: "string" }, maxItems: 6 },
-    regulation_mark: nullableString,
-    copyright_year: nullableInteger,
-    visible_text: { type: "array", items: { type: "string" }, maxItems: 12 },
-    artwork_characteristics: { type: "array", items: { type: "string" }, maxItems: 8 },
-    confidence: { type: "number", minimum: 0, maximum: 1 },
-    field_confidence: {
+    abilityNames: { type: "array", items: { type: "string" }, maxItems: 3 },
+    attackNames: { type: "array", items: { type: "string" }, maxItems: 4 },
+    attackDamage: { type: "array", items: { type: "string" }, maxItems: 4 },
+    confidence: {
       type: "object",
       additionalProperties: false,
       properties: {
-        card_name: confidenceSchema,
-        collector_number: confidenceSchema,
-        set: confidenceSchema,
-        hp: confidenceSchema,
-        stage: confidenceSchema,
-        ability: confidenceSchema,
-        attack: confidenceSchema,
-        attack_damage: confidenceSchema,
-        language: confidenceSchema,
-        artwork: confidenceSchema,
+        cardName: numericConfidence,
+        hp: numericConfidence,
+        abilities: numericConfidence,
+        attacks: numericConfidence,
+        collectorNumber: numericConfidence,
+        setHint: numericConfidence,
+        language: numericConfidence,
       },
-      required: ["card_name", "collector_number", "set", "hp", "stage", "ability", "attack", "attack_damage", "language", "artwork"],
+      required: ["cardName", "hp", "abilities", "attacks", "collectorNumber", "setHint", "language"],
     },
-    notes: { type: "array", items: { type: "string" }, maxItems: 8 },
   },
-  required: [
-    "card_name", "pokemon_name", "collector_number", "printed_total_number", "set_name_hint", "set_code_hint",
-    "card_game", "language", "rarity_hint", "hp", "stage_or_subtype", "ability_names", "ability_text_fragments",
-    "attack_names", "attack_damage", "attack_text_fragments", "regulation_mark", "copyright_year",
-    "visible_text", "artwork_characteristics", "confidence", "field_confidence", "notes",
-  ],
+  required: ["cardName", "hp", "abilityNames", "attackNames", "attackDamage", "collectorNumber", "setHint", "language", "confidence"],
 };
 const topRegionResponseSchema = {
   type: "object",
@@ -139,6 +116,47 @@ function responseUsage(value: unknown) {
   };
 }
 
+function confidenceLabel(value: unknown) {
+  const confidence = Number(value);
+  return confidence >= 0.75 ? "high" : confidence >= 0.4 ? "medium" : "low";
+}
+
+function normalizeConciseRecognition(value: unknown) {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const confidence = row.confidence && typeof row.confidence === "object" && !Array.isArray(row.confidence)
+    ? row.confidence as Record<string, unknown>
+    : {};
+  const overall = Math.max(
+    Number(confidence.cardName || 0),
+    Number(confidence.abilities || 0),
+    Number(confidence.attacks || 0),
+  );
+  return normalizePokemonCardIdentification({
+    card_name: row.cardName,
+    collector_number: row.collectorNumber,
+    set_name_hint: row.setHint,
+    card_game: "pokemon",
+    language: row.language,
+    hp: row.hp,
+    ability_names: row.abilityNames,
+    attack_names: row.attackNames,
+    attack_damage: row.attackDamage,
+    confidence: overall,
+    field_confidence: {
+      card_name: confidenceLabel(confidence.cardName),
+      collector_number: confidenceLabel(confidence.collectorNumber),
+      set: confidenceLabel(confidence.setHint),
+      hp: confidenceLabel(confidence.hp),
+      ability: confidenceLabel(confidence.abilities),
+      attack: confidenceLabel(confidence.attacks),
+      attack_damage: confidenceLabel(confidence.attacks),
+      language: confidenceLabel(confidence.language),
+      stage: "low",
+      artwork: "low",
+    },
+  });
+}
+
 Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
@@ -189,11 +207,11 @@ Deno.serve(async (request) => {
         model: POKEMON_CARD_IDENTIFY_MODEL,
         store: false,
         reasoning: { effort: "none" },
-        max_output_tokens: recognitionMode === "top_name" ? 180 : 900,
+        max_output_tokens: recognitionMode === "top_name" ? 180 : 500,
         input: [{
           role: "user",
           content: [
-            { type: "input_text", text: recognitionMode === "top_name" ? topRegionPrompt : `${detailsPrompt} ${fieldConfidenceInstruction}` },
+            { type: "input_text", text: recognitionMode === "top_name" ? topRegionPrompt : detailsPrompt },
             { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}`, detail: "high" },
           ],
         }],
@@ -257,7 +275,7 @@ Deno.serve(async (request) => {
         requestId,
       }, 200, requestId);
     }
-    const identification = normalizePokemonCardIdentification(rawResponse);
+    const identification = normalizeConciseRecognition(rawResponse);
     const validation = assessPokemonIdentification(identification);
     console.info("[pokemon-card-identify] OpenAI request succeeded", {
       requestId,

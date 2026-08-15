@@ -41,7 +41,12 @@ export function applyIncomingPercentage(items: TradeItem[], percentage: number, 
 export function applyCardSuggestionToItem(item: TradeItem, suggestion: CardScanSuggestion, source: "manual" | "scanner" = "manual"): TradeItem {
   if (source === "scanner" && item.cardSelectionSource === "manual") return item;
   const selected = selectedTcgplayerPrice(suggestion.tcgplayerPricing);
-  const percentage = item.targetBuyPercentage ?? suggestion.tcgplayerPricing?.targetPercent ?? 75;
+  const percentage = suggestion.tcgplayerPricing?.targetPercent ?? item.targetBuyPercentage ?? 75;
+  const rawPokemon = suggestion.suggestedType === "raw_card" && suggestion.cardGame === "pokemon";
+  const confirmedMarket = rawPokemon ? suggestion.confirmedMarketValue : selected?.market;
+  const manualPricing = suggestion.dataProvider === "manual"
+    || suggestion.manualPricingVariant === "stamped/manual"
+    || (rawPokemon && Boolean(suggestion.condition) && suggestion.condition !== "Near Mint / NM");
   return {
     ...item,
     itemName: suggestion.cardName || item.itemName,
@@ -61,20 +66,20 @@ export function applyCardSuggestionToItem(item: TradeItem, suggestion: CardScanS
       : suggestion.dataProvider ? undefined : suggestion.pokemonTcgCardId || item.pokemonTcgCardId,
     officialCardImageUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.officialImageUrl || item.officialCardImageUrl,
     tcgplayerUrl: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerUrl || suggestion.tcgplayerPricing?.url || item.tcgplayerUrl,
-    stickerCondition: suggestion.condition || item.stickerCondition,
+    cardCondition: suggestion.condition || item.cardCondition,
     stickerPrice: suggestion.stickerPrice ?? item.stickerPrice,
     gradingCompany: suggestion.gradingCompany || item.gradingCompany,
     grade: suggestion.grade || item.grade,
     certificateNumber: suggestion.certificateNumber || item.certificateNumber,
-    marketValue: selected?.market ?? item.marketValue,
-    marketPriceSource: suggestion.dataProvider === "manual" ? "Manual" : suggestion.tcgplayerPricing?.source
+    marketValue: confirmedMarket ?? item.marketValue,
+    marketPriceSource: manualPricing ? "Manual" : suggestion.tcgplayerPricing?.source
       || (suggestion.dataProvider === "tcgdex" ? "TCGdex" : suggestion.dataProvider === "optcgapi" ? "OPTCG API" : suggestion.tcgplayerPricing ? "TCGplayer" : item.marketPriceSource),
-    marketPriceVariant: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.selectedVariant || item.marketPriceVariant,
+    marketPriceVariant: suggestion.manualPricingVariant || (suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.selectedVariant || item.marketPriceVariant),
     marketPriceUpdatedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.updatedAt || item.marketPriceUpdatedAt,
     marketPriceCheckedAt: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing?.checkedAt || item.marketPriceCheckedAt,
     tcgplayerPricing: suggestion.dataProvider === "manual" ? undefined : suggestion.tcgplayerPricing || item.tcgplayerPricing,
     targetBuyPercentage: percentage,
-    targetBuyPrice: selected?.market == null ? item.targetBuyPrice : calculateTargetPrice(selected.market, percentage),
+    targetBuyPrice: confirmedMarket == null ? item.targetBuyPrice : calculateTargetPrice(confirmedMarket, percentage),
     cardSelectionSource: source,
   };
 }

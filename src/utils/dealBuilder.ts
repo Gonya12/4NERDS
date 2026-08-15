@@ -10,14 +10,6 @@ export type DealSide = "incoming" | "outgoing";
 export const incomingDealPercentages = [90, 85, 80, 75, 70] as const;
 export const outgoingDealPercentages = [100, 95, 90, 85, 80] as const;
 
-export const conditionMarketFactors = {
-  NM: 1,
-  LP: 0.9,
-  MP: 0.75,
-  HP: 0.6,
-  DMG: 0.4,
-} as const;
-
 export function classifyDeal(input: Pick<TradeTransaction, "items" | "cashPaid" | "cashReceived">): DealClassification {
   const incoming = input.items.some((item) => item.direction === "incoming");
   const outgoing = input.items.some((item) => item.direction === "outgoing");
@@ -28,15 +20,10 @@ export function classifyDeal(input: Pick<TradeTransaction, "items" | "cashPaid" 
   return "unclassified";
 }
 
-export function conditionAdjustedMarket(marketValue: number, condition?: string) {
-  const normalized = (condition || "NM").toUpperCase();
-  const key = normalized.includes("DMG") || normalized.includes("DAMAGED") ? "DMG"
-    : normalized.includes("HP") || normalized.includes("HEAVILY") ? "HP"
-      : normalized.includes("MP") || normalized.includes("MODERATELY") ? "MP"
-        : normalized.includes("LP") || normalized.includes("LIGHTLY") ? "LP"
-          : "NM";
-  const factor = conditionMarketFactors[key];
-  return roundMoney(Math.max(0, Number(marketValue || 0)) * factor);
+export function conditionAdjustedMarket(marketValue: number, _condition?: string) {
+  // marketValue is already the user-confirmed value for the selected physical
+  // condition. Never invent LP/MP/HP/DMG prices from fixed percentages.
+  return roundMoney(Math.max(0, Number(marketValue || 0)));
 }
 
 export function applyDealPercentage(item: TradeItem, side: DealSide, percentage: number): TradeItem {
