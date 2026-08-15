@@ -3,6 +3,7 @@ import {
   POKEMON_CARD_IDENTIFY_MODEL,
   assessPokemonIdentification,
   normalizePokemonCardIdentification,
+  normalizePokemonCollectorRegionIdentification,
   normalizePokemonTopRegionIdentification,
   stripPokemonCardImagePrefix,
   supportedPokemonCardImageTypes,
@@ -18,6 +19,7 @@ const corsHeaders = {
 const maxDecodedBytes = 6 * 1024 * 1024;
 const topRegionPrompt = "This image contains only the TOP band of one physical trading card. Read the prominent printed card title and HP value only. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Ignore evolution labels, stage text, attack text, sleeve text, glare, and background. Do not infer an exact printing, set, collector number, price, or provider ID. Return card_name as null when the title itself is not readable. Return hp as null when unreadable. Give card_name and hp independent confidence values.";
 const nameFingerprintPrompt = "Read this already normalized, physical-card-only raw Pokemon card. Return only the printed card name, HP, ability names, and attack names. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR. Never substitute attack or rule text for the title. Do not identify the exact printing and do not read or infer a collector number, set, price, condition, inventory ID, or provider ID. Use null or empty lists when a field is unreadable and give every field an independent confidence.";
+const bottomNumberPrompt = "This image contains only the enhanced BOTTOM region of one physical Pokemon card. Read only text actually visible in this crop: the printed collector number, its printed denominator when visible, and a short set or regulation identifier when useful. Preserve leading zeros exactly, for example 056. Do not identify the Pokemon, infer a likely printing, consult a catalog, or guess missing digits. Return null for anything unreadable and give each observed field an independent confidence.";
 const detailsPrompt = "Identify this raw Pokémon card from the already normalized, physical-card-only crop. In one concise response read: printed card title first, HP, ability names, attack names and printed attack damage, collector number, set hint, and language. Preserve suffixes such as ex, EX, GX, V, VMAX, and VSTAR and collector-number leading zeros. The title is the strongest signal. Never substitute attack/body text for the title and never guess tiny collector text. Return null or empty lists for unreadable fields with independent numeric confidence. Do not provide price, value, condition grade, buy percentage, profit, inventory IDs, provider IDs, or explanations.";
 
 const nullableString = { type: ["string", "null"] };
@@ -84,6 +86,19 @@ const nameFingerprintResponseSchema = {
     },
   },
   required: ["cardName", "hp", "abilityNames", "attackNames", "confidence"],
+};
+const bottomNumberResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    collector_number: nullableString,
+    printed_denominator: nullableString,
+    set_or_regulation_hint: nullableString,
+    collector_number_confidence: numericConfidence,
+    denominator_confidence: numericConfidence,
+    set_or_regulation_confidence: numericConfidence,
+  },
+  required: ["collector_number", "printed_denominator", "set_or_regulation_hint", "collector_number_confidence", "denominator_confidence", "set_or_regulation_confidence"],
 };
 
 function json(body: unknown, status = 200, requestId?: string, extraHeaders: Record<string, string> = {}) {
@@ -192,7 +207,7 @@ Deno.serve(async (request) => {
   let imageBase64 = "";
   let mimeType: PokemonCardImageMimeType;
   let recognitionStrategy: "standard" | "alternate" = "standard";
-  let recognitionMode: "details" | "top_name" | "name_fingerprint" = "details";
+  let recognitionMode: "details" | "top_name" | "name_fingerprint" | "bottom_number" = "details";
   let debug = false;
   try {
     const body = await request.json() as { imageBase64?: unknown; mimeType?: unknown; recognitionStrategy?: unknown; recognitionMode?: unknown; debug?: unknown };
@@ -204,7 +219,7 @@ Deno.serve(async (request) => {
     }
     mimeType = body.mimeType as PokemonCardImageMimeType;
     recognitionStrategy = body.recognitionStrategy === "alternate" ? "alternate" : "standard";
-    recognitionMode = body.recognitionMode === "top_name" || body.recognitionMode === "name_fingerprint" ? body.recognitionMode : "details";
+    recognitionMode = body.recognitionMode === "top_name" || body.recognitionMode === "name_fingerprint" || body.recognitionMode === "bottom_number" ? body.recognitionMode : "details";
     debug = body.debug === true;
     imageBase64 = stripPokemonCardImagePrefix(body.imageBase64);
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(imageBase64)) {
@@ -224,10 +239,12 @@ Deno.serve(async (request) => {
   try {
     const schema = recognitionMode === "top_name"
       ? topRegionResponseSchema
-      : recognitionMode === "name_fingerprint" ? nameFingerprintResponseSchema : responseSchema;
+      : recognitionMode === "name_fingerprint" ? nameFingerprintResponseSchema
+      : recognitionMode === "bottom_number" ? bottomNumberResponseSchema : responseSchema;
     const prompt = recognitionMode === "top_name"
       ? topRegionPrompt
-      : recognitionMode === "name_fingerprint" ? nameFingerprintPrompt : detailsPrompt;
+      : recognitionMode === "name_fingerprint" ? nameFingerprintPrompt
+      : recognitionMode === "bottom_number" ? bottomNumberPrompt : detailsPrompt;
     const upstream = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -236,7 +253,7 @@ Deno.serve(async (request) => {
         model: POKEMON_CARD_IDENTIFY_MODEL,
         store: false,
         reasoning: { effort: "none" },
-        max_output_tokens: recognitionMode === "top_name" ? 180 : 500,
+        max_output_tokens: recognitionMode === "top_name" || recognitionMode === "bottom_number" ? 180 : 500,
         input: [{
           role: "user",
           content: [
@@ -246,7 +263,7 @@ Deno.serve(async (request) => {
         }],
         text: {
           verbosity: "low",
-          format: { type: "json_schema", name: recognitionMode === "top_name" ? "card_name_hp" : recognitionMode === "name_fingerprint" ? "card_name_fingerprint" : "card_identification", strict: true, schema },
+          format: { type: "json_schema", name: recognitionMode === "top_name" ? "card_name_hp" : recognitionMode === "name_fingerprint" ? "card_name_fingerprint" : recognitionMode === "bottom_number" ? "card_number" : "card_identification", strict: true, schema },
         },
       }),
     });
@@ -296,6 +313,21 @@ Deno.serve(async (request) => {
         success: true,
         model: POKEMON_CARD_IDENTIFY_MODEL,
         topIdentification,
+        recognitionMode,
+        recognitionStrategy,
+        telemetry,
+        ...(debug ? { rawProviderResponse: rawResponse } : {}),
+        latencyMs: Date.now() - startedAt,
+        requestId,
+      }, 200, requestId);
+    }
+    if (recognitionMode === "bottom_number") {
+      const numberIdentification = normalizePokemonCollectorRegionIdentification(rawResponse);
+      console.info("[pokemon-card-identify] collector-region response parsed", { requestId, model: POKEMON_CARD_IDENTIFY_MODEL, parsed: numberIdentification, telemetry, latencyMs: Date.now() - startedAt });
+      return json({
+        success: true,
+        model: POKEMON_CARD_IDENTIFY_MODEL,
+        numberIdentification,
         recognitionMode,
         recognitionStrategy,
         telemetry,

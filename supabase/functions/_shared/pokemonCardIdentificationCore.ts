@@ -13,6 +13,15 @@ export type PokemonTopRegionIdentification = {
   cardNameConfidence: number;
   hpConfidence: number;
 };
+export type PokemonCollectorRegionIdentification = {
+  collectorNumber: string | null;
+  printedDenominator: string | null;
+  setOrRegulationHint: string | null;
+  confidence: number;
+  collectorNumberConfidence: number;
+  denominatorConfidence: number;
+  setOrRegulationConfidence: number;
+};
 export type PokemonIdentificationFieldConfidence = {
   card_name: IdentificationFieldConfidence;
   collector_number: IdentificationFieldConfidence;
@@ -204,6 +213,27 @@ export function normalizePokemonTopRegionIdentification(value: unknown): Pokemon
   };
 }
 
+export function normalizePokemonCollectorRegionIdentification(value: unknown): PokemonCollectorRegionIdentification {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const collectorNumber = nullableText(row.collectorNumber ?? row.collector_number, 32);
+  const printedDenominator = nullableText(row.printedDenominator ?? row.printed_denominator, 16);
+  const setOrRegulationHint = nullableText(row.setOrRegulationHint ?? row.set_or_regulation_hint, 40);
+  const collectorNumberConfidence = Number(row.collectorNumberConfidence ?? row.collector_number_confidence ?? row.confidence);
+  const denominatorConfidence = Number(row.denominatorConfidence ?? row.denominator_confidence ?? 0);
+  const setOrRegulationConfidence = Number(row.setOrRegulationConfidence ?? row.set_or_regulation_confidence ?? 0);
+  const confidence = Number(row.confidence ?? collectorNumberConfidence);
+  const clamp = (number: number) => Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
+  return {
+    collectorNumber: collectorNumber ? normalizeIdentificationCollectorNumber(collectorNumber) || null : null,
+    printedDenominator,
+    setOrRegulationHint,
+    confidence: clamp(confidence),
+    collectorNumberConfidence: clamp(collectorNumberConfidence),
+    denominatorConfidence: clamp(denominatorConfidence),
+    setOrRegulationConfidence: clamp(setOrRegulationConfidence),
+  };
+}
+
 /** Combines independent OCR regions without involving catalog search or ranking. */
 export function mergePokemonRecognition(
   fullCard: PokemonCardIdentification,
@@ -226,6 +256,27 @@ export function mergePokemonRecognition(
       ...fullCard.field_confidence,
       card_name: useTopName ? identificationConfidenceLabel(topRegion.cardNameConfidence) : fullCard.field_confidence.card_name,
       hp: useTopHp ? identificationConfidenceLabel(topRegion.hpConfidence) : fullCard.field_confidence.hp,
+    },
+  });
+}
+
+/** Adds only values observed by the dedicated number crop; catalog candidates never enter here. */
+export function mergePokemonCollectorRecognition(
+  visual: PokemonCardIdentification,
+  numberRegion: PokemonCollectorRegionIdentification | null,
+): PokemonCardIdentification {
+  const observedNumber = numberRegion?.collectorNumber || null;
+  const numberConfidence = numberRegion?.collectorNumberConfidence || 0;
+  const observedSetHint = numberRegion?.setOrRegulationHint || null;
+  return normalizePokemonCardIdentification({
+    ...visual,
+    collector_number: observedNumber,
+    printed_total_number: numberRegion?.printedDenominator || null,
+    set_code_hint: observedSetHint || visual.set_code_hint,
+    field_confidence: {
+      ...visual.field_confidence,
+      collector_number: observedNumber ? identificationConfidenceLabel(numberConfidence) : "low",
+      set: observedSetHint ? identificationConfidenceLabel(numberRegion?.setOrRegulationConfidence || 0) : visual.field_confidence.set,
     },
   });
 }

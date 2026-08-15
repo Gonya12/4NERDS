@@ -2,6 +2,7 @@ import {
   POKEMON_CARD_IDENTIFY_FUNCTION,
   buildPokemonIdentificationSearchAttempts,
   normalizePokemonCardIdentification,
+  normalizePokemonCollectorRegionIdentification,
   normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
@@ -10,6 +11,7 @@ import {
   type IdentificationFieldConfidence,
   type IdentificationSearchAttempt,
   type PokemonCardIdentification,
+  type PokemonCollectorRegionIdentification,
   type PokemonTopRegionIdentification,
   type ScannerCandidateEvidence,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
@@ -22,6 +24,7 @@ type IdentifyPayload = {
   message?: string;
   identification?: unknown;
   topIdentification?: unknown;
+  numberIdentification?: unknown;
   rawProviderResponse?: unknown;
   requestId?: string;
   providerStatus?: number;
@@ -31,7 +34,7 @@ type IdentifyPayload = {
 
 export type OpenAiRecognitionTelemetry = {
   model: string;
-  recognitionMode: "top_name" | "details" | "name_fingerprint";
+  recognitionMode: "top_name" | "details" | "name_fingerprint" | "bottom_number";
   success: boolean;
   retryCount: number;
   cacheHit: boolean;
@@ -62,6 +65,19 @@ export type TopRegionRecognitionDebug = {
   elapsedMs: number;
   rawProviderResponse?: unknown;
   parsed: PokemonTopRegionIdentification;
+  telemetry?: OpenAiRecognitionTelemetry;
+};
+
+export type CollectorRegionRecognitionDebug = {
+  strategy: "standard" | "alternate";
+  recognitionMode: "bottom_number";
+  httpStatus: number;
+  responseBodyKeys: string[];
+  requestId?: string;
+  providerStatus?: number;
+  elapsedMs: number;
+  rawProviderResponse?: unknown;
+  parsed: PokemonCollectorRegionIdentification;
   telemetry?: OpenAiRecognitionTelemetry;
 };
 
@@ -109,6 +125,7 @@ export type ScannerSearchDebug = {
 
 const visualDebug = new WeakMap<PokemonCardIdentification, VisualRecognitionDebug>();
 const topRegionDebug = new WeakMap<PokemonTopRegionIdentification, TopRegionRecognitionDebug>();
+const collectorRegionDebug = new WeakMap<PokemonCollectorRegionIdentification, CollectorRegionRecognitionDebug>();
 let latestSearchDebug: ScannerSearchDebug | undefined;
 
 export function visualRecognitionDebugFor(identification: PokemonCardIdentification) {
@@ -117,6 +134,10 @@ export function visualRecognitionDebugFor(identification: PokemonCardIdentificat
 
 export function topRegionRecognitionDebugFor(identification: PokemonTopRegionIdentification) {
   return topRegionDebug.get(identification);
+}
+
+export function collectorRegionRecognitionDebugFor(identification: PokemonCollectorRegionIdentification) {
+  return collectorRegionDebug.get(identification);
 }
 
 export function latestScannerSearchDebug() {
@@ -338,6 +359,77 @@ export async function identifyPokemonCardTopRegion(
       throw new PokemonCardIdentificationError("The card-name region timed out. Try again or adjust the crop.", "OPENAI_TIMEOUT");
     }
     throw new PokemonCardIdentificationError("Couldn't connect to card recognition. Try again.", "NETWORK_ERROR");
+  } finally {
+    request.cleanup();
+  }
+}
+
+export async function identifyPokemonCardCollectorRegion(
+  file: File,
+  signal?: AbortSignal,
+  strategy: "standard" | "alternate" = "standard",
+) {
+  if (!isSupabaseConfigured || !supabaseUrl || !supabasePublishableKey) {
+    throw new PokemonCardIdentificationError("Visual identification needs the app's Supabase connection.", "NOT_CONFIGURED");
+  }
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new PokemonCardIdentificationError("Use a JPEG, PNG, or WebP card image.", "UNSUPPORTED_IMAGE_TYPE");
+  }
+  const dataUrl = await recognitionFileDataUrl(file);
+  const imageBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const request = combinedAbortSignal(signal, 26_000);
+  const startedAt = performance.now();
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/${POKEMON_CARD_IDENTIFY_FUNCTION}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: supabasePublishableKey,
+        Authorization: `Bearer ${supabasePublishableKey}`,
+      },
+      body: JSON.stringify({ imageBase64, mimeType: file.type, recognitionStrategy: strategy, recognitionMode: "bottom_number", debug: import.meta.env.DEV }),
+      signal: request.signal,
+    });
+    const payload = await response.json().catch(() => null) as IdentifyPayload | null;
+    if (import.meta.env.DEV) console.info("[Visual card scanner] raw collector-region response before parsing", {
+      httpStatus: response.status,
+      responseBodyKeys: payload ? Object.keys(payload) : [],
+      requestId: payload?.requestId || response.headers.get("x-request-id"),
+      strategy,
+      rawProviderResponse: payload?.rawProviderResponse ?? payload?.numberIdentification,
+    });
+    if (!response.ok || !payload?.success || !payload.numberIdentification) {
+      throw new PokemonCardIdentificationError(
+        payload?.message || "The collector-number region could not be read.",
+        payload?.code || `HTTP_${response.status}`,
+        payload?.requestId || response.headers.get("x-request-id") || undefined,
+      );
+    }
+    const identification = normalizePokemonCollectorRegionIdentification(payload.numberIdentification);
+    const debug: CollectorRegionRecognitionDebug = {
+      strategy,
+      recognitionMode: "bottom_number",
+      httpStatus: response.status,
+      responseBodyKeys: Object.keys(payload),
+      requestId: payload.requestId || response.headers.get("x-request-id") || undefined,
+      providerStatus: payload.providerStatus,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      rawProviderResponse: payload.rawProviderResponse,
+      parsed: identification,
+      telemetry: payload.telemetry,
+    };
+    if (import.meta.env.DEV) {
+      collectorRegionDebug.set(identification, debug);
+      console.info("[Visual card scanner] collector-region response parsed", debug);
+    }
+    return identification;
+  } catch (error) {
+    if (error instanceof PokemonCardIdentificationError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      if (signal?.aborted) throw error;
+      throw new PokemonCardIdentificationError("The collector-number region timed out.", "OPENAI_TIMEOUT");
+    }
+    throw new PokemonCardIdentificationError("Couldn't connect to card recognition.", "NETWORK_ERROR");
   } finally {
     request.cleanup();
   }

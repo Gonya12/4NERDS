@@ -7,9 +7,11 @@ import {
   buildPokemonIdentificationSearchAttempts,
   identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
+  mergePokemonCollectorRecognition,
   mergePokemonRecognition,
   normalizeIdentificationCollectorNumber,
   normalizePokemonCardIdentification,
+  normalizePokemonCollectorRegionIdentification,
   normalizePokemonTopRegionIdentification,
   rankScannerCandidates,
   scannerCandidateEvidence,
@@ -77,6 +79,32 @@ test("recognition-only merge preserves the top-band name and full-card fingerpri
   assert.deepEqual(merged.ability_names, ["Infernal Reign"]);
   assert.deepEqual(merged.attack_names, ["Burning Darkness"]);
   assert.equal(merged.collector_number, null);
+});
+
+test("collector recognition preserves observed 056 and never inherits a broad or catalog-like number", () => {
+  const broad = normalizePokemonCardIdentification({
+    card_name: "Charizard ex",
+    collector_number: "125/197",
+    hp: 330,
+    confidence: 0.9,
+    field_confidence: { card_name: "high", collector_number: "high", hp: "high" },
+  });
+  const unreadable = mergePokemonCollectorRecognition(broad, null);
+  assert.equal(unreadable.collector_number, null);
+  assert.equal(unreadable.field_confidence.collector_number, "low");
+
+  const observed = normalizePokemonCollectorRegionIdentification({
+    collector_number: "056",
+    printed_denominator: null,
+    set_or_regulation_hint: "M",
+    collector_number_confidence: 0.91,
+    denominator_confidence: 0,
+    set_or_regulation_confidence: 0.7,
+  });
+  const merged = mergePokemonCollectorRecognition(broad, observed);
+  assert.equal(merged.collector_number, "056");
+  assert.equal(merged.field_confidence.collector_number, "high");
+  assert.equal(merged.set_code_hint, "M");
 });
 
 test("collector number alone is preserved but cannot become a useful automatic identification", () => {
@@ -388,6 +416,13 @@ test("single and bulk raw PokÃ©mon scanners share validation and a one-call vi
   assert.match(scanPipelineSource, /const hasReadableName = Boolean\(usefulness\.recognizedName\)/);
   assert.match(scanPipelineSource, /const possibleMatches = hasReadableName/);
   assert.match(scanPipelineSource, /diagnosticImages/);
+  assert.match(scanPipelineSource, /cropCardCollectorRegion\(collectorCardSource, "bottom_left"/);
+  assert.match(scanPipelineSource, /cropCardCollectorRegion\(collectorCardSource, "bottom_full"/);
+  assert.match(scanPipelineSource, /collector_number: null/);
+  assert.match(scanPipelineSource, /identifyPokemonCardCollectorRegion/);
+  assert.match(edgeSource, /recognitionMode === "bottom_number"/);
+  assert.match(edgeSource, /Preserve leading zeros exactly, for example 056/);
+  assert.match(scannerSource, /Catalog candidate — never treated as OCR/);
   assert.match(bulkWorkerSource, /assessPokemonIdentification\(rawIdentification\)/);
   assert.match(bulkWorkerSource, /maximumCalls: 1/);
   assert.match(bulkWorkerSource, /Automatic retries are disabled/);
@@ -426,7 +461,7 @@ test("scanner reuses catalog search, exposes stages, and always requires confirm
   assert.match(scannerSource, /import\.meta\.env\.DEV && reviewSuggestion\.technicalDetails\?\.scannerDebug/);
   assert.match(scannerSource, /Scanner Debug/);
   assert.doesNotMatch(scannerSource, /placeholder="Charizard ex"/);
-  assert.match(scannerSource, /recognizedCardName/);
+  assert.match(scannerSource, /Name actually read/);
   assert.match(scannerSource, /Image actually sent to the full-card scanner/);
   assert.match(serviceSource, /firstTwentyReturned/);
   assert.match(serviceSource, /responseBodyKeys/);
@@ -437,7 +472,7 @@ test("transient empty searches are retried but never cached", () => {
   const scanService = readFileSync(new URL("../src/services/sales/cardScanService.ts", import.meta.url), "utf8");
   assert.match(searchService, /empty result retry/);
   assert.match(searchService, /if \(matches\.length > 0 \|\| request\.providerCardId\) writeCache/);
-  assert.match(scanService, /4nerds_card_scan_v12_/);
+  assert.match(scanService, /4nerds_card_scan_v13_/);
   assert.match(scanService, /assessPokemonIdentification/);
   assert.match(scanService, /cropCardTopRegion\(cardRelativeFront/);
   assert.match(scanService, /identifyPokemonCardTopRegion/);

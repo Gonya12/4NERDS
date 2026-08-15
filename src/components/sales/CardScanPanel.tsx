@@ -623,6 +623,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
         <div>
           <p className="font-black text-amber-950 dark:text-amber-100">{displayedMatches.length ? "Review uncertain recognized information." : "We couldn't determine the exact printing."}</p>
           {safeRecognizedSummary ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Recognized:</span> {safeRecognizedSummary}</p> : <p className="mt-1 text-sm font-black text-amber-900 dark:text-amber-100">Could not read card name.</p>}
+          {rawPokemonFlow ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200"><span className="font-bold">Collector Number:</span> {recognizedCollectorNumber || "Unknown"}</p> : null}
           <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
             {[reviewSuggestion.cardSet, reviewSuggestion.aiIdentification?.hp ? `${reviewSuggestion.aiIdentification.hp} HP` : "", reviewSuggestion.cardGame, reviewSuggestion.language].filter(Boolean).join(" • ")}
           </p>
@@ -702,6 +703,7 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
             reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.normalized,
             reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.cardCrop,
             ...reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.topNameCrops,
+            ...reviewSuggestion.technicalDetails.scannerDebug.diagnosticImages.numberCrops,
           ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => <figure key={entry.label} className="rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
             <figcaption className="font-black">{entry.label}</figcaption>
             <img src={entry.previewDataUrl} alt={entry.label} className="mt-2 max-h-52 w-full rounded bg-black object-contain" />
@@ -710,10 +712,16 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
           </figure>)}
         </div> : null}
         <dl className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
-          <div><dt className="font-black">recognizedCardName</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedName ?? null)}</code></dd></div>
+          <div className="sm:col-span-2"><dt className="font-black uppercase tracking-wide text-sky-800 dark:text-sky-200">Visual recognition</dt></div>
+          <div><dt className="font-black">Name actually read</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedName ?? null)}</code></dd></div>
           <div><dt className="font-black">Name confidence</dt><dd className="capitalize">{reviewSuggestion.fieldConfidence.cardName || "Unknown"}</dd></div>
-          <div><dt className="font-black">collectorNumber</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.usefulness?.recognizedCollectorNumber ?? reviewSuggestion.collectorNumber ?? null)}</code></dd></div>
-          <div><dt className="font-black">Number confidence</dt><dd className="capitalize">{reviewSuggestion.fieldConfidence.collectorNumber || "Unknown"}</dd></div>
+          <div><dt className="font-black">HP actually read</dt><dd>{reviewSuggestion.aiIdentification?.hp ?? "Unknown"}</dd></div>
+          <div><dt className="font-black">HP confidence</dt><dd className="capitalize">{reviewSuggestion.aiIdentification?.field_confidence.hp || "Unknown"}</dd></div>
+          <div><dt className="font-black">Number actually read from image</dt><dd><code>{JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.numberRegion?.selectedNumber ?? null)}</code></dd></div>
+          <div><dt className="font-black">Number confidence</dt><dd>{Math.round((reviewSuggestion.technicalDetails.scannerDebug.numberRegion?.confidence || 0) * 100)}%</dd></div>
+          <div><dt className="font-black">Set/regulation actually read</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.numberRegion?.setOrRegulationHint || "Unknown"}</dd></div>
+          <div><dt className="font-black">Printed denominator</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.numberRegion?.printedDenominator || "Unknown"}</dd></div>
+          <div className="sm:col-span-2"><dt className="font-black uppercase tracking-wide text-violet-800 dark:text-violet-200">Catalog candidate — never treated as OCR</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.catalogCandidate ? `${reviewSuggestion.technicalDetails.scannerDebug.catalogCandidate.name} · #${reviewSuggestion.technicalDetails.scannerDebug.catalogCandidate.collectorNumber || "?"} · ${reviewSuggestion.technicalDetails.scannerDebug.catalogCandidate.set || "Unknown set"}` : "No catalog candidate"}</dd></div>
           <div className="sm:col-span-2"><dt className="font-black">Card bounds</dt><dd className="break-all">{reviewSuggestion.technicalDetails.scannerDebug.cardBounds ? JSON.stringify(reviewSuggestion.technicalDetails.scannerDebug.cardBounds) : "Not available"}</dd></div>
           <div><dt className="font-black">Parsed top region</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.topRegion?.selectedName || "Name unavailable"} · HP {reviewSuggestion.technicalDetails.scannerDebug.topRegion?.selectedHp ?? "?"}</dd></div>
           <div><dt className="font-black">Top confidence</dt><dd>{reviewSuggestion.technicalDetails.scannerDebug.topRegion?.confidence ?? 0}</dd></div>
@@ -735,6 +743,14 @@ export function CardScanPanel({ imageFile: inputImageFile, backImageFile: inputB
             {attempt.previewDataUrl ? <img src={attempt.previewDataUrl} alt={`Top-region scanner crop ${index + 1}`} className="mt-2 max-h-40 w-full rounded bg-black object-contain" /> : null}
             <p className="mt-1">{attempt.outputWidth}×{attempt.outputHeight} from {attempt.sourceWidth}×{attempt.sourceHeight}</p>
             <details className="mt-1"><summary className="cursor-pointer font-black">Raw top response</summary><pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap">{JSON.stringify(attempt.rawResponse ?? null, null, 2)}</pre></details>
+          </div>)}
+        </div> : null}
+        {reviewSuggestion.technicalDetails.scannerDebug.numberRegion?.attempts.length ? <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {reviewSuggestion.technicalDetails.scannerDebug.numberRegion.attempts.map((attempt, index) => <div key={`${attempt.region}-${index}`} className="rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">
+            <p className="font-black">{attempt.region === "bottom_left" ? "Bottom-left collector crop" : "Bottom full-width fallback"} · {attempt.scale.toFixed(2)}x</p>
+            {attempt.previewDataUrl ? <img src={attempt.previewDataUrl} alt={`${attempt.region} collector-number crop`} className="mt-2 max-h-40 w-full rounded bg-black object-contain" /> : null}
+            <p className="mt-1">Parsed number: <strong>{attempt.parsed.collectorNumber || "Unknown"}</strong> · confidence {Math.round(attempt.parsed.collectorNumberConfidence * 100)}%</p>
+            <details className="mt-1"><summary className="cursor-pointer font-black">Raw number response</summary><pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap">{JSON.stringify(attempt.rawResponse ?? null, null, 2)}</pre></details>
           </div>)}
         </div> : null}
         <details className="mt-3 rounded-lg bg-white/80 p-2 dark:bg-slate-950/60">

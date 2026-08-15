@@ -295,6 +295,71 @@ export async function cropCardTopRegion(
   };
 }
 
+export type CardCollectorRegion = "bottom_left" | "bottom_full";
+export type CardCollectorRegionCrop = {
+  file: File;
+  region: CardCollectorRegion;
+  sourceWidth: number;
+  sourceHeight: number;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  scale: number;
+};
+
+/** Preserves tiny-print detail by cropping before upscaling and encoding losslessly. */
+export async function cropCardCollectorRegion(
+  cardFile: File,
+  region: CardCollectorRegion,
+  signal?: AbortSignal,
+): Promise<CardCollectorRegionCrop> {
+  if (signal?.aborted) throw new DOMException("Card scan cancelled.", "AbortError");
+  const normalized = await normalizeImageOrientation(cardFile);
+  const image = await imageElement(normalized);
+  const bounds = region === "bottom_left"
+    ? { x: 0.015, y: 0.77, width: 0.61, height: 0.225 }
+    : { x: 0, y: 0.755, width: 1, height: 0.245 };
+  const cropX = Math.round(image.naturalWidth * bounds.x);
+  const cropY = Math.round(image.naturalHeight * bounds.y);
+  const cropWidth = Math.max(1, Math.round(image.naturalWidth * bounds.width));
+  const cropHeight = Math.max(1, Math.round(image.naturalHeight * bounds.height));
+  const desiredWidth = region === "bottom_left" ? 2200 : 2400;
+  const scale = Math.min(4, Math.max(1, desiredWidth / cropWidth));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(cropWidth * scale));
+  canvas.height = Math.max(1, Math.round(cropHeight * scale));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("This browser cannot prepare the collector-number region.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = "contrast(1.2) saturate(0.9)";
+  context.drawImage(image, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+  context.filter = "none";
+  sharpenImageData(context, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  const outputWidth = canvas.width;
+  const outputHeight = canvas.height;
+  canvas.width = 1;
+  canvas.height = 1;
+  if (!blob) throw new Error("This browser could not create the collector-number crop.");
+  return {
+    file: new File([blob], `${region}-${normalized.name || "card.png"}`.replace(/\.[^.]+$/, ".png"), { type: "image/png", lastModified: Date.now() }),
+    region,
+    sourceWidth: image.naturalWidth,
+    sourceHeight: image.naturalHeight,
+    cropX,
+    cropY,
+    cropWidth,
+    cropHeight,
+    outputWidth,
+    outputHeight,
+    scale,
+  };
+}
+
 export function terminateCardImageWorker(reason: Error = new DOMException("Card scan cancelled.", "AbortError")) {
   if (idleTimer) window.clearTimeout(idleTimer);
   idleTimer = undefined;

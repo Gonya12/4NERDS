@@ -10,16 +10,18 @@ import {
   buildPokemonIdentificationSearchAttempts,
   identificationConfidenceLabel,
   isStrongVisualCatalogMatch,
+  mergePokemonCollectorRecognition,
   mergePokemonRecognition,
   normalizePokemonCardIdentification,
   scannerCardNameSimilarity,
   type PokemonCardIdentification,
+  type PokemonCollectorRegionIdentification,
   type PokemonTopRegionIdentification,
 } from "../../../supabase/functions/_shared/pokemonCardIdentificationCore.ts";
 import { extractOnePieceCardCode } from "../../../supabase/functions/_shared/unifiedCardSearchCore.ts";
 import { compressSaleImage, prepareCardRecognitionImage, prepareOpenAiCardImage } from "../images/saleImageService";
 import { normalizeImageOrientationWithInfo, type ImageOrientationInfo } from "../images/imageOrientation";
-import { automaticallyPrepareCard, cropCardTopRegion, cropCenteredCardFallback, terminateCardImageWorker, type CropPoint } from "./cardImageProcessor";
+import { automaticallyPrepareCard, cropCardCollectorRegion, cropCardTopRegion, cropCenteredCardFallback, terminateCardImageWorker, type CardCollectorRegion, type CropPoint } from "./cardImageProcessor";
 import {
   buildNameEvidence,
   buildPokemonApiQueries,
@@ -145,12 +147,43 @@ export type CardScanSuggestion = {
         selectedHp: number | null;
         confidence: number;
       };
+      numberRegion?: {
+        source: "detected_card" | "user_crop" | "centered_fallback" | "unavailable";
+        attempts: Array<{
+          region: CardCollectorRegion;
+          sourceWidth: number;
+          sourceHeight: number;
+          cropX: number;
+          cropY: number;
+          cropWidth: number;
+          cropHeight: number;
+          outputWidth: number;
+          outputHeight: number;
+          scale: number;
+          fileSize: number;
+          mimeType: string;
+          previewDataUrl?: string;
+          rawResponse?: unknown;
+          parsed: PokemonCollectorRegionIdentification;
+        }>;
+        selectedNumber: string | null;
+        printedDenominator: string | null;
+        setOrRegulationHint: string | null;
+        confidence: number;
+      };
+      catalogCandidate?: {
+        name: string;
+        collectorNumber: string | null;
+        set: string | null;
+        providerId: string;
+      } | null;
       diagnosticImages?: {
         original?: ScannerDiagnosticImage;
         normalized?: ScannerDiagnosticImage;
         cardCrop?: ScannerDiagnosticImage;
         fullRecognitionInput?: ScannerDiagnosticImage;
         topNameCrops: ScannerDiagnosticImage[];
+        numberCrops: ScannerDiagnosticImage[];
       };
       recognitionAttempts?: Array<{
         strategy: "details" | "name_fingerprint";
@@ -733,6 +766,8 @@ async function scanPokemonCardWithVisualAi(
 ) {
   options.onStage?.("Reading card");
   const {
+    collectorRegionRecognitionDebugFor,
+    identifyPokemonCardCollectorRegion,
     identifyPokemonCardVisually,
     identifyPokemonCardTopRegion,
     latestScannerSearchDebug,
@@ -774,6 +809,18 @@ async function scanPokemonCardWithVisualAi(
   if (!cardRelativeFront) {
     throw new Error("Adjust the crop so only the physical card is selected before visual recognition.");
   }
+  let collectorCardSource = cardRelativeFront;
+  const highQualitySource = options.diagnosticFiles?.normalized;
+  if (highQualitySource) {
+    if (cropSource === "user_crop") {
+      collectorCardSource = highQualitySource;
+    } else if (cropSource === "centered_fallback") {
+      collectorCardSource = (await cropCenteredCardFallback(highQualitySource, options.signal)).file;
+    } else {
+      const highQualityDetection = await automaticallyPrepareCard(highQualitySource, options.signal);
+      if (highQualityDetection.cropped) collectorCardSource = highQualityDetection.file;
+    }
+  }
 
   const diagnosticImage = async (file: File, label: string, orientation = "upright pixel matrix; exact bytes used at this stage"): Promise<ScannerDiagnosticImage> => {
     const image = await imageElement(file);
@@ -792,11 +839,15 @@ async function scanPokemonCardWithVisualAi(
     outputWidth: number; outputHeight: number; fileSize?: number; mimeType?: string; previewDataUrl?: string; rawResponse?: unknown;
     parsed: PokemonTopRegionIdentification;
   }> = [];
+  const numberAttempts: NonNullable<NonNullable<CardScanSuggestion["technicalDetails"]>["scannerDebug"]>["numberRegion"] extends infer T
+    ? T extends { attempts: infer A } ? A : never : never = [];
   const firstTopCrop = await cropCardTopRegion(cardRelativeFront, 0.25, false, options.signal);
+  const firstNumberCrop = await cropCardCollectorRegion(collectorCardSource, "bottom_left", options.signal);
   const recognitionImage = await prepareOpenAiCardImage(cardRelativeFront);
-  const [firstTopResult, fullResult] = await Promise.allSettled([
+  const [firstTopResult, fullResult, firstNumberResult] = await Promise.allSettled([
     identifyPokemonCardTopRegion(firstTopCrop.file, options.signal, "standard"),
     identifyPokemonCardVisually(recognitionImage, options.signal, "standard", "name_fingerprint"),
+    identifyPokemonCardCollectorRegion(firstNumberCrop.file, options.signal, "standard"),
   ]);
   let selectedTop = firstTopResult.status === "fulfilled" ? firstTopResult.value : null;
   if (firstTopResult.status === "fulfilled") {
@@ -866,10 +917,89 @@ async function scanPokemonCardWithVisualAi(
       devCardScanLog("enhanced top-name pass failed", { message: error instanceof Error ? error.message : String(error) });
     }
   }
-  const rawFullIdentification = fullResult.status === "fulfilled"
+  const emptyNumberIdentification: PokemonCollectorRegionIdentification = {
+    collectorNumber: null,
+    printedDenominator: null,
+    setOrRegulationHint: null,
+    confidence: 0,
+    collectorNumberConfidence: 0,
+    denominatorConfidence: 0,
+    setOrRegulationConfidence: 0,
+  };
+  let selectedNumber = firstNumberResult.status === "fulfilled" ? firstNumberResult.value : null;
+  const firstNumberDebug = firstNumberResult.status === "fulfilled" ? collectorRegionRecognitionDebugFor(firstNumberResult.value) : undefined;
+  numberAttempts.push({
+    region: firstNumberCrop.region,
+    sourceWidth: firstNumberCrop.sourceWidth,
+    sourceHeight: firstNumberCrop.sourceHeight,
+    cropX: firstNumberCrop.cropX,
+    cropY: firstNumberCrop.cropY,
+    cropWidth: firstNumberCrop.cropWidth,
+    cropHeight: firstNumberCrop.cropHeight,
+    outputWidth: firstNumberCrop.outputWidth,
+    outputHeight: firstNumberCrop.outputHeight,
+    scale: firstNumberCrop.scale,
+    fileSize: firstNumberCrop.file.size,
+    mimeType: firstNumberCrop.file.type,
+    previewDataUrl: import.meta.env.DEV ? await recognitionFileDataUrl(firstNumberCrop.file) : undefined,
+    rawResponse: firstNumberDebug?.rawProviderResponse ?? (firstNumberResult.status === "rejected" ? { error: firstNumberResult.reason instanceof Error ? firstNumberResult.reason.message : String(firstNumberResult.reason) } : undefined),
+    parsed: firstNumberResult.status === "fulfilled" ? firstNumberResult.value : emptyNumberIdentification,
+  });
+  if (!selectedNumber?.collectorNumber || selectedNumber.collectorNumberConfidence < 0.75) {
+    const fullWidthNumberCrop = await cropCardCollectorRegion(collectorCardSource, "bottom_full", options.signal);
+    try {
+      const fullWidthNumber = await identifyPokemonCardCollectorRegion(fullWidthNumberCrop.file, options.signal, "alternate");
+      const debug = collectorRegionRecognitionDebugFor(fullWidthNumber);
+      numberAttempts.push({
+        region: fullWidthNumberCrop.region,
+        sourceWidth: fullWidthNumberCrop.sourceWidth,
+        sourceHeight: fullWidthNumberCrop.sourceHeight,
+        cropX: fullWidthNumberCrop.cropX,
+        cropY: fullWidthNumberCrop.cropY,
+        cropWidth: fullWidthNumberCrop.cropWidth,
+        cropHeight: fullWidthNumberCrop.cropHeight,
+        outputWidth: fullWidthNumberCrop.outputWidth,
+        outputHeight: fullWidthNumberCrop.outputHeight,
+        scale: fullWidthNumberCrop.scale,
+        fileSize: fullWidthNumberCrop.file.size,
+        mimeType: fullWidthNumberCrop.file.type,
+        previewDataUrl: import.meta.env.DEV ? await recognitionFileDataUrl(fullWidthNumberCrop.file) : undefined,
+        rawResponse: debug?.rawProviderResponse,
+        parsed: fullWidthNumber,
+      });
+      if (fullWidthNumber.collectorNumber && fullWidthNumber.collectorNumberConfidence > (selectedNumber?.collectorNumberConfidence || 0)) selectedNumber = fullWidthNumber;
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      numberAttempts.push({
+        region: fullWidthNumberCrop.region,
+        sourceWidth: fullWidthNumberCrop.sourceWidth,
+        sourceHeight: fullWidthNumberCrop.sourceHeight,
+        cropX: fullWidthNumberCrop.cropX,
+        cropY: fullWidthNumberCrop.cropY,
+        cropWidth: fullWidthNumberCrop.cropWidth,
+        cropHeight: fullWidthNumberCrop.cropHeight,
+        outputWidth: fullWidthNumberCrop.outputWidth,
+        outputHeight: fullWidthNumberCrop.outputHeight,
+        scale: fullWidthNumberCrop.scale,
+        fileSize: fullWidthNumberCrop.file.size,
+        mimeType: fullWidthNumberCrop.file.type,
+        previewDataUrl: import.meta.env.DEV ? await recognitionFileDataUrl(fullWidthNumberCrop.file) : undefined,
+        rawResponse: { error: error instanceof Error ? error.message : String(error) },
+        parsed: emptyNumberIdentification,
+      });
+    }
+  }
+  const broadFullIdentification = fullResult.status === "fulfilled"
     ? fullResult.value
     : normalizePokemonCardIdentification({ card_game: "pokemon", language: "unknown", notes: ["The independent full-card text pass did not complete."] });
-  const rawIdentification = mergePokemonRecognition(rawFullIdentification, selectedTop);
+  // Broad recognition and catalog candidates are never allowed to masquerade as observed number OCR.
+  const rawFullIdentification = normalizePokemonCardIdentification({
+    ...broadFullIdentification,
+    collector_number: null,
+    printed_total_number: null,
+    field_confidence: { ...broadFullIdentification.field_confidence, collector_number: "low" },
+  });
+  const rawIdentification = mergePokemonCollectorRecognition(mergePokemonRecognition(rawFullIdentification, selectedTop), selectedNumber);
   const usefulness = assessPokemonIdentification(rawIdentification);
   recognitionAttempts.push({ strategy: "name_fingerprint", raw: rawFullIdentification, useful: usefulness.useful, rejectedFields: usefulness.rejectedFields });
   options.onStage?.("Validating recognition");
@@ -938,6 +1068,9 @@ async function scanPokemonCardWithVisualAi(
     grade: "low" as const,
     certificateNumber: "low" as const,
   };
+  const displayedObservedNumber = identification.collector_number && identification.field_confidence.collector_number !== "low"
+    ? identification.collector_number
+    : null;
   const diagnosticImages = import.meta.env.DEV ? {
     original: options.diagnosticFiles?.original ? await diagnosticImage(options.diagnosticFiles.original, "1. Original photo", `source file bytes; EXIF orientation ${options.orientationInfo?.exifOrientation ?? "unavailable"}`) : undefined,
     normalized: options.diagnosticFiles?.normalized ? await diagnosticImage(options.diagnosticFiles.normalized, "2. Orientation-normalized photo", `upright pixels; correction: ${options.orientationInfo?.rotationApplied || "none"}`) : undefined,
@@ -952,13 +1085,22 @@ async function scanPokemonCardWithVisualAi(
       mimeType: attempt.mimeType || "image/jpeg",
       orientation: "upright pixel matrix; exact request bytes",
     }))),
+    numberCrops: numberAttempts.map((attempt, index) => ({
+      label: `5.${index + 1} ${attempt.region === "bottom_left" ? "Bottom-left" : "Bottom full-width"} crop actually sent to AI`,
+      previewDataUrl: attempt.previewDataUrl || "",
+      width: attempt.outputWidth,
+      height: attempt.outputHeight,
+      fileSize: attempt.fileSize,
+      mimeType: attempt.mimeType,
+      orientation: `upright pixels; cropped first then ${attempt.scale.toFixed(2)}x upscaled; exact request bytes`,
+    })),
   } : undefined;
   const suggestion = {
     suggestedType: requestedType === "graded_card" ? "graded_card" as const : "raw_card" as const,
     cardName: null,
     correctedNameCandidate,
     correctedNameConfidence: identification.field_confidence.card_name,
-    collectorNumber: hasReadableName ? identification.collector_number : null,
+    collectorNumber: hasReadableName ? displayedObservedNumber : null,
     cardSet: identification.set_name_hint || identification.set_code_hint,
     language: detectedLanguage,
     cardGame: "pokemon" as const,
@@ -1013,7 +1155,7 @@ async function scanPokemonCardWithVisualAi(
             processedMimeType: preparedFront.type,
             orientationCorrection: options.orientationInfo?.rotationApplied || "upright pixels; metadata ignored downstream",
           } : undefined,
-          visualRecognition: visualRecognitionDebugFor(rawFullIdentification),
+          visualRecognition: visualRecognitionDebugFor(broadFullIdentification),
           topRegion: {
             source: cropSource,
             skippedReason: topAttempts.length ? undefined : "Both bounded name passes failed before a response could be parsed.",
@@ -1022,11 +1164,26 @@ async function scanPokemonCardWithVisualAi(
             selectedHp: selectedTop?.hp ?? null,
             confidence: selectedTop?.cardNameConfidence ?? selectedTop?.confidence ?? 0,
           },
+          numberRegion: {
+            source: cropSource,
+            attempts: numberAttempts,
+            selectedNumber: selectedNumber?.collectorNumber || null,
+            printedDenominator: selectedNumber?.printedDenominator || null,
+            setOrRegulationHint: selectedNumber?.setOrRegulationHint || null,
+            confidence: selectedNumber?.collectorNumberConfidence || 0,
+          },
+          catalogCandidate: possibleMatches[0] ? {
+            name: possibleMatches[0].name,
+            collectorNumber: possibleMatches[0].collectorNumber || null,
+            set: possibleMatches[0].setName || null,
+            providerId: possibleMatches[0].providerCardId,
+          } : null,
           diagnosticImages,
           recognitionAttempts,
           openAiTelemetry: [
             ...topAttempts.map((attempt) => attempt.parsed).map((entry) => topRegionRecognitionDebugFor(entry)?.telemetry),
-            visualRecognitionDebugFor(rawFullIdentification)?.telemetry,
+            ...numberAttempts.map((attempt) => attempt.parsed).map((entry) => collectorRegionRecognitionDebugFor(entry)?.telemetry),
+            visualRecognitionDebugFor(broadFullIdentification)?.telemetry,
           ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
           usefulness: {
             useful: usefulness.useful,
@@ -1127,7 +1284,7 @@ export async function scanPokemonCard(
   // v11 identifies Luna's single-call raw-Pokémon contract. Stable normalized-image
   // hashes prevent refreshes, rerenders, and draft restoration from charging
   // for a recognition result that this browser already has.
-  const cacheKey = `4nerds_card_scan_v12_${scanGame}_${scanLanguage}_${hash}`;
+  const cacheKey = `4nerds_card_scan_v13_${scanGame}_${scanLanguage}_${hash}`;
   if (!force) {
     try {
       const cached = localStorage.getItem(cacheKey);
