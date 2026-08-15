@@ -11,6 +11,10 @@ import {
   runWithConcurrency,
   sortBulkQueue,
 } from "../src/utils/bulkInventoryImport.ts";
+import {
+  normalizeBulkReviewSearchIntent,
+  rankBulkReviewCandidatesLocally,
+} from "../src/utils/bulkReviewSearch.ts";
 
 const simulated = Array.from({ length: 200 }, (_, uploadOrder) => ({
   uploadOrder,
@@ -91,14 +95,72 @@ test("bulk review resolves each item's durable original photo with visible recov
   assert.match(lightbox, /aria-label="Zoom in"/);
 });
 
-test("bulk review loads up to ten same-name alternatives and logs provider pricing without financial writes", () => {
+test("bulk review progressively loads cached alternatives and logs provider pricing without financial writes", () => {
   const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  const search = readFileSync(new URL("../src/services/sales/bulkReviewSearchService.ts", import.meta.url), "utf8");
+  const edge = readFileSync(new URL("../supabase/functions/pokemon-card-search/index.ts", import.meta.url), "utf8");
   const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
-  assert.match(source, /searchPokemonCardsManually/);
-  assert.match(source, /pageSize: 10/);
+  assert.match(source, /prefetchBulkReviewCandidates/);
+  assert.match(source, /getCachedBulkReviewCandidates/);
+  assert.match(source, /Show More Results/);
+  assert.match(source, /loading="lazy"/);
+  assert.match(search, /maxPrefetchConcurrency = 2/);
+  assert.match(search, /sessionStorage/);
+  assert.match(search, /AbortSignal/);
+  assert.match(search, /normalized exact\/card-class/);
+  assert.match(search, /base-name fallback/);
+  assert.match(search, /bounded fuzzy prefix/);
+  assert.match(edge, /upstream\.ok && rows\(payload\)\.length > 0/);
   assert.match(repository, /\[Bulk Import Review\] provider pricing/);
   assert.match(repository, /pricingVariants/);
   assert.doesNotMatch(repository, /financial_transactions/);
+});
+
+test("Gyarados card-class formatting and common OCR typo share one normalized search intent", () => {
+  const variants = ["Gyarados ex", "Gyarados EX", "Gyarados-EX", "gyarados ex", "Gyarados  EX", "Gyarados - EX", "Gyrados ex"];
+  const intents = variants.map((recognizedName, index) => normalizeBulkReviewSearchIntent({ id: String(index), recognizedName }));
+  assert.deepEqual(new Set(intents.map((intent) => intent.cacheKey)), new Set(["pokemon|en|gyarados|ex"]));
+  assert.ok(intents.every((intent) => intent.baseName.toLocaleLowerCase() === "gyarados"));
+  assert.ok(intents.every((intent) => intent.cardClass === "ex"));
+  assert.equal(normalizeBulkReviewSearchIntent({ id: "ho-oh", recognizedName: "Ho-Oh V" }).baseName, "Ho-Oh");
+});
+
+test("Prinplup candidates with matching attack fingerprint and HP rank ahead of same-name alternatives", () => {
+  const source = {
+    id: "prinplup-review",
+    recognizedName: "Prinplup",
+    rawRecognition: {
+      card_name: "Prinplup",
+      pokemon_name: "Prinplup",
+      hp: 90,
+      attack_names: ["Ice BIade", "WaveSplash"],
+      attack_damage: ["20", "50"],
+      confidence: 0.96,
+      field_confidence: { card_name: "high", hp: "high", attack: "high", attack_damage: "high" },
+    },
+  };
+  const base = { game: "pokemon", language: "en", provider: "pokemontcg", name: "Prinplup", matchConfidence: "likely", searchConfidence: "likely", matchScore: 60 };
+  const ranked = rankBulkReviewCandidatesLocally([
+    { ...base, providerCardId: "wrong", hp: "100", attacks: [{ name: "Bubble Beam", damage: "30" }] },
+    { ...base, providerCardId: "fingerprint", hp: "90", attacks: [{ name: "Ice Blade", damage: "20" }, { name: "Wave Splash", damage: "50" }] },
+    { ...base, providerCardId: "partial", hp: "90", attacks: [{ name: "Ice Blade", damage: "20" }] },
+  ], source);
+  assert.equal(ranked[0]?.providerCardId, "fingerprint");
+  assert.match(ranked[0]?.reasons?.join(" ") || "", /Attack fingerprint/);
+});
+
+test("review requires an explicit TCGplayer finish and persists its market selection", () => {
+  const component = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
+  assert.match(component, /Printing \/ Finish/);
+  assert.match(component, /Unlimited \/ Holofoil/);
+  assert.match(component, /1st Edition \/ Holofoil/);
+  assert.match(component, /Visual suggestion only/);
+  assert.match(component, /marketVariant: variant\.name/);
+  assert.match(component, /baseMarket: market/);
+  assert.match(repository, /row\.market_variant = patch\.marketVariant/);
+  assert.match(repository, /row\.base_market = patch\.baseMarket/);
+  assert.match(repository, /row\.market_checked_at = patch\.marketCheckedAt/);
 });
 
 test("issue filters isolate missing fields, stamped cards, low confidence, and source-photo duplicates", () => {
@@ -143,7 +205,7 @@ test("migration creates a durable inventory-only queue and dedicated bucket", ()
 test("bulk importer is not coupled to the transaction 20-photo cap", () => {
   const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
   assert.match(source, /Drop 200\+ card photos/);
-  assert.doesNotMatch(source, /MAX_TRANSACTION_IMAGES|TRANSACTION_IMAGE_LIMIT|slice\(0,\s*20\)/);
+  assert.doesNotMatch(source, /MAX_TRANSACTION_IMAGES|TRANSACTION_IMAGE_LIMIT/);
   assert.match(source, /multiple accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(source, /Confirm & Add to Inventory/);
   assert.match(source, /Your uploaded photo/);

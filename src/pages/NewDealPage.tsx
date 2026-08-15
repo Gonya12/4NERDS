@@ -41,6 +41,7 @@ import { ownershipIsValid } from "../utils/tradeMath";
 import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
 import { appendBulkScanSelection, isLikelyMobileScanner } from "../utils/dealScanQueue";
 import type { CardMatch, CardScanSuggestion } from "../services/sales/cardScanService";
+import { prefetchBulkReviewCandidates } from "../services/sales/bulkReviewSearchService";
 
 const draftKey = "4nerds:new-deal-draft:v1";
 const scanQueueDraftKey = "4nerds:new-deal-scan-queue:v1";
@@ -587,7 +588,18 @@ export function NewDealPage() {
     setTransaction((current) => {
       const currentItem = current.items.find((candidate) => candidate.id === item.id) || item;
       const identified = applyCardSuggestionToItem(currentItem, confirmed, "scanner");
-      const priced = applyDealPercentage(identified, row.direction, identified.targetBuyPercentage ?? (row.direction === "incoming" ? 70 : 100));
+      const selectedVariant = currentItem.providerCardId === match.providerCardId ? currentItem.marketPriceVariant : undefined;
+      const selectedVariantMarket = identified.tcgplayerPricing?.variants.find((variant) => variant.variant === selectedVariant)?.market;
+      const identifiedWithPrinting = selectedVariant ? {
+        ...identified,
+        marketPriceVariant: selectedVariant,
+        marketValue: selectedVariantMarket ?? identified.marketValue,
+        marketPriceSource: currentItem.marketPriceSource || identified.marketPriceSource,
+        marketPriceCurrency: currentItem.marketPriceCurrency || identified.marketPriceCurrency,
+        marketPriceCheckedAt: currentItem.marketPriceCheckedAt || identified.marketPriceCheckedAt,
+        tcgplayerPricing: identified.tcgplayerPricing ? { ...identified.tcgplayerPricing, selectedVariant } : identified.tcgplayerPricing,
+      } : identified;
+      const priced = applyDealPercentage(identifiedWithPrinting, row.direction, identifiedWithPrinting.targetBuyPercentage ?? (row.direction === "incoming" ? 70 : 100));
       return normalizeDealForSave({ ...current, items: current.items.map((candidate) => candidate.id === item.id ? priced : candidate) });
     });
     replaceScanQueue((current) => current.map((candidate) => candidate.id === row.id ? { ...candidate, suggestion: confirmed, status: "ready", stage: "Match confirmed", error: undefined } : candidate));
@@ -733,6 +745,36 @@ export function NewDealPage() {
             : a.itemName.localeCompare(b.itemName));
   }, [inventory, inventorySearch, inventorySort, transaction.items]);
 
+  const reviewableScanRows = useMemo(() => scanQueue.filter((row) => row.status === "ready" || row.status === "needs_review" || row.status === "failed"), [scanQueue]);
+  const bulkReviewIndex = reviewableScanRows.findIndex((row) => row.id === bulkReviewId);
+  const bulkReviewRow = bulkReviewIndex >= 0 ? reviewableScanRows[bulkReviewIndex] : undefined;
+  const bulkReviewItem = bulkReviewRow ? transaction.items.find((item) => item.id === bulkReviewRow.itemId) : undefined;
+
+  useEffect(() => {
+    const start = bulkReviewIndex >= 0 ? bulkReviewIndex : 0;
+    const ordered = [
+      ...reviewableScanRows.slice(start, start + 4),
+      ...reviewableScanRows.filter((row) => row.suggestion?.overallConfidence === "high"),
+      ...reviewableScanRows.filter((row) => row.status === "needs_review"),
+    ];
+    const sources = [...new Map(ordered.map((row) => {
+      const item = transaction.items.find((candidate) => candidate.id === row.itemId);
+      if (!item || !(row.suggestion?.cardName || item.itemName)) return [row.id, null] as const;
+      return [row.id, {
+        id: row.id,
+        recognizedName: row.suggestion?.cardName || item.itemName,
+        recognizedCollectorNumber: row.suggestion?.collectorNumber || item.collectorNumber,
+        recognizedSet: row.suggestion?.cardSet || item.cardSet,
+        recognizedCardGame: item.cardGame,
+        recognizedLanguage: item.cardLanguage,
+        rawRecognition: row.suggestion?.aiIdentification as unknown as Record<string, unknown> | undefined,
+        selectedCandidate: row.suggestion?.possibleMatches?.find((match) => match.providerCardId === item.providerCardId) || row.suggestion?.possibleMatches?.[0],
+        alternativeCandidates: row.suggestion?.possibleMatches || [],
+      }] as const;
+    })).values()].filter((source): source is NonNullable<typeof source> => Boolean(source)).slice(0, 12);
+    prefetchBulkReviewCandidates(sources);
+  }, [bulkReviewIndex, reviewableScanRows, transaction.items]);
+
   if (loading) return <LoadingOverlay label="Preparing New Deal" />;
 
   const incoming = transaction.items.filter((item) => item.direction === "incoming");
@@ -751,11 +793,6 @@ export function NewDealPage() {
   const scanFailedCount = scanQueue.filter((row) => row.status === "failed").length;
   const scanRemainingCount = scanQueue.filter((row) => row.status === "waiting" || row.status === "processing").length;
   const scanProcessedCount = scanQueue.length - scanRemainingCount;
-  const reviewableScanRows = scanQueue.filter((row) => row.status === "ready" || row.status === "needs_review" || row.status === "failed");
-  const bulkReviewIndex = reviewableScanRows.findIndex((row) => row.id === bulkReviewId);
-  const bulkReviewRow = bulkReviewIndex >= 0 ? reviewableScanRows[bulkReviewIndex] : undefined;
-  const bulkReviewItem = bulkReviewRow ? transaction.items.find((item) => item.id === bulkReviewRow.itemId) : undefined;
-
   function applyPercentageToSide(percentage: number) {
     updateTransaction({
       ...transaction,

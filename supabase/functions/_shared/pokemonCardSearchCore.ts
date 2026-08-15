@@ -312,7 +312,10 @@ function bestSpeciesMatch(value: string) {
   const sharedToken = best.source.split(" ").some((token) => token.length >= 4
     && normalizeCardSearchText(best.name).split(" ").includes(token));
   const sharedPrefix = compactSource.slice(0, sharedPrefixLength) === compactName.slice(0, sharedPrefixLength)
-    || sharedToken;
+    || sharedToken
+    // One missing/transposed OCR character near the start (for example
+    // Gyrados -> Gyarados) should not prevent an otherwise strong correction.
+    || (distance <= 1 && compactSource.slice(0, 2) === compactName.slice(0, 2));
   const threshold = compactName.length >= 7 ? 0.77 : 0.84;
   if (!sharedPrefix || best.similarity < threshold || distance > (compactName.length >= 8 ? 3 : 2)) return null;
   return { name: best.name, similarity: best.similarity, original: best.source };

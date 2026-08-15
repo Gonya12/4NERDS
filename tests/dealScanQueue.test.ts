@@ -64,6 +64,15 @@ test("bulk review prefers a persisted item photo and keeps provider identity and
   assert.match(review, /bulkReviewSourceImage\(item, record\)/);
   assert.match(review, /bulkReviewProviderImage/);
   assert.match(review, /item\.marketPriceVariant/);
+  assert.match(review, /searchBulkReviewCandidates/);
+  assert.match(review, /Finding likely card printings/);
+  assert.match(review, /Show More Results/);
+  assert.match(review, /loading="lazy"/);
+  assert.match(review, /Printing \/ Finish/);
+  assert.match(review, /1st Edition \/ Holofoil/);
+  assert.match(review, /marketPriceVariant: variant\.name/);
+  assert.match(page, /prefetchBulkReviewCandidates/);
+  assert.match(page, /selectedVariantMarket/);
   assert.match(page, /preserveScanPhoto\(item, row\.file\)/);
   assert.match(page, /scanQueueDraftKey/);
   assert.match(page, /previewUrl: item\?\.imageUrl \|\| persistedPreview/);

@@ -35,7 +35,12 @@ import {
   type BulkQueueSort,
 } from "../../utils/bulkInventoryImport";
 import { formatMoney } from "../../utils/paymentMath";
-import { searchPokemonCardsManually } from "../../services/sales/pokemonCardSearchService";
+import {
+  getCachedBulkReviewCandidates,
+  prefetchBulkReviewCandidates,
+  recordBulkReviewImageLoaded,
+  searchBulkReviewCandidates,
+} from "../../services/sales/bulkReviewSearchService";
 import { ImageLightbox } from "./ImageLightbox";
 import { ManualCardSearch } from "./ManualCardSearch";
 import { OwnershipEditor } from "./OwnershipEditor";
@@ -65,8 +70,24 @@ const filterOptions: Array<{ value: BulkQueueFilter; label: string }> = [
   { value: "possible_duplicate", label: "Possible Duplicate" },
 ];
 const confirmedMarketForCondition = (baseMarket: number | null | undefined, condition: CardCondition | null | undefined) => condition === "Near Mint / NM" ? baseMarket ?? null : null;
-const bulkVariantLabels: Record<string, string> = { normal: "Normal", holofoil: "Holofoil", reverseHolofoil: "Reverse Holo", "1stEditionNormal": "First Edition Normal", "1stEditionHolofoil": "First Edition Holo" };
+const bulkVariantLabels: Record<string, string> = {
+  normal: "Unlimited / Normal",
+  holofoil: "Unlimited / Holofoil",
+  reverseHolofoil: "Unlimited / Reverse Holofoil",
+  unlimitedNormal: "Unlimited / Normal",
+  unlimitedHolofoil: "Unlimited / Holofoil",
+  "1stEditionNormal": "1st Edition / Normal",
+  "1stEditionHolofoil": "1st Edition / Holofoil",
+};
 const bulkVariantLabel = (value?: string | null) => value ? bulkVariantLabels[value] || value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase()) : "Variant needed";
+const visualEditionHint = (item: BulkImportItem) => {
+  const recognition = item.rawRecognition || {};
+  const explicit = String(recognition.edition_hint || recognition.printing_hint || "").trim();
+  if (explicit) return explicit;
+  if (recognition.first_edition_visible === true) return "Photo may show a 1st Edition stamp.";
+  if (recognition.first_edition_visible === false) return "Photo appears Unlimited / non-1st Edition.";
+  return "";
+};
 const confidenceLabel = (value?: BulkImportItem["overallConfidence"]) => value === "high" ? "High Confidence" : value === "medium" ? "Medium Confidence" : "Low Confidence";
 const confidenceShort = (value?: BulkImportItem["overallConfidence"]) => value === "high" ? "High" : value === "medium" ? "Medium" : "Low";
 const conditionLabels: Partial<Record<CardCondition, string>> = {
@@ -223,6 +244,19 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
   const conditionSummary = buildCountSummary(summaryItems.flatMap((item) => Array.from({ length: item.quantity }, () => compactCondition(item.condition))));
   const ownershipSummary = buildCountSummary(summaryItems.flatMap((item) => Array.from({ length: item.quantity }, () => ownershipLabel(item, workers))));
   const filterCounts = useMemo(() => new Map(filterOptions.map((option) => [option.value, filterBulkQueue(items, { filter: option.value }).length])), [items]);
+
+  useEffect(() => {
+    const currentIndex = items.findIndex((item) => item.id === editingId);
+    const nextItems = currentIndex >= 0 ? items.slice(currentIndex + 1, currentIndex + 4) : [];
+    const prioritized = [
+      ...(editing ? [editing] : []),
+      ...nextItems,
+      ...items.filter((item) => item.overallConfidence === "high" && item.selectedCandidate),
+      ...items.filter((item) => item.status === "needs_review"),
+    ];
+    const unique = [...new Map(prioritized.filter((item) => item.recognizedName && item.status !== "confirmed").map((item) => [item.id, item])).values()].slice(0, 12);
+    prefetchBulkReviewCandidates(unique);
+  }, [editing, editingId, items]);
 
   async function upload(filesLike: FileList | File[]) {
     const files = Array.from(filesLike).filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
@@ -682,7 +716,7 @@ function prioritizedAlternatives(item: BulkImportItem, searched: BulkCandidate[]
       const rightExact = right.name.trim().toLocaleLowerCase() === recognizedName ? 1 : 0;
       return rightExact - leftExact || Number(right.matchScore || 0) - Number(left.matchScore || 0);
     })
-    .slice(0, 10);
+    .slice(0, 20);
 }
 
 function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpenImage, onSearch, onPatch, onLooksGood, onRetry, onChoose, onPrevious, onNext }: {
@@ -704,9 +738,11 @@ function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpe
   const [stage, setStage] = useState<"match" | "alternatives" | "inventory">("match");
   const [costMode, setCostMode] = useState<"unknown" | "amount" | "zero">(item.zeroCostBasisConfirmed ? "zero" : item.costBasis != null ? "amount" : "unknown");
   const [cost, setCost] = useState(item.costBasis == null ? "" : String(item.costBasis));
-  const [searchedAlternatives, setSearchedAlternatives] = useState<BulkCandidate[]>([]);
+  const [searchedAlternatives, setSearchedAlternatives] = useState<BulkCandidate[]>(() => getCachedBulkReviewCandidates(item));
   const [alternativesLoading, setAlternativesLoading] = useState(false);
   const [alternativesError, setAlternativesError] = useState("");
+  const [alternativesProgress, setAlternativesProgress] = useState("");
+  const [alternativesLimit, setAlternativesLimit] = useState(5);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const previousIdentity = useRef(`${item.id}:${item.selectedCandidate?.providerCardId || ""}`);
   const hydratedIdentity = useRef("");
@@ -715,28 +751,28 @@ function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpe
     setStage("match");
     setCostMode(item.zeroCostBasisConfirmed ? "zero" : item.costBasis != null ? "amount" : "unknown");
     setCost(item.costBasis == null ? "" : String(item.costBasis));
-    setSearchedAlternatives([]);
+    setSearchedAlternatives(getCachedBulkReviewCandidates(item));
     setAlternativesError("");
+    setAlternativesProgress("");
+    setAlternativesLimit(5);
   }, [item.id, item.costBasis, item.zeroCostBasisConfirmed]);
 
   useEffect(() => {
-    if (stage !== "alternatives" || searchedAlternatives.length || alternativesLoading || !item.recognizedName) return;
+    if (stage !== "alternatives" || !item.recognizedName) return;
     const controller = new AbortController();
     setAlternativesLoading(true);
     setAlternativesError("");
-    void searchPokemonCardsManually({
-      game: item.recognizedCardGame === "one_piece" ? "one_piece" : "pokemon",
-      language: item.recognizedLanguage === "ja" ? "ja" : "en",
-      name: item.recognizedName,
-      query: item.recognizedName,
-      page: 1,
-      pageSize: 10,
-      disableCorrection: true,
-    }, controller.signal).then((result) => setSearchedAlternatives(result.matches)).catch((unknownError) => {
+    void searchBulkReviewCandidates(item, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        setAlternativesProgress(progress.label);
+        if (progress.matches.length) setSearchedAlternatives(progress.matches);
+      },
+    }).then((result) => setSearchedAlternatives(result.matches)).catch((unknownError) => {
       if (!controller.signal.aborted) setAlternativesError(unknownError instanceof Error ? unknownError.message : "Additional provider matches could not be loaded.");
     }).finally(() => { if (!controller.signal.aborted) setAlternativesLoading(false); });
     return () => controller.abort();
-  }, [alternativesLoading, item.recognizedCardGame, item.recognizedLanguage, item.recognizedName, searchedAlternatives.length, stage]);
+  }, [item.id, item.recognizedName, stage]);
 
   useEffect(() => {
     const identity = `${item.id}:${item.selectedCandidate?.providerCardId || ""}`;
@@ -820,7 +856,7 @@ function ItemReview({ item, workers, itemNumber, itemCount, busy, onClose, onOpe
         onOpenImage={onOpenImage} onPatch={onPatch} onCorrect={() => setStage("inventory")}
         onWrong={() => setStage("alternatives")} onSearch={onSearch} onRetry={onRetry}
       /> : null}
-      {stage === "alternatives" ? <AlternativeMatches item={item} alternatives={alternatives} loading={alternativesLoading} error={alternativesError} onOpenImage={onOpenImage} onSearch={onSearch} onChoose={onChoose} /> : null}
+      {stage === "alternatives" ? <AlternativeMatches item={item} alternatives={alternatives.slice(0, alternativesLimit)} totalAlternatives={alternatives.length} loading={alternativesLoading} progress={alternativesProgress} error={alternativesError} onShowMore={() => setAlternativesLimit((value) => Math.min(alternatives.length, value + 10))} onOpenImage={onOpenImage} onSearch={onSearch} onChoose={onChoose} /> : null}
       {stage === "inventory" ? <InventoryConfirmation
         item={item} workers={workers} candidateImage={candidateImage} pricingVariants={pricingVariants}
         providerMarket={providerMarket} stamped={stamped} costMode={costMode} cost={cost}
@@ -846,12 +882,13 @@ function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, p
   onSearch: () => void;
   onRetry: () => void;
 }) {
+  const editionHint = visualEditionHint(item);
   return <>
     <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-4">
       <BulkSourcePhoto item={item} onOpenImage={onOpenImage} />
       <button type="button" disabled={!candidateImage} onClick={() => candidateImage && onOpenImage(candidateImage, `Official provider card · ${candidate?.name || "Card"}`)} className="rounded-2xl bg-slate-50 p-2 text-left disabled:opacity-60 dark:bg-slate-950">
         <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Official Provider Card</p>
-        {candidateImage ? <img src={candidateImage} alt="Provider card" className="h-64 w-full object-contain sm:h-80" /> : <div className="flex h-64 items-center justify-center text-sm text-slate-500 sm:h-80">No exact candidate selected</div>}
+        {candidateImage ? <img src={candidateImage} onLoad={() => recordBulkReviewImageLoaded(item.id, candidate?.providerCardId)} alt="Provider card" className="h-64 w-full object-contain sm:h-80" /> : <div className="flex h-64 items-center justify-center text-sm text-slate-500 sm:h-80">No exact candidate selected</div>}
       </button>
     </div>
     {candidate ? <section className="mt-4 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
@@ -859,7 +896,7 @@ function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, p
         <div className="min-w-0 flex-1"><h4 className="text-xl font-black">{candidate.name}</h4><p className="font-bold text-slate-600 dark:text-slate-300">{candidate.setName || "Set unavailable"} · #{candidate.collectorNumber || candidate.cardCode || "—"}</p><p className="mt-1 text-xs text-slate-500">{candidate.rarity || "Rarity unavailable"} · {candidate.language === "ja" ? "Japanese" : "English"} · {candidate.provider} · ID {candidate.providerCardId}</p></div>
         <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-black text-violet-800 dark:bg-violet-950 dark:text-violet-200">AI {confidenceLabel(item.overallConfidence)}</span>
       </div>
-      {pricingVariants.length > 1 ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Finish / variant</p><div className="mt-2 flex flex-wrap gap-2">{pricingVariants.map((variant) => <button type="button" key={variant.name} onClick={() => { const market = variant.market ?? null; onPatch({ marketVariant: variant.name, baseMarket: market, adjustedMarket: item.condition === "Near Mint / NM" ? market : item.adjustedMarket ?? null, marketSource: candidate.pricing?.source || item.marketSource || "TCGplayer", marketCheckedAt: candidate.pricing?.updatedAt || new Date().toISOString() }); }} className={`rounded-xl border px-3 py-2 text-left text-xs ${item.marketVariant === variant.name ? "border-violet-600 bg-violet-50 font-black text-violet-800 dark:bg-violet-950" : "border-slate-200 dark:border-slate-700"}`}><span className="block font-black">{bulkVariantLabel(variant.name)}</span><span>{variant.market == null ? "Market —" : formatMoney(variant.market)}</span></button>)}</div></div> : <p className="mt-3 text-sm"><b>Finish:</b> {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name || "standard")}</p>}
+      {pricingVariants.length > 1 ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Printing / Finish</p>{editionHint ? <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Visual suggestion only: {editionHint} Confirm the physical card below.</p> : null}<div className="mt-2 flex flex-wrap gap-2">{pricingVariants.map((variant) => <button type="button" key={variant.name} onClick={() => { const market = variant.market ?? null; onPatch({ marketVariant: variant.name, baseMarket: market, adjustedMarket: item.condition === "Near Mint / NM" ? market : item.adjustedMarket ?? null, marketSource: candidate.pricing?.source || item.marketSource || "TCGplayer", marketCheckedAt: candidate.pricing?.updatedAt || new Date().toISOString() }); }} className={`rounded-xl border px-3 py-2 text-left text-xs ${item.marketVariant === variant.name ? "border-violet-600 bg-violet-50 font-black text-violet-800 dark:bg-violet-950" : "border-slate-200 dark:border-slate-700"}`}><span className="block font-black">{bulkVariantLabel(variant.name)}</span><span>{variant.market == null ? "Market —" : formatMoney(variant.market)}</span></button>)}</div></div> : <p className="mt-3 text-sm"><b>Printing / Finish:</b> {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name || "standard")}</p>}
       <div className="mt-4 grid gap-3 rounded-2xl bg-slate-950 p-4 text-white sm:grid-cols-2">
         <div><p className="text-xs font-black uppercase tracking-wide text-slate-400">{item.marketSource || candidate.pricing?.source || "Provider"} Market</p>{providerMarket == null ? <p className="mt-1 text-sm font-bold text-amber-300">{priceUnavailableReason}</p> : <p className="text-3xl font-black">{formatMoney(providerMarket)}</p>}</div>
         <div className="text-xs text-slate-300"><p><b>Source:</b> {item.marketSource || candidate.pricing?.source || candidate.provider}</p><p><b>Variant:</b> {bulkVariantLabel(item.marketVariant || pricingVariants[0]?.name)}</p><p><b>Last checked:</b> {item.marketCheckedAt || candidate.pricing?.updatedAt ? new Date(item.marketCheckedAt || candidate.pricing?.updatedAt || "").toLocaleString() : "Unavailable"}</p></div>
@@ -871,13 +908,14 @@ function MatchConfirmation({ item, candidate, candidateImage, pricingVariants, p
   </>;
 }
 
-function AlternativeMatches({ item, alternatives, loading, error, onOpenImage, onSearch, onChoose }: { item: BulkImportItem; alternatives: BulkCandidate[]; loading: boolean; error: string; onOpenImage: (url: string, title: string) => void; onSearch: () => void; onChoose: (match: BulkCandidate) => void }) {
+function AlternativeMatches({ item, alternatives, totalAlternatives, loading, progress, error, onShowMore, onOpenImage, onSearch, onChoose }: { item: BulkImportItem; alternatives: BulkCandidate[]; totalAlternatives: number; loading: boolean; progress: string; error: string; onShowMore: () => void; onOpenImage: (url: string, title: string) => void; onSearch: () => void; onChoose: (match: BulkCandidate) => void }) {
   return <>
     <div className="mt-4 grid gap-3 rounded-2xl bg-slate-50 p-3 sm:grid-cols-[10rem_minmax(0,1fr)] dark:bg-slate-950"><BulkSourcePhoto item={item} onOpenImage={onOpenImage} compact /><div className="min-w-0 self-center"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Recognized</p><h4 className="truncate text-lg font-black">{item.recognizedName || "Name unavailable"}</h4><p className="truncate text-sm text-slate-500">{item.recognizedSet || "Set unknown"} · #{item.recognizedCollectorNumber || "—"}</p><p className="mt-2 text-xs text-slate-500">The original uploaded photo remains attached while you compare or search for another match.</p></div></div>
     <div className="mt-4 flex items-end justify-between gap-3"><div><h4 className="text-lg font-black">Other Possible Matches</h4><p className="text-xs text-slate-500">Same-name records are prioritized. Selecting one reuses provider results and does not call AI.</p></div><button type="button" onClick={onSearch} className="shrink-0 text-xs font-black text-violet-700 dark:text-violet-300"><Search size={15} className="inline" /> Search Manually</button></div>
-    {loading ? <p className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-violet-700"><LoaderCircle size={15} className="animate-spin" /> Loading up to 10 same-name provider records…</p> : null}
+    {progress ? <p className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-violet-700">{loading ? <LoaderCircle size={15} className="animate-spin" /> : <Check size={15} />}{progress}</p> : null}
     {error ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Stored alternatives remain available. Additional search failed: {error}</p> : null}
-    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{alternatives.map((match) => { const market = providerCandidateMarket(match); return <button type="button" key={`${match.provider}:${match.providerCardId}`} onClick={() => onChoose(match)} className="rounded-2xl border border-slate-200 p-2 text-left transition hover:border-violet-500 hover:bg-violet-50 dark:border-slate-700 dark:hover:bg-violet-950/30">{match.imageSmall || match.imageLarge ? <img loading="lazy" src={match.imageSmall || match.imageLarge} alt={match.name} className="mx-auto h-40 w-full object-contain" /> : <div className="flex h-40 items-center justify-center text-xs text-slate-500">No provider image</div>}<b className="mt-2 block truncate text-sm">{match.name}</b><span className="block truncate text-xs text-slate-500">{match.setName || "Set unknown"} · #{match.collectorNumber || match.cardCode || "—"}</span><span className="mt-1 block text-xs font-black">Market {market == null ? "—" : formatMoney(market)}</span><span className="block text-[10px] text-slate-500">{confidenceLabel(match.matchConfidence)} · score {Math.round(match.matchScore || 0)}</span><span className="mt-2 block rounded-lg bg-violet-600 py-2 text-center text-xs font-black text-white">Use This Card</span></button>; })}</div>
+    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{alternatives.map((match, index) => { const market = providerCandidateMarket(match); const variants = match.pricing?.variants || []; return <button type="button" key={`${match.provider}:${match.providerCardId}`} onClick={() => onChoose(match)} className="relative rounded-2xl border border-slate-200 p-2 text-left transition hover:border-violet-500 hover:bg-violet-50 dark:border-slate-700 dark:hover:bg-violet-950/30">{index === 0 ? <span className="absolute left-2 top-2 z-10 rounded-full bg-emerald-600 px-2 py-1 text-[9px] font-black uppercase text-white">Best match</span> : null}{match.imageSmall || match.imageLarge ? <img loading="lazy" decoding="async" onLoad={() => recordBulkReviewImageLoaded(item.id, match.providerCardId)} src={match.imageSmall || match.imageLarge} alt={match.name} className="mx-auto h-40 w-full object-contain" /> : <div className="flex h-40 items-center justify-center text-xs text-slate-500">No provider image</div>}<b className="mt-2 block truncate text-sm">{match.name}</b><span className="block truncate text-xs text-slate-500">{match.setName || "Set unknown"} · #{match.collectorNumber || match.cardCode || "—"}</span><span className="mt-1 block text-[11px] text-slate-500">Finish: {variants.length === 1 ? bulkVariantLabel(variants[0].name) : variants.length > 1 ? `${variants.length} pricing variants` : "Unavailable"}</span><span className="block text-xs font-black">Market {market == null ? "—" : formatMoney(market)}</span><span className="block text-[10px] text-slate-500">{confidenceLabel(match.matchConfidence)} · score {Math.round(match.matchScore || 0)}</span><span className="mt-2 block rounded-lg bg-violet-600 py-2 text-center text-xs font-black text-white">Use This Card</span></button>; })}{loading && !alternatives.length ? Array.from({ length: 5 }, (_, index) => <div key={index} className="rounded-2xl border border-slate-200 p-2 dark:border-slate-700"><div className="skeleton-shimmer h-40 rounded-xl bg-slate-100 dark:bg-slate-800" /><div className="skeleton-shimmer mt-2 h-4 rounded bg-slate-100 dark:bg-slate-800" /><div className="skeleton-shimmer mt-2 h-3 w-2/3 rounded bg-slate-100 dark:bg-slate-800" /></div>) : null}</div>
+    {alternatives.length < totalAlternatives ? <button type="button" onClick={onShowMore} className="mt-4 min-h-11 w-full rounded-xl bg-slate-100 px-4 text-sm font-black dark:bg-slate-800">Show More Results ({totalAlternatives - alternatives.length} more)</button> : null}
     {!alternatives.length ? <p className="mt-4 rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-500 dark:bg-slate-950">No additional provider candidates were returned. Use the prefilled manual search.</p> : null}
     <button type="button" onClick={onSearch} className="mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 font-black text-white"><Search size={18} /> Search Manually with Recognized Details</button>
   </>;

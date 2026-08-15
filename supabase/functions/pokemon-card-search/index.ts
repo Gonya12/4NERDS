@@ -144,7 +144,10 @@ async function fetchUpstream(
         status: upstream.status,
         retryAfter: upstream.headers.get("Retry-After") || undefined,
       };
-      if (upstream.ok) {
+      // A healthy provider can still return a transient empty body. Keeping
+      // that miss in the Edge cache makes a valid name appear broken until
+      // the TTL expires, so only cache responses that contain catalog rows.
+      if (upstream.ok && rows(payload).length > 0) {
         if (responseCache.size >= 180) responseCache.delete(responseCache.keys().next().value as string);
         responseCache.set(endpoint, { expiresAt: Date.now() + (options.cacheMs || 2 * 60_000), result });
       }

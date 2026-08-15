@@ -62,6 +62,7 @@ test("recognizes compact suffixes and keeps suffix families distinct", () => {
 test("suggests only conservative dictionary corrections and never hides the original", () => {
   assert.equal(suggestPokemonNameCorrection("Pikchu")?.suggestion, "Pikachu");
   assert.equal(suggestPokemonNameCorrection("Charzard ex")?.suggestion, "Charizard ex");
+  assert.equal(suggestPokemonNameCorrection("Gyrados ex")?.suggestion, "Gyarados ex");
   assert.equal(suggestPokemonNameCorrection("Tpu Bulu GX")?.suggestion, "Tapu Bulu GX");
   assert.equal(suggestPokemonNameCorrection("Umbreon")?.suggestion, undefined);
   assert.equal(suggestPokemonNameCorrection("completely unrelated attack text"), undefined);
