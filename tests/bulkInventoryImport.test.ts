@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  bulkItemMarketValue,
+  bulkItemReviewIssues,
   filterBulkQueue,
+  isBulkItemImportReady,
+  isStampedBulkItem,
   pageBulkQueue,
   runWithConcurrency,
   sortBulkQueue,
@@ -30,6 +34,43 @@ test("200-image review queue filters, sorts, and paginates without dropping rows
   assert.ok(filterBulkQueue(simulated, { filter: "all", missingConditionOnly: true }).length > 0);
   assert.equal(sortBulkQueue(simulated, "upload")[199].uploadOrder, 199);
   assert.equal(sortBulkQueue(simulated, "market")[0].uploadOrder, 199);
+});
+
+test("review readiness requires an exact match, physical variant, condition, and condition-aware price", () => {
+  const base = {
+    uploadOrder: 0,
+    status: "identified",
+    overallConfidence: "high" as const,
+    selectedCandidate: { name: "Pikachu", pricing: { variants: [{ name: "holofoil", market: 18 }, { name: "reverseHolofoil", market: 12 }] } },
+    condition: "Near Mint / NM",
+    baseMarket: 18,
+    ownershipShares: [{ ownershipPercentage: 100 }],
+  };
+  assert.deepEqual(bulkItemReviewIssues(base), ["variant"]);
+  assert.equal(isBulkItemImportReady(base), false);
+  const variantChosen = { ...base, marketVariant: "holofoil" };
+  assert.equal(isBulkItemImportReady(variantChosen), true);
+  assert.equal(bulkItemMarketValue(variantChosen), 18);
+  const played = { ...variantChosen, condition: "Lightly Played / LP" };
+  assert.ok(bulkItemReviewIssues(played).includes("price"));
+  assert.equal(isBulkItemImportReady(played), false);
+  assert.equal(isBulkItemImportReady({ ...played, adjustedMarket: 14 }), true);
+  assert.equal(isStampedBulkItem({ ...variantChosen, marketVariant: "stamped/manual" }), true);
+});
+
+test("issue filters isolate missing fields, stamped cards, low confidence, and source-photo duplicates", () => {
+  const variants = [{ name: "normal", market: 2 }, { name: "reverseHolofoil", market: 4 }];
+  const rows = [
+    { uploadOrder: 0, status: "identified", selectedCandidate: { name: "A", pricing: { variants } }, condition: "Near Mint / NM", baseMarket: 2 },
+    { uploadOrder: 1, status: "identified", selectedCandidate: { name: "B", pricing: { variants: [{ name: "normal", market: 3 }] } }, condition: "Lightly Played / LP", baseMarket: 3 },
+    { uploadOrder: 2, status: "needs_review", selectedCandidate: { name: "C", pricing: { variants: [] } }, overallConfidence: "low" as const, marketVariant: "stamped/manual", adjustedMarket: 9, possibleDuplicate: true },
+  ];
+  assert.deepEqual(filterBulkQueue(rows, { filter: "missing_variant" }).map((row) => row.uploadOrder), [0]);
+  assert.deepEqual(filterBulkQueue(rows, { filter: "missing_price" }).map((row) => row.uploadOrder), [1]);
+  assert.deepEqual(filterBulkQueue(rows, { filter: "missing_condition" }).map((row) => row.uploadOrder), [2]);
+  assert.deepEqual(filterBulkQueue(rows, { filter: "stamped" }).map((row) => row.uploadOrder), [2]);
+  assert.deepEqual(filterBulkQueue(rows, { filter: "low_confidence" }).map((row) => row.uploadOrder), [2]);
+  assert.deepEqual(filterBulkQueue(rows, { filter: "possible_duplicate" }).map((row) => row.uploadOrder), [2]);
 });
 
 test("controlled uploader never exceeds configured concurrency for 200 files", async () => {
@@ -60,7 +101,30 @@ test("bulk importer is not coupled to the transaction 20-photo cap", () => {
   const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
   assert.match(source, /Drop 200\+ card photos/);
   assert.doesNotMatch(source, /MAX_TRANSACTION_IMAGES|TRANSACTION_IMAGE_LIMIT|slice\(0,\s*20\)/);
-  assert.match(source, /Confirm All High-Confidence/);
+  assert.match(source, /multiple accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.match(source, /Confirm & Add to Inventory/);
+  assert.match(source, /Your uploaded photo/);
+  assert.match(source, /Provider reference/);
+  assert.match(source, /Review One by One/);
+  assert.doesNotMatch(source, /Approve to inventory|Confirm All High-Confidence/);
+});
+
+test("review edits are local/provider operations and only explicit retry requeues AI recognition", () => {
+  const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
+  assert.match(source, /One tap changes the provider match without calling OpenAI/);
+  assert.match(source, /Retry AI Recognition/);
+  assert.match(source, /retryBulkImportItems\(targets\.map/);
+  assert.doesNotMatch(source, /cardScanService|identifyPokemonCard|pokemon-card-identify/);
+});
+
+test("final bulk import preserves both photos and uses a stable idempotent inventory id", () => {
+  const repository = readFileSync(new URL("../src/services/database/bulkInventoryImportRepository.ts", import.meta.url), "utf8");
+  assert.match(repository, /const stableInventoryId = item\.inventoryPurchaseId \|\| item\.id/);
+  assert.match(repository, /id: stableInventoryId/);
+  assert.match(repository, /frontImageUrl: item\.sourceImageUrl/);
+  assert.match(repository, /officialCardImageUrl: candidate\.imageLarge \|\| candidate\.imageSmall/);
+  assert.match(repository, /acquisitionMethod: "existing_inventory_import"/);
+  assert.doesNotMatch(repository, /financial_transactions/);
 });
 
 test("bulk recognition persists local crops, hash cache state, and bounded Luna usage", () => {

@@ -421,7 +421,7 @@ export async function confirmBulkImportItem(item: BulkImportItem) {
     cardSetCode: candidate.setCode,
     cardRarity: candidate.rarity,
     cardGame: candidate.game,
-    cardLanguage: candidate.language,
+    cardLanguage: item.recognizedLanguage || candidate.language,
     dataProvider: candidate.provider,
     providerCardId: candidate.providerCardId,
     cardCode: candidate.cardCode,

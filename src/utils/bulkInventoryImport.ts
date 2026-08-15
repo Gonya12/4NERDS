@@ -1,4 +1,15 @@
-export type BulkQueueFilter = "all" | "ready" | "needs_review" | "failed" | "confirmed";
+export type BulkQueueFilter =
+  | "all"
+  | "ready"
+  | "needs_review"
+  | "failed"
+  | "missing_variant"
+  | "missing_condition"
+  | "missing_price"
+  | "stamped"
+  | "low_confidence"
+  | "possible_duplicate"
+  | "confirmed";
 export type BulkQueueSort = "upload" | "status" | "confidence" | "name" | "market";
 
 export type BulkQueueItemLike = {
@@ -6,11 +17,16 @@ export type BulkQueueItemLike = {
   status: string;
   overallConfidence?: "high" | "medium" | "low";
   recognizedName?: string;
-  selectedCandidate?: { name?: string };
+  selectedCandidate?: {
+    name?: string;
+    pricing?: { variants?: Array<{ name?: string; variant?: string; market?: number }> };
+  };
   adjustedMarket?: number;
   baseMarket?: number;
   condition?: string;
+  marketVariant?: string;
   possibleDuplicate?: boolean;
+  ownershipShares?: Array<{ ownershipPercentage: number }>;
 };
 
 const statusOrder: Record<string, number> = {
@@ -24,10 +40,57 @@ const statusOrder: Record<string, number> = {
 
 const confidenceOrder = { low: 0, medium: 1, high: 2 } as const;
 
+export type BulkReviewIssue = "match" | "variant" | "condition" | "price" | "ownership" | "ambiguous" | "failed" | "processing";
+
+export function bulkItemPricingVariants(item: BulkQueueItemLike) {
+  return item.selectedCandidate?.pricing?.variants || [];
+}
+
+export function bulkItemMarketValue(item: BulkQueueItemLike) {
+  return item.condition === "Near Mint / NM"
+    ? item.baseMarket ?? item.adjustedMarket
+    : item.adjustedMarket;
+}
+
+export function bulkItemReviewIssues(item: BulkQueueItemLike): BulkReviewIssue[] {
+  if (item.status === "confirmed") return [];
+  const issues: BulkReviewIssue[] = [];
+  if (item.status === "failed") issues.push("failed");
+  if (item.status === "waiting" || item.status === "processing") issues.push("processing");
+  if (!item.selectedCandidate) issues.push("match");
+  if (bulkItemPricingVariants(item).length > 1 && !item.marketVariant) issues.push("variant");
+  if (!item.condition) issues.push("condition");
+  if (item.condition && bulkItemMarketValue(item) == null) issues.push("price");
+  if (item.ownershipShares?.length) {
+    const total = item.ownershipShares.reduce((sum, share) => sum + Number(share.ownershipPercentage || 0), 0);
+    if (Math.abs(total - 100) >= 0.001) issues.push("ownership");
+  }
+  if (item.status === "needs_review") issues.push("ambiguous");
+  return issues;
+}
+
+export function isBulkItemImportReady(item: BulkQueueItemLike) {
+  if (item.status === "confirmed") return true;
+  return item.status === "identified" && bulkItemReviewIssues(item).length === 0;
+}
+
+export function isStampedBulkItem(item: BulkQueueItemLike) {
+  const values = [item.marketVariant, ...bulkItemPricingVariants(item).flatMap((variant) => [variant.name, variant.variant])];
+  return values.some((value) => /stamp/i.test(String(value || "")));
+}
+
 export function itemMatchesBulkFilter(item: BulkQueueItemLike, filter: BulkQueueFilter) {
   if (filter === "all") return true;
-  if (filter === "ready") return item.status === "identified";
-  return item.status === filter;
+  if (filter === "ready") return isBulkItemImportReady(item) && item.status !== "confirmed";
+  if (filter === "needs_review") return !["confirmed", "failed", "waiting", "processing"].includes(item.status) && !isBulkItemImportReady(item);
+  if (filter === "failed") return item.status === "failed";
+  if (filter === "missing_variant") return bulkItemReviewIssues(item).includes("variant");
+  if (filter === "missing_condition") return bulkItemReviewIssues(item).includes("condition");
+  if (filter === "missing_price") return bulkItemReviewIssues(item).includes("price");
+  if (filter === "stamped") return isStampedBulkItem(item);
+  if (filter === "low_confidence") return item.overallConfidence === "low";
+  if (filter === "possible_duplicate") return Boolean(item.possibleDuplicate);
+  return item.status === "confirmed";
 }
 
 export function filterBulkQueue<T extends BulkQueueItemLike>(items: T[], options: {
