@@ -17,6 +17,7 @@ import {
   kickBulkImportWorker,
   resolveBulkImportSourceImageUrl,
   retryBulkImportItems,
+  updateBulkImportJobExpectedCount,
   updateBulkImportItem,
   uploadBulkImportFile,
   type BulkImportItem,
@@ -26,11 +27,15 @@ import {
   bulkItemMarketValue,
   bulkItemPricingVariants,
   bulkItemReviewIssues,
+  bulkImportCapacity,
+  BULK_REVIEW_PAGE_SIZE,
+  BULK_UPLOAD_CONCURRENCY,
   filterBulkQueue,
   isBulkItemImportReady,
   pageBulkQueue,
   runWithConcurrency,
   sortBulkQueue,
+  MAX_BULK_IMPORT_IMAGES,
   type BulkQueueFilter,
   type BulkQueueSort,
 } from "../../utils/bulkInventoryImport";
@@ -56,7 +61,6 @@ type ReviewScreen = "review" | "summary" | "importing" | "complete";
 type LightboxState = { url: string; title: string } | null;
 
 const conditions: CardCondition[] = ["Near Mint / NM", "Lightly Played / LP", "Moderately Played / MP", "Heavily Played / HP", "Damaged", "Unknown"];
-const pageSize = 50;
 const filterOptions: Array<{ value: BulkQueueFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "ready", label: "Ready" },
@@ -231,7 +235,7 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
   useEffect(() => setPage(1), [filter, sort]);
 
   const visible = useMemo(() => sortBulkQueue(filterBulkQueue(items, { filter }), sort), [items, filter, sort]);
-  const paged = useMemo(() => pageBulkQueue(visible, page, pageSize), [visible, page]);
+  const paged = useMemo(() => pageBulkQueue(visible, page, BULK_REVIEW_PAGE_SIZE), [visible, page]);
   const editing = items.find((item) => item.id === editingId);
   const manualItem = items.find((item) => item.id === manualSearchId);
   const readyItems = useMemo(() => items.filter((item) => item.status !== "confirmed" && isBulkItemImportReady(item)), [items]);
@@ -259,21 +263,40 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
   }, [editing, editingId, items]);
 
   async function upload(filesLike: FileList | File[]) {
-    const files = Array.from(filesLike).filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
-    if (!files.length || uploading) return;
+    const selectedFiles = Array.from(filesLike);
+    const supportedFiles = selectedFiles.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
+    const unsupportedCount = selectedFiles.length - supportedFiles.length;
+    const activeJob = job && !["completed", "cancelled"].includes(job.status) ? job : undefined;
+    const existingCount = activeJob ? items.length : 0;
+    const capacity = bulkImportCapacity(existingCount, supportedFiles.length);
+    const files = supportedFiles.slice(0, capacity.accepted);
+    if (!files.length || uploading) {
+      if (supportedFiles.length && capacity.accepted === 0) setMessage(`This import already has ${MAX_BULK_IMPORT_IMAGES.toLocaleString()} images. Start another import to add more.`);
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
     setUploading(true);
     setError("");
     setMessage("");
     setScreen("review");
     setUploadProgress({ done: 0, total: files.length });
     try {
-      const created = await createBulkImportJob({ count: files.length, game, language });
-      setJob(created);
-      const results = await runWithConcurrency(files.map((file, index) => () => uploadBulkImportFile(created, file, index)), 3, (done) => setUploadProgress({ done, total: files.length }));
+      const targetJob = activeJob
+        ? await updateBulkImportJobExpectedCount(activeJob.id, existingCount + files.length)
+        : await createBulkImportJob({ count: files.length, game, language });
+      setJob(targetJob);
+      const uploads = files.map((file, index) => ({ file, uploadOrder: existingCount + index, itemId: crypto.randomUUID() }));
+      const results = await runWithConcurrency(uploads.map(({ file, uploadOrder, itemId }) => () => uploadBulkImportFile(targetJob, file, uploadOrder, itemId)), BULK_UPLOAD_CONCURRENCY, (done) => setUploadProgress({ done, total: files.length }));
       const failed = results.filter((result) => result.status === "rejected");
-      await finishBulkImportUpload(created.id);
-      await Promise.all([refreshJob(created.id), refreshJobs()]);
-      setMessage(failed.length ? `${files.length - failed.length} photos queued. ${failed.length} upload${failed.length === 1 ? "" : "s"} failed and remain safely on your device.` : `${files.length} photos uploaded. Recognition is continuing in the background.`);
+      const added = files.length - failed.length;
+      await updateBulkImportJobExpectedCount(targetJob.id, existingCount + added);
+      await finishBulkImportUpload(targetJob.id);
+      await Promise.all([refreshJob(targetJob.id), refreshJobs()]);
+      const capacityMessage = capacity.skipped
+        ? `${added} images added. ${capacity.skipped} were not added because this import has reached the ${MAX_BULK_IMPORT_IMAGES.toLocaleString()}-image limit.`
+        : `${added} image${added === 1 ? "" : "s"} added.`;
+      const issueMessage = `${failed.length ? ` ${failed.length} upload${failed.length === 1 ? "" : "s"} failed and remain safely on your device.` : ""}${unsupportedCount ? ` ${unsupportedCount} unsupported file${unsupportedCount === 1 ? " was" : "s were"} skipped.` : ""}`;
+      setMessage(`${capacityMessage}${issueMessage} Recognition is continuing in the background.`);
     } catch (unknownError) {
       setError(unknownError instanceof Error ? unknownError.message : "Bulk upload failed.");
     } finally {
@@ -436,12 +459,12 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
         <aside className="space-y-3">
           <div className="rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50 p-4 text-center dark:border-violet-800 dark:bg-violet-950/20">
             <Upload className="mx-auto text-violet-600" size={28} />
-            <p className="mt-2 font-black">Drop 200+ card photos</p><p className="text-xs text-slate-500">JPEG, PNG, or WebP. Review batches are independent of transaction-photo limits.</p>
+            <p className="mt-2 font-black">Drop up to 1,000 card photos</p><p className="text-xs text-slate-500">JPEG, PNG, or WebP. Add more batches until this import reaches {MAX_BULK_IMPORT_IMAGES.toLocaleString()}. Transaction photos remain capped separately.</p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <select value={game} disabled={uploading} onChange={(event) => { const next = event.target.value as "pokemon" | "one_piece"; setGame(next); if (next === "one_piece") setLanguage("en"); }} className="rounded-xl border bg-white p-2 text-sm dark:bg-slate-950"><option value="pokemon">Pokémon</option><option value="one_piece">One Piece</option></select>
               <select value={language} disabled={uploading || game === "one_piece"} onChange={(event) => setLanguage(event.target.value as "en" | "ja")} className="rounded-xl border bg-white p-2 text-sm dark:bg-slate-950"><option value="en">English</option><option value="ja">Japanese</option></select>
             </div>
-            <button type="button" disabled={uploading} onClick={() => inputRef.current?.click()} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-50">{uploading ? <LoaderCircle className="animate-spin" size={17} /> : <Upload size={17} />}{uploading ? `Uploading ${uploadProgress.done}/${uploadProgress.total}` : "Choose Photos"}</button>
+            <button type="button" disabled={uploading || Boolean(job && !["completed", "cancelled"].includes(job.status) && items.length >= MAX_BULK_IMPORT_IMAGES)} onClick={() => inputRef.current?.click()} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-sm font-black text-white disabled:opacity-50">{uploading ? <LoaderCircle className="animate-spin" size={17} /> : <Upload size={17} />}{uploading ? `Uploading ${uploadProgress.done}/${uploadProgress.total}` : job && !["completed", "cancelled"].includes(job.status) ? `Add Photos · ${items.length.toLocaleString()} / ${MAX_BULK_IMPORT_IMAGES.toLocaleString()}` : "Choose Photos"}</button>
             <input ref={inputRef} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => event.target.files && void upload(event.target.files)} />
             {uploading ? <div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-100"><span className="block h-full bg-violet-600 transition-all" style={{ width: `${uploadProgress.total ? uploadProgress.done / uploadProgress.total * 100 : 0}%` }} /></div> : null}
           </div>
@@ -457,11 +480,11 @@ export function BatchInventoryImporter({ workers, onClose, onConfirmed }: Props)
 
         <main className="min-w-0 space-y-3">
           {!job ? <div className="flex min-h-72 items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-800 dark:bg-slate-950"><div><ImageIcon className="mx-auto text-slate-400" size={40} /><h3 className="mt-3 text-lg font-black">Start with card photos</h3><p className="mt-1 max-w-md text-sm text-slate-500">The upload creates a durable review job. No inventory records are created until the final confirmation.</p></div></div> : <>
-            <section className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-              {[["Scanned", job.uploadedCount], ["Processed", job.processedCount], ["Ready", readyItems.length], ["Needs Review", unresolvedItems.filter((item) => item.status !== "failed").length], ["Failed", items.filter((item) => item.status === "failed").length]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-slate-50 p-2 text-center dark:bg-slate-950"><b className="block text-lg">{value}</b><span className="text-[11px] text-slate-500">{label}</span></div>)}
+            <section className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {[["Uploaded", job.uploadedCount], ["Processed", job.processedCount], ["Ready", readyItems.length], ["Needs Review", unresolvedItems.filter((item) => item.status !== "failed" && !["waiting", "processing"].includes(item.status)).length], ["Failed", items.filter((item) => item.status === "failed").length], ["Remaining", processingCount]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-slate-50 p-2 text-center dark:bg-slate-950"><b className="block text-lg">{value}</b><span className="text-[11px] text-slate-500">{label}</span></div>)}
             </section>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><span className="block h-full bg-gradient-to-r from-violet-500 to-emerald-500 transition-all" style={{ width: `${job.uploadedCount ? Math.min(100, job.processedCount / job.uploadedCount * 100) : 0}%` }} /></div>
-            {processingCount ? <p className="rounded-xl bg-violet-50 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">Processing cards · {job.processedCount} / {job.uploadedCount}. You can review completed matches while the queue continues.</p> : null}
+            {processingCount ? <p className="rounded-xl bg-violet-50 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">Processing cards · {job.processedCount.toLocaleString()} / {job.uploadedCount.toLocaleString()}. Upload {job.uploadedCount.toLocaleString()} / {MAX_BULK_IMPORT_IMAGES.toLocaleString()} · Review {reviewCount.toLocaleString()} / {job.uploadedCount.toLocaleString()}. You can review completed matches while the queue continues.</p> : null}
             {job.status === "uploading" && job.uploadedCount > 0 && !uploading ? <button type="button" disabled={busyAction === "resume"} onClick={() => {
               setBusyAction("resume");
               void finishBulkImportUpload(job.id).then(() => Promise.all([refreshJob(job.id), refreshJobs()])).then(() => setMessage(`${job.uploadedCount} already-uploaded photos resumed safely.`)).catch((unknownError) => setError(unknownError instanceof Error ? unknownError.message : "Import could not resume.")).finally(() => setBusyAction(""));

@@ -12,6 +12,25 @@ export type BulkQueueFilter =
   | "confirmed";
 export type BulkQueueSort = "upload" | "status" | "confidence" | "name" | "market";
 
+export const MAX_BULK_IMPORT_IMAGES = 1_000;
+export const BULK_UPLOAD_CONCURRENCY = 3;
+// Recognition is intentionally lower than upload concurrency because the
+// provider/vision pipeline has stricter rate and cost limits.
+export const BULK_RECOGNITION_CONCURRENCY = 2;
+export const BULK_REVIEW_PAGE_SIZE = 50;
+
+export function bulkImportCapacity(existingCount: number, requestedCount: number) {
+  const used = Math.min(MAX_BULK_IMPORT_IMAGES, Math.max(0, Math.floor(existingCount)));
+  const requested = Math.max(0, Math.floor(requestedCount));
+  const remainingBeforeSelection = MAX_BULK_IMPORT_IMAGES - used;
+  const accepted = Math.min(remainingBeforeSelection, requested);
+  return {
+    accepted,
+    skipped: requested - accepted,
+    remaining: remainingBeforeSelection - accepted,
+  };
+}
+
 export type BulkQueueItemLike = {
   uploadOrder: number;
   status: string;

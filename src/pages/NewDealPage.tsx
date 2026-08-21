@@ -39,7 +39,8 @@ import { paymentMethodLabels, pokemonCategoryLabels } from "../utils/salesContro
 import { hasKnownHistoricalCostBasis } from "../utils/transactionMath";
 import { ownershipIsValid } from "../utils/tradeMath";
 import { TRANSACTION_PHOTO_LIMIT } from "../utils/transactionImages";
-import { appendBulkScanSelection, isLikelyMobileScanner } from "../utils/dealScanQueue";
+import { appendBulkScanSelectionWithCapacity, compactBulkScanRecovery, isLikelyMobileScanner } from "../utils/dealScanQueue";
+import { BULK_REVIEW_PAGE_SIZE, MAX_BULK_IMPORT_IMAGES, pageBulkQueue } from "../utils/bulkInventoryImport";
 import type { CardMatch, CardScanSuggestion } from "../services/sales/cardScanService";
 import { prefetchBulkReviewCandidates } from "../services/sales/bulkReviewSearchService";
 
@@ -152,6 +153,7 @@ export function NewDealPage() {
   const [scanFile, setScanFile] = useState<File>();
   const [scanQueue, setScanQueue] = useState<DealScanQueueItem[]>(() => readScanQueueDraft(recovered));
   const [scanQueueOpen, setScanQueueOpen] = useState(false);
+  const [scanQueuePage, setScanQueuePage] = useState(1);
   const [bulkReviewId, setBulkReviewId] = useState("");
   const [mobileScanner] = useState(isLikelyMobileScanner);
   const [inventoryPicker, setInventoryPicker] = useState(false);
@@ -224,11 +226,7 @@ export function NewDealPage() {
   }, [step, transaction]);
 
   useEffect(() => {
-    const persisted = scanQueue.map(({ file: _file, previewUrl, suggestion, ...row }) => ({
-      ...row,
-      previewUrl: previewUrl?.startsWith("blob:") ? undefined : previewUrl,
-      suggestion: suggestion ? { ...suggestion, technicalDetails: undefined, possibleMatches: suggestion.possibleMatches?.slice(0, 10) } : undefined,
-    }));
+    const persisted = compactBulkScanRecovery(scanQueue);
     try { localStorage.setItem(scanQueueDraftKey, JSON.stringify(persisted)); } catch { /* The transaction draft still preserves saved item images. */ }
   }, [scanQueue]);
 
@@ -297,8 +295,12 @@ export function NewDealPage() {
   }
 
   async function enqueueScanFiles(side: DealSide, files: FileList | File[]) {
-    const selected = appendBulkScanSelection(scanQueueRef.current, files);
-    if (!selected.length) return;
+    const selection = appendBulkScanSelectionWithCapacity(scanQueueRef.current, files);
+    const selected = selection.selections;
+    if (!selected.length) {
+      if (selection.skipped) setToast({ message: `This scan already has ${MAX_BULK_IMPORT_IMAGES.toLocaleString()} images. Start another bulk import to add more.`, tone: "warning" });
+      return;
+    }
     const startOrder = scanQueueRef.current.length;
     const rows: DealScanQueueItem[] = [];
     let failed = 0;
@@ -330,9 +332,12 @@ export function NewDealPage() {
       return;
     }
     replaceScanQueue((current) => [...current, ...rows]);
+    setScanQueuePage(Math.max(1, Math.ceil((startOrder + rows.length) / BULK_REVIEW_PAGE_SIZE)));
     setSelectedSide(side);
     setScanQueueOpen(true);
-    setToast({ message: `${rows.length} photo${rows.length === 1 ? "" : "s"} normalized and added to the scan queue.${failed ? ` ${failed} could not be prepared.` : ""}`, tone: failed ? "warning" : "info" });
+    const capacityNotice = selection.skipped ? ` ${selection.skipped} were not added because this scan has reached the ${MAX_BULK_IMPORT_IMAGES.toLocaleString()}-image limit.` : "";
+    const unsupportedNotice = selection.unsupported ? ` ${selection.unsupported} unsupported file${selection.unsupported === 1 ? " was" : "s were"} skipped.` : "";
+    setToast({ message: `${rows.length} photo${rows.length === 1 ? "" : "s"} normalized and added to the scan queue.${capacityNotice}${unsupportedNotice}${failed ? ` ${failed} could not be prepared.` : ""}`, tone: failed || selection.skipped || selection.unsupported ? "warning" : "info" });
   }
 
   async function processScanQueue() {
@@ -793,6 +798,7 @@ export function NewDealPage() {
   const scanFailedCount = scanQueue.filter((row) => row.status === "failed").length;
   const scanRemainingCount = scanQueue.filter((row) => row.status === "waiting" || row.status === "processing").length;
   const scanProcessedCount = scanQueue.length - scanRemainingCount;
+  const pagedScanQueue = pageBulkQueue(scanQueue, scanQueuePage, BULK_REVIEW_PAGE_SIZE);
   function applyPercentageToSide(percentage: number) {
     updateTransaction({
       ...transaction,
@@ -869,19 +875,19 @@ export function NewDealPage() {
     {scanQueue.length ? <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm dark:border-violet-900 dark:bg-night-900">
       <button type="button" onClick={() => setScanQueueOpen((value) => !value)} className="flex w-full items-center gap-3 p-3 text-left sm:p-4">
         {scanRemainingCount ? <LoaderCircle className="shrink-0 animate-spin text-violet-600" size={21} /> : <Check className="shrink-0 text-emerald-600" size={21} />}
-        <span className="min-w-0 flex-1"><b className="block">{scanRemainingCount ? "Processing cards" : "Card processing complete"}</b><small className="block text-slate-500">{scanQueue.length} photos selected · {scanProcessedCount} / {scanQueue.length} processed</small></span>
+        <span className="min-w-0 flex-1"><b className="block">{scanRemainingCount ? "Processing cards" : "Card processing complete"}</b><small className="block text-slate-500">{scanQueue.length.toLocaleString()} / {MAX_BULK_IMPORT_IMAGES.toLocaleString()} photos · {scanProcessedCount.toLocaleString()} processed</small></span>
         <ChevronRight className={`shrink-0 transition ${scanQueueOpen ? "rotate-90" : ""}`} size={18} />
       </button>
       <div className="grid grid-cols-4 border-t border-violet-100 text-center text-xs dark:border-violet-900"><span className="p-2"><b className="block text-emerald-600">{scanReadyCount}</b>Ready</span><span className="p-2"><b className="block text-amber-600">{scanReviewCount}</b>Needs Review</span><span className="p-2"><b className="block text-rose-600">{scanFailedCount}</b>Failed</span><span className="p-2"><b className="block text-violet-600">{scanRemainingCount}</b>Remaining</span></div>
       <div className="h-1.5 bg-slate-100 dark:bg-slate-800"><span className="block h-full bg-violet-600 transition-all" style={{ width: `${scanQueue.length ? scanProcessedCount / scanQueue.length * 100 : 0}%` }} /></div>
-      {scanQueueOpen ? <div className="max-h-80 overflow-y-auto border-t border-slate-100 dark:border-slate-800">{scanQueue.map((row) => {
+      {scanQueueOpen ? <div className="max-h-80 overflow-y-auto border-t border-slate-100 dark:border-slate-800">{pagedScanQueue.items.map((row) => {
         const dealItem = transaction.items.find((item) => item.id === row.itemId);
         return <article key={row.id} className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-100 p-2 last:border-b-0 dark:border-slate-800">
           {row.previewUrl || dealItem?.imageUrl ? <img loading="lazy" src={dealItem?.imageUrl || row.previewUrl} alt={row.filename} className="h-14 w-11 rounded-lg bg-slate-100 object-cover" /> : <span className="grid h-14 w-11 place-items-center rounded-lg bg-slate-100"><ImagePlus size={17} className="text-slate-400" /></span>}
           <span className="min-w-0"><b className="block truncate text-xs">{dealItem?.itemName || row.filename}</b><small className="block truncate text-slate-500">#{row.uploadOrder + 1} · {row.stage || row.status.replace(/_/g, " ")}</small>{row.possibleDuplicate ? <small className="block font-black text-amber-700">Possible duplicate</small> : null}{row.error ? <small className="block truncate font-bold text-rose-600" title={row.error}>{row.error}</small> : null}</span>
           <span className="flex gap-1">{(row.status === "failed" || row.status === "needs_review") && row.file ? <button type="button" onClick={() => replaceScanQueue((current) => current.map((item) => item.id === row.id ? { ...item, status: "waiting", forceRecognition: true, stage: "Waiting", error: undefined } : item))} className="rounded-lg bg-amber-100 px-2 py-2 text-xs font-black text-amber-900">Retry AI Recognition</button> : null}{row.status === "ready" || row.status === "needs_review" || row.status === "failed" ? <button type="button" onClick={() => { if (dealItem) openBulkImportReview(row, dealItem); }} className="rounded-lg bg-violet-100 px-2 py-2 text-xs font-black text-violet-800">Review</button> : null}</span>
         </article>;
-      })}</div> : null}
+      })}<div className="sticky bottom-0 flex items-center justify-between border-t border-slate-200 bg-white p-2 text-xs dark:border-slate-800 dark:bg-slate-900"><span>Page {pagedScanQueue.page} of {pagedScanQueue.pageCount} · {scanQueue.length.toLocaleString()} photos</span><span className="flex gap-2"><button type="button" disabled={pagedScanQueue.page <= 1} onClick={() => setScanQueuePage((value) => Math.max(1, value - 1))} className="rounded-lg bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><ChevronRight className="rotate-180" size={15} /></button><button type="button" disabled={pagedScanQueue.page >= pagedScanQueue.pageCount} onClick={() => setScanQueuePage((value) => value + 1)} className="rounded-lg bg-slate-100 p-2 disabled:opacity-40 dark:bg-slate-800"><ChevronRight size={15} /></button></span></div></div> : null}
     </section> : null}
 
     {step === "build" ? <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">

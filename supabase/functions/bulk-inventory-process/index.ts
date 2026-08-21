@@ -20,6 +20,13 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const batchSize = 2;
+const requestTimeoutMs = 30_000;
+
+function retryDelayMs(response: Response, attempt: number) {
+  const retryAfter = Number(response.headers.get("retry-after") || 0);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(5_000, retryAfter * 1_000);
+  return Math.min(2_000, 500 * (2 ** attempt));
+}
 
 type QueueItem = {
   id: string;
@@ -65,17 +72,32 @@ function pricingFor(match?: UnifiedCardMatch) {
 async function edgePost(baseUrl: string, serviceKey: string, functionName: string, body: unknown, allowRetry = true) {
   let lastPayload: Record<string, unknown> | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await fetch(`${baseUrl}/functions/v1/${functionName}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/functions/v1/${functionName}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+    } catch (unknownError) {
+      if (allowRetry && attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      const error = new Error(unknownError instanceof Error ? unknownError.message : `${functionName} timed out.`) as Error & { code?: string };
+      error.code = "UPSTREAM_TIMEOUT";
+      throw error;
+    }
     const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
     lastPayload = payload;
     const rows = Array.isArray(payload?.results) ? payload.results : [];
     const retryableEmpty = response.ok && rows.length === 0 && Number(payload?.providerResponseStatus || 0) >= 500;
     if (response.ok && !retryableEmpty) return payload || {};
-    if (allowRetry && attempt === 0 && (response.status === 429 || response.status >= 500 || retryableEmpty)) continue;
+    if (allowRetry && attempt === 0 && ([429, 500, 502, 503].includes(response.status) || retryableEmpty)) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(response, attempt)));
+      continue;
+    }
     const error = new Error(String(payload?.message || payload?.error || `${functionName} failed with HTTP ${response.status}.`)) as Error & { code?: string };
     error.code = String(payload?.code || `HTTP_${response.status}`);
     throw error;

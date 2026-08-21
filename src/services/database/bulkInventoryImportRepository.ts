@@ -6,6 +6,7 @@ import { normalizeImageOrientation } from "../images/imageOrientation";
 import { automaticallyPrepareCard } from "../sales/cardImageProcessor";
 import { saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership } from "./ownershipRepository";
+import { BULK_UPLOAD_CONCURRENCY, MAX_BULK_IMPORT_IMAGES, runWithConcurrency } from "../../utils/bulkInventoryImport";
 
 export type BulkImportJobStatus = "uploading" | "queued" | "processing" | "review" | "completed" | "cancelled";
 export type BulkImportItemStatus = "waiting" | "processing" | "identified" | "needs_review" | "failed" | "confirmed";
@@ -196,6 +197,9 @@ async function thumbnailFile(file: File) {
 
 export async function createBulkImportJob(input: { count: number; game: "pokemon" | "one_piece"; language: "en" | "ja"; workerId?: string }) {
   const client = requireSupabase();
+  if (!Number.isInteger(input.count) || input.count < 1 || input.count > MAX_BULK_IMPORT_IMAGES) {
+    throw new Error(`A bulk import must contain between 1 and ${MAX_BULK_IMPORT_IMAGES.toLocaleString()} images.`);
+  }
   const result = await client.from("bulk_inventory_import_jobs").insert({
     status: "uploading",
     original_count: input.count,
@@ -207,32 +211,57 @@ export async function createBulkImportJob(input: { count: number; game: "pokemon
   return jobFromRow(result.data as JobRow);
 }
 
-export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploadOrder: number) {
+export async function updateBulkImportJobExpectedCount(jobId: string, count: number) {
+  const client = requireSupabase();
+  const result = await client.from("bulk_inventory_import_jobs").update({
+    original_count: Math.min(MAX_BULK_IMPORT_IMAGES, Math.max(0, Math.floor(count))),
+    status: "uploading",
+    updated_at: new Date().toISOString(),
+  }).eq("id", jobId).select("*").single();
+  if (result.error) throw new Error(result.error.message);
+  return jobFromRow(result.data as JobRow);
+}
+
+async function uploadStableBulkObject(path: string, file: File) {
+  const client = requireSupabase();
+  const result = await client.storage.from("bulk-inventory-imports").upload(path, file, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
+  if (!result.error) return;
+  // A stable item ID makes an already-present object the successful outcome of
+  // a retry after an interrupted response, rather than a reason to upload twice.
+  if (/already exists|duplicate|409/i.test(result.error.message || "")) return;
+  throw new Error(result.error.message);
+}
+
+export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploadOrder: number, stableItemId = crypto.randomUUID()) {
   const client = requireSupabase();
   if (![/^image\/jpeg$/i, /^image\/png$/i, /^image\/webp$/i].some((pattern) => pattern.test(file.type))) {
     throw new Error(`${file.name}: use JPEG, PNG, or WebP.`);
   }
+  const existing = await client.from("bulk_inventory_import_items").select("*").eq("id", stableItemId).maybeSingle();
+  if (existing.error) throw new Error(existing.error.message);
+  if (existing.data) return itemFromRow(existing.data as ItemRow);
   const normalized = await normalizeImageOrientation(file);
-  const itemId = crypto.randomUUID();
+  const itemId = stableItemId;
   const detected = await automaticallyPrepareCard(normalized);
   const [hash, compressed, thumbnail] = await Promise.all([fileHash(normalized), compressSaleImage(normalized), thumbnailFile(normalized)]);
   const sourcePath = `${job.id}/source/${itemId}.jpg`;
   const thumbnailPath = `${job.id}/thumbnails/${itemId}.jpg`;
   const recognitionPath = `${job.id}/recognition/${itemId}.jpg`;
-  const sourceUpload = await client.storage.from("bulk-inventory-imports").upload(sourcePath, compressed, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
-  if (sourceUpload.error) throw new Error(sourceUpload.error.message);
-  const thumbnailUpload = await client.storage.from("bulk-inventory-imports").upload(thumbnailPath, thumbnail, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
-  if (thumbnailUpload.error) {
+  await uploadStableBulkObject(sourcePath, compressed);
+  try {
+    await uploadStableBulkObject(thumbnailPath, thumbnail);
+  } catch (error) {
     await client.storage.from("bulk-inventory-imports").remove([sourcePath]);
-    throw new Error(thumbnailUpload.error.message);
+    throw error;
   }
   let recognitionFile: File | undefined;
   if (detected.cropped) {
     recognitionFile = await prepareOpenAiCardImage(detected.file);
-    const recognitionUpload = await client.storage.from("bulk-inventory-imports").upload(recognitionPath, recognitionFile, { contentType: "image/jpeg", cacheControl: "31536000", upsert: false });
-    if (recognitionUpload.error) {
+    try {
+      await uploadStableBulkObject(recognitionPath, recognitionFile);
+    } catch (error) {
       await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath]);
-      throw new Error(recognitionUpload.error.message);
+      throw error;
     }
   }
   const sourceUrl = client.storage.from("bulk-inventory-imports").getPublicUrl(sourcePath).data.publicUrl;
@@ -272,6 +301,8 @@ export async function uploadBulkImportFile(job: BulkImportJob, file: File, uploa
     }),
   }).select("*").single();
   if (inserted.error) {
+    const recovered = await client.from("bulk_inventory_import_items").select("*").eq("id", itemId).maybeSingle();
+    if (!recovered.error && recovered.data) return itemFromRow(recovered.data as ItemRow);
     await client.storage.from("bulk-inventory-imports").remove([sourcePath, thumbnailPath, ...(detected.cropped ? [recognitionPath] : [])]);
     throw new Error(inserted.error.message);
   }
@@ -314,7 +345,7 @@ export async function getBulkImportJob(jobId: string) {
 
 export async function listBulkImportItems(jobId: string) {
   const client = requireSupabase();
-  const result = await client.from("bulk_inventory_import_items").select("*").eq("job_id", jobId).order("upload_order").limit(1000);
+  const result = await client.from("bulk_inventory_import_items").select("*").eq("job_id", jobId).order("upload_order").limit(MAX_BULK_IMPORT_IMAGES);
   if (result.error) throw new Error(result.error.message);
   return (result.data as ItemRow[]).map(itemFromRow);
 }
@@ -404,18 +435,20 @@ export async function retryBulkImportItems(itemIds: string[]) {
   const rows = await client.from("bulk_inventory_import_items").select("id,raw_recognition").in("id", itemIds).in("status", ["failed", "needs_review", "identified"]);
   if (rows.error) throw new Error(rows.error.message);
   const retryRequestedAt = new Date().toISOString();
-  const updates = await Promise.all((rows.data || []).map((row) => client.from("bulk_inventory_import_items").update({
-    status: "waiting",
-    attempt_count: 0,
-    next_retry_at: null,
-    locked_at: null,
-    error_code: null,
-    error_message: null,
-    raw_recognition: { ...((row.raw_recognition || {}) as Record<string, unknown>), retryRequestedAt },
-    updated_at: retryRequestedAt,
-  }).eq("id", row.id)));
-  const failed = updates.find((result) => result.error)?.error;
-  if (failed) throw new Error(failed.message);
+  const updates = await runWithConcurrency((rows.data || []).map((row) => async () => {
+    return await client.from("bulk_inventory_import_items").update({
+      status: "waiting",
+      attempt_count: 0,
+      next_retry_at: null,
+      locked_at: null,
+      error_code: null,
+      error_message: null,
+      raw_recognition: { ...((row.raw_recognition || {}) as Record<string, unknown>), retryRequestedAt },
+      updated_at: retryRequestedAt,
+    }).eq("id", row.id);
+  }), BULK_UPLOAD_CONCURRENCY);
+  const failed = updates.find((result) => result.status === "rejected" || result.value.error);
+  if (failed) throw new Error(failed.status === "rejected" ? String(failed.reason) : failed.value.error?.message || "Retry update failed.");
   await kickBulkImportWorker();
 }
 

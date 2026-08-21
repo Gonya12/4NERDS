@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { appendBulkScanSelection } from "../src/utils/dealScanQueue.ts";
+import { appendBulkScanSelection, appendBulkScanSelectionWithCapacity, compactBulkScanRecovery } from "../src/utils/dealScanQueue.ts";
+import { MAX_BULK_IMPORT_IMAGES } from "../src/utils/bulkInventoryImport.ts";
 import { bulkReviewProviderImage, bulkReviewSourceImage } from "../src/utils/bulkImportReview.ts";
 
 type MockFile = { name: string; size: number; type: string; lastModified: number };
@@ -12,6 +13,27 @@ test("one, ten, two hundred, and five hundred desktop selections retain every su
   assert.equal(appendBulkScanSelection([], Array.from({ length: 10 }, (_, index) => photo(index))).length, 10);
   assert.equal(appendBulkScanSelection([], Array.from({ length: 200 }, (_, index) => photo(index))).length, 200);
   assert.equal(appendBulkScanSelection([], Array.from({ length: 500 }, (_, index) => photo(index))).length, 500);
+  assert.equal(appendBulkScanSelection([], Array.from({ length: 1000 }, (_, index) => photo(index))).length, 1000);
+});
+
+test("bulk scan accepts only remaining capacity and reports every skipped image", () => {
+  const existing = appendBulkScanSelection([], Array.from({ length: 720 }, (_, index) => photo(index)));
+  const added = appendBulkScanSelectionWithCapacity(existing, Array.from({ length: 400 }, (_, index) => photo(index + 720)));
+  assert.equal(MAX_BULK_IMPORT_IMAGES, 1000);
+  assert.equal(added.selections.length, 280);
+  assert.equal(added.skipped, 120);
+  assert.equal(added.remaining, 0);
+});
+
+test("scan recovery excludes files, blob/data previews, and full recognition candidates", () => {
+  const compact = compactBulkScanRecovery([
+    { id: "one", file: photo(1), previewUrl: "blob:large-image", suggestion: { possibleMatches: Array.from({ length: 20 }, (_, id) => ({ id })) }, status: "ready" },
+    { id: "two", previewUrl: "data:image/jpeg;base64,large", suggestion: { raw: "large" }, status: "failed" },
+    { id: "three", previewUrl: "https://storage.test/job/source/three.jpg", status: "ready" },
+  ]);
+  const serialized = JSON.stringify(compact);
+  assert.doesNotMatch(serialized, /blob:|data:image|possibleMatches|large-image/);
+  assert.equal(compact[2].previewUrl, "https://storage.test/job/source/three.jpg");
 });
 
 test("mixed JPG, PNG, and WebP batches are accepted while unsupported files are ignored", () => {

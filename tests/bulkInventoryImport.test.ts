@@ -10,6 +10,11 @@ import {
   pageBulkQueue,
   runWithConcurrency,
   sortBulkQueue,
+  MAX_BULK_IMPORT_IMAGES,
+  BULK_UPLOAD_CONCURRENCY,
+  BULK_RECOGNITION_CONCURRENCY,
+  BULK_REVIEW_PAGE_SIZE,
+  bulkImportCapacity,
 } from "../src/utils/bulkInventoryImport.ts";
 import {
   normalizeBulkReviewSearchIntent,
@@ -25,6 +30,26 @@ const simulated = Array.from({ length: 200 }, (_, uploadOrder) => ({
   condition: uploadOrder % 7 === 0 ? undefined : "Near Mint / NM",
   possibleDuplicate: uploadOrder === 42,
 }));
+
+const simulatedThousand = Array.from({ length: MAX_BULK_IMPORT_IMAGES }, (_, uploadOrder) => ({
+  ...simulated[uploadOrder % simulated.length],
+  uploadOrder,
+  recognizedName: `Stress Card ${uploadOrder}`,
+}));
+
+test("canonical bulk capacity handles small batches, 1,000 rows, and partial additions", () => {
+  assert.equal(MAX_BULK_IMPORT_IMAGES, 1000);
+  for (const size of [1, 20, 100, 500, 1000]) assert.equal(bulkImportCapacity(0, size).accepted, size);
+  assert.deepEqual(bulkImportCapacity(720, 400), { accepted: 280, skipped: 120, remaining: 0 });
+  assert.equal(BULK_UPLOAD_CONCURRENCY, 3);
+  assert.equal(BULK_RECOGNITION_CONCURRENCY, 2);
+});
+
+test("1,000-image review is paged to 50 lightweight rows without loss", () => {
+  const pages = Array.from({ length: 20 }, (_, index) => pageBulkQueue(simulatedThousand, index + 1, BULK_REVIEW_PAGE_SIZE).items);
+  assert.ok(pages.every((page) => page.length === 50));
+  assert.equal(new Set(pages.flat().map((item) => item.uploadOrder)).size, 1000);
+});
 
 test("200-image review queue filters, sorts, and paginates without dropping rows", () => {
   const all = filterBulkQueue(simulated, { filter: "all" });
@@ -178,19 +203,21 @@ test("issue filters isolate missing fields, stamped cards, low confidence, and s
   assert.deepEqual(filterBulkQueue(rows, { filter: "possible_duplicate" }).map((row) => row.uploadOrder), [2]);
 });
 
-test("controlled uploader never exceeds configured concurrency for 200 files", async () => {
+test("controlled uploader never exceeds configured concurrency for 1,000 files and isolates failures", async () => {
   let active = 0;
   let peak = 0;
-  const results = await runWithConcurrency(Array.from({ length: 200 }, (_, index) => async () => {
+  const results = await runWithConcurrency(Array.from({ length: 1000 }, (_, index) => async () => {
     active += 1;
     peak = Math.max(peak, active);
     await new Promise((resolve) => setTimeout(resolve, index % 3));
     active -= 1;
+    if (index === 437) throw new Error("simulated provider timeout");
     return index;
-  }), 3);
-  assert.equal(results.length, 200);
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 200);
-  assert.ok(peak <= 3);
+  }), BULK_UPLOAD_CONCURRENCY);
+  assert.equal(results.length, 1000);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 999);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.ok(peak <= BULK_UPLOAD_CONCURRENCY);
 });
 
 test("migration creates a durable inventory-only queue and dedicated bucket", () => {
@@ -204,7 +231,8 @@ test("migration creates a durable inventory-only queue and dedicated bucket", ()
 
 test("bulk importer is not coupled to the transaction 20-photo cap", () => {
   const source = readFileSync(new URL("../src/components/sales/BatchInventoryImporter.tsx", import.meta.url), "utf8");
-  assert.match(source, /Drop 200\+ card photos/);
+  assert.match(source, /Drop up to 1,000 card photos/);
+  assert.match(source, /MAX_BULK_IMPORT_IMAGES/);
   assert.doesNotMatch(source, /MAX_TRANSACTION_IMAGES|TRANSACTION_IMAGE_LIMIT/);
   assert.match(source, /multiple accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(source, /Confirm & Add to Inventory/);

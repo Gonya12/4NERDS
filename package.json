@@ -21,7 +21,7 @@
     "test:image-orientation": "node --experimental-strip-types --test tests/imageOrientation.test.ts",
     "test:deal": "node --experimental-strip-types --import ./tests/typescriptResolveHook.mjs --test tests/dealBuilder.test.ts",
     "test:deal-mobile": "node --experimental-strip-types --test tests/newDealMobileLayout.test.ts",
-    "test:deal-scan": "node --experimental-strip-types --test tests/dealScanQueue.test.ts",
+    "test:deal-scan": "node --experimental-strip-types --import ./tests/typescriptResolveHook.mjs --test tests/dealScanQueue.test.ts",
     "test:visual-identify": "node --experimental-strip-types --test tests/pokemonCardIdentification.test.ts",
     "test:bulk-import": "node --experimental-strip-types --test tests/bulkInventoryImport.test.ts",
     "test": "npm run test:scanner && npm run test:card-search && npm run test:multi-game && npm run test:trade && npm run test:transactions && npm run test:flow && npm run test:exports && npm run test:payload && npm run test:pricing && npm run test:reliability && npm run test:schedule && npm run test:image-limit && npm run test:image-orientation && npm run test:deal && npm run test:deal-mobile && npm run test:deal-scan && npm run test:visual-identify && npm run test:bulk-import",
