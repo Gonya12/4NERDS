@@ -1,6 +1,6 @@
 import type { InventoryPurchase, InventoryTradeLineage, TradeItem, TradeItemOwnershipShare, TradeTransaction, TransactionImageAttachment, TransactionImageType, TransactionPaymentEntry } from "../../types/models";
 import { id, nowIso } from "../../utils/normalize";
-import { isSupabaseConfigured, recordSupabaseRequest, supabase } from "../../utils/supabase";
+import { isSupabaseConfigured, recordSupabaseError, recordSupabaseRequest, supabase } from "../../utils/supabase";
 import { getCachedInventoryPurchases, saveInventoryPurchase } from "./inventoryPurchaseRepository";
 import { saveInventoryOwnership, saveSaleOwnership } from "./ownershipRepository";
 import { createSaleRecord } from "./salesRepository";
@@ -35,6 +35,82 @@ export { prepareTransactionForCompletion } from "./transactionReliability";
 const localKey = "4nerds_financial_transactions_local_v1";
 const cacheKey = "4nerds_financial_transactions_cache_v1";
 const lineageKey = "4nerds_inventory_lineage_local_v1";
+export const FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE = 100;
+export const FINANCIAL_QUERY_PAGE_SIZE = 1_000;
+
+type SupabaseQueryError = {
+  code?: string;
+  message?: string;
+  details?: string;
+  hint?: string;
+  status?: number;
+  statusText?: string;
+};
+
+function financialQueryDebug(input: {
+  stage: string;
+  table: string;
+  select: string;
+  filters?: Record<string, unknown>;
+  ordering?: string;
+  range?: string;
+  relationships?: string[];
+  error?: SupabaseQueryError | null;
+}) {
+  if (!import.meta.env.DEV) return;
+  const error = input.error;
+  console[error ? "error" : "info"]("[Financial transactions query]", {
+    stage: input.stage,
+    table: input.table,
+    select: input.select,
+    filters: input.filters || {},
+    ordering: input.ordering || null,
+    range: input.range || null,
+    relationships: input.relationships || [],
+    httpStatus: error?.status || null,
+    errorCode: error?.code || null,
+    errorMessage: error?.message || null,
+    errorDetails: error?.details || null,
+    errorHint: error?.hint || null,
+  });
+}
+
+function financialQueryError(stage: string, table: string, error: SupabaseQueryError) {
+  recordSupabaseError({ functionName: `listFinancialTransactions:${stage}`, table, error, connected: true });
+  const detail = [error.message || "Unknown Supabase error", error.code && `code ${error.code}`, error.details, error.hint].filter(Boolean).join(" · ");
+  return new Error(`${stage} (${table}): ${detail}`);
+}
+
+async function selectFinancialRowsByInChunks<Row>(input: {
+  stage: string;
+  table: string;
+  select: string;
+  filterColumn: string;
+  values: string[];
+}) {
+  if (!supabase || !input.values.length) return [] as Row[];
+  const rows: Row[] = [];
+  for (let offset = 0; offset < input.values.length; offset += FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE) {
+    const values = input.values.slice(offset, offset + FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE);
+    const chunk = Math.floor(offset / FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE) + 1;
+    const chunkCount = Math.ceil(input.values.length / FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE);
+    for (let pageStart = 0; ; pageStart += FINANCIAL_QUERY_PAGE_SIZE) {
+      const pageEnd = pageStart + FINANCIAL_QUERY_PAGE_SIZE - 1;
+      const filters = { [input.filterColumn]: { operator: "in", values }, chunk, chunkCount };
+      const range = `${pageStart}-${pageEnd}`;
+      financialQueryDebug({ stage: input.stage, table: input.table, select: input.select, filters, ordering: "id asc", range });
+      const result = await supabase.from(input.table).select(input.select).in(input.filterColumn, values).order("id", { ascending: true }).range(pageStart, pageEnd);
+      if (result.error) {
+        financialQueryDebug({ stage: input.stage, table: input.table, select: input.select, filters, ordering: "id asc", range, error: result.error });
+        throw financialQueryError(input.stage, input.table, result.error);
+      }
+      const pageRows = (result.data || []) as Row[];
+      rows.push(...pageRows);
+      if (pageRows.length < FINANCIAL_QUERY_PAGE_SIZE) break;
+    }
+  }
+  return rows;
+}
 
 const read = <T>(key: string): T[] => { try { return JSON.parse(localStorage.getItem(key) || "[]") as T[]; } catch { return []; } };
 const write = (key: string, values: unknown[]) => { try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* optional cache */ } };
@@ -304,39 +380,40 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     });
     return transactionTypes?.length ? values.filter((row) => transactionTypes.includes(row.transactionType)) : values;
   }
-  let transactionQuery = supabase.from("financial_transactions").select("*");
+  const parentSelect = "*";
+  const databaseTypes = transactionTypes?.length
+    ? [...new Set(transactionTypes.map(mapTransactionTypeToDatabaseValue))]
+    : [];
+  financialQueryDebug({
+    stage: "transactions parent",
+    table: "financial_transactions",
+    select: parentSelect,
+    filters: databaseTypes.length ? { transaction_type: { operator: "in", values: databaseTypes } } : {},
+    ordering: "transaction_date desc",
+  });
+  let transactionQuery = supabase.from("financial_transactions").select(parentSelect);
   if (transactionTypes?.length) {
-    transactionQuery = transactionQuery.in(
-      "transaction_type",
-      [...new Set(transactionTypes.map(mapTransactionTypeToDatabaseValue))]
-    );
+    transactionQuery = transactionQuery.in("transaction_type", databaseTypes);
   }
   const transactions = await transactionQuery.order("transaction_date", { ascending: false });
-  if (transactions.error) throw new Error(transactions.error.message);
+  if (transactions.error) {
+    financialQueryDebug({ stage: "transactions parent", table: "financial_transactions", select: parentSelect, filters: databaseTypes.length ? { transaction_type: { operator: "in", values: databaseTypes } } : {}, ordering: "transaction_date desc", error: transactions.error });
+    throw financialQueryError("transactions parent", "financial_transactions", transactions.error);
+  }
   const ids = (transactions.data || []).map((row) => row.id);
-  const items = ids.length ? await supabase.from("financial_transaction_items").select("*").in("transaction_id", ids) : { data: [], error: null };
-  if (items.error) throw new Error(items.error.message);
-  const itemIds = (items.data || []).map((row) => row.id);
-  const shares = itemIds.length ? await supabase.from("transaction_item_ownership_shares").select("*").in("transaction_item_id", itemIds) : { data: [], error: null };
-  if (shares.error) throw new Error(shares.error.message);
-  const payments = ids.length
-    ? await supabase
-      .from("transaction_payments")
-      .select("id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at")
-      .in("transaction_id", ids)
-    : { data: [], error: null };
-  if (payments.error) throw new Error(payments.error.message);
-  const images = ids.length ? await supabase.from("transaction_images").select("*").in("transaction_id", ids) : { data: [], error: null };
-  if (images.error) throw new Error(images.error.message);
+  const itemRows = await selectFinancialRowsByInChunks<ItemRow>({ stage: "transaction items", table: "financial_transaction_items", select: "*", filterColumn: "transaction_id", values: ids });
+  const itemIds = itemRows.map((row) => row.id);
+  const shareRows = await selectFinancialRowsByInChunks<ShareRow>({ stage: "ownership shares", table: "transaction_item_ownership_shares", select: "*", filterColumn: "transaction_item_id", values: itemIds });
+  const paymentRows = await selectFinancialRowsByInChunks<PaymentRow>({ stage: "payments", table: "transaction_payments", select: "id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at", filterColumn: "transaction_id", values: ids });
+  const imageRows = await selectFinancialRowsByInChunks<ImageRow>({ stage: "transaction images", table: "transaction_images", select: "*", filterColumn: "transaction_id", values: ids });
   const shareMap = new Map<string, TradeItemOwnershipShare[]>();
-  (shares.data as ShareRow[] || []).forEach((row) => shareMap.set(row.transaction_item_id, [...(shareMap.get(row.transaction_item_id) || []), {
+  shareRows.forEach((row) => shareMap.set(row.transaction_item_id, [...(shareMap.get(row.transaction_item_id) || []), {
     id: row.id, workerId: row.worker_id, ownershipPercentage: Number(row.ownership_percentage),
     allocatedCostBasis: row.allocated_cost_basis == null ? undefined : Number(row.allocated_cost_basis),
     allocatedTradeValue: row.allocated_trade_value == null ? undefined : Number(row.allocated_trade_value)
   }]));
   const itemMap = new Map<string, TradeItem[]>();
-  const imageRows = images.data as ImageRow[] || [];
-  (items.data as ItemRow[] || []).forEach((row) => {
+  itemRows.forEach((row) => {
     const itemImages = imageRows
       .filter((value) => value.transaction_item_id === row.id)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
@@ -368,7 +445,7 @@ export async function listFinancialTransactions(transactionTypes?: TradeTransact
     itemMap.set(row.transaction_id, [...(itemMap.get(row.transaction_id) || []), value]);
   });
   const paymentMap = new Map<string, { received: number; paid: number; paidByWorkerId?: string; payments: TransactionPaymentEntry[] }>();
-  (payments.data as PaymentRow[] || []).forEach((row) => {
+  paymentRows.forEach((row) => {
     const current: { received: number; paid: number; paidByWorkerId?: string; payments: TransactionPaymentEntry[] } =
       paymentMap.get(row.transaction_id) || { received: 0, paid: 0, payments: [] };
     current[row.direction] += Number(row.amount || 0);

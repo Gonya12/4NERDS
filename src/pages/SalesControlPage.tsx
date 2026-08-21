@@ -111,6 +111,13 @@ function loadErrorGuidance(error: string) {
   return "Cached data remains available. Retry the failed refresh when ready.";
 }
 
+function transactionRefreshError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown transaction refresh error");
+  return import.meta.env.DEV
+    ? `Transactions: ${message}`
+    : "Transactions: Financial transactions could not be refreshed.";
+}
+
 export function SalesControlPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -135,6 +142,7 @@ export function SalesControlPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [transactionRefreshFailed, setTransactionRefreshFailed] = useState(false);
   const [usingCachedData, setUsingCachedData] = useState(Boolean(cachedSales.length || cachedPurchases.length || cachedExpenses.length));
   const [lastRefreshed, setLastRefreshed] = useState<Date>();
   const loadInFlightRef = useRef(false);
@@ -244,13 +252,46 @@ export function SalesControlPage() {
     const eventRows = results[3].status === "fulfilled" ? results[3].value : [];
     if (results[3].status === "fulfilled") setEvents(eventRows); else errors.push(`Events: ${String(results[3].reason?.message || results[3].reason)}`);
     if (results[4].status === "fulfilled") setWorkers(results[4].value); else errors.push(`Workers: ${String(results[4].reason?.message || results[4].reason)}`);
-    if (results[5].status === "fulfilled") setTrades(results[5].value); else errors.push(`Transactions: ${String(results[5].reason?.message || results[5].reason)}`);
+    if (results[5].status === "fulfilled") {
+      setTrades(results[5].value);
+      setTransactionRefreshFailed(false);
+    } else {
+      errors.push(transactionRefreshError(results[5].reason));
+      setTransactionRefreshFailed(true);
+    }
     if (errors.length) setLoadError(errors.join("\n"));
     setUsingCachedData(errors.length > 0);
     setLoading(false);
     setSyncing(false);
     setLastRefreshed(new Date());
     loadInFlightRef.current = false;
+  }
+
+  async function retryTransactionsOnly() {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    setSyncing(true);
+    try {
+      const refreshed = await withTimeout(listFinancialTransactions(), "Transactions");
+      setTrades(refreshed);
+      setTransactionRefreshFailed(false);
+      setLoadError("");
+      setUsingCachedData(false);
+      setLastRefreshed(new Date());
+    } catch (error) {
+      setTransactionRefreshFailed(true);
+      setLoadError(transactionRefreshError(error));
+      setUsingCachedData(true);
+    } finally {
+      setSyncing(false);
+      loadInFlightRef.current = false;
+    }
+  }
+
+  function retryFailedRefresh() {
+    const onlyTransactionsFailed = transactionRefreshFailed
+      && loadError.split("\n").filter(Boolean).every((line) => line.startsWith("Transactions:"));
+    return onlyTransactionsFailed ? retryTransactionsOnly() : loadData();
   }
 
   useEffect(() => { void loadData(); }, [location.search]);
@@ -1101,7 +1142,7 @@ export function SalesControlPage() {
         {transactionFlow.stage === "error" ? <div className="space-y-4"><p role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-4 text-sm font-bold text-rose-100">{transactionFlow.error}</p><div className="grid gap-2 sm:grid-cols-3"><AppButton type="button" onClick={() => transactionFlow.entryMode && selectEntryMode(transactionFlow.entryMode)}>Retry</AppButton><AppButton type="button" variant="secondary" onClick={() => setTransactionFlow({ ...closedTransactionFlow, stage: "choose_type" })}>Return</AppButton><AppButton type="button" variant="ghost" onClick={closeTransactionFlow}>Close</AppButton></div></div> : null}
       </ResponsiveModal>
       {usingCachedData ? <p className="w-fit rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700 dark:bg-sky-950/40 dark:text-sky-200">{syncing ? "Using cached data while refreshing" : "Using cached data"}</p> : null}
-      {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void loadData()} onSync={() => void loadData()} /> : null}
+      {loadError ? <ErrorState message="Some financial data could not be refreshed." details={`${loadError}\n${loadErrorGuidance(loadError)}`} onRetry={() => void retryFailedRefresh()} onSync={() => void retryFailedRefresh()} /> : null}
       <Toast open={Boolean(message)} message={message} tone={/could not|failed|error|required|missing|invalid/i.test(message) ? "error" : "success"} onDismiss={() => setMessage("")} />
 
       <div id="sales-control-workspace" className="sales-dashboard-grid scroll-mt-4">

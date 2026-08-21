@@ -509,7 +509,7 @@ test("transaction payment repository reads and writes only canonical payment col
   for (const source of [repository, preflight, types, paymentMigration, paymentBootstrap]) {
     assert.doesNotMatch(source, /\btransaction_payments\b[\s\S]{0,240}\bworker_id\b(?!\s*:)/);
   }
-  assert.match(repository, /\.select\("id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at"\)/);
+  assert.match(repository, /select:\s*"id,transaction_id,direction,payment_method,amount,paid_by_worker_id,note,paid_at"/);
   assert.match(repository, /buildTransactionPaymentPayloads\(transactionId,\s*transaction\)/);
   assert.match(repository, /\.upsert\(paymentRows,\s*\{\s*onConflict:\s*"transaction_id,direction,payment_method"\s*\}\)/);
   assert.match(repository, /saveTrade\(transaction,\s*\{\s*syncPayments:\s*false\s*\}\)/);
@@ -562,4 +562,26 @@ test("balance writes precede the completed parent transition", () => {
   const completedTransition = source.indexOf('status: "completed"', balanceWrite);
   assert.ok(balanceWrite >= 0);
   assert.ok(completedTransition > balanceWrite);
+});
+
+test("financial refresh chunks large IN filters and preserves transaction-only retry", () => {
+  const repository = readFileSync(new URL("../src/services/database/tradeRepository.ts", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/SalesControlPage.tsx", import.meta.url), "utf8");
+  const client = readFileSync(new URL("../src/utils/supabase.ts", import.meta.url), "utf8");
+  assert.match(repository, /FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE\s*=\s*100/);
+  assert.match(repository, /FINANCIAL_QUERY_PAGE_SIZE\s*=\s*1_000/);
+  assert.match(repository, /selectFinancialRowsByInChunks<ShareRow>/);
+  assert.match(repository, /table:\s*"transaction_item_ownership_shares"/);
+  assert.match(repository, /values\.slice\(offset,\s*offset \+ FINANCIAL_QUERY_IN_FILTER_CHUNK_SIZE\)/);
+  assert.match(repository, /\.order\("id",\s*\{\s*ascending:\s*true\s*\}\)\.range\(pageStart,\s*pageEnd\)/);
+  assert.doesNotMatch(repository, /transaction_item_ownership_shares"\)\.select\("\*"\)\.in\("transaction_item_id",\s*itemIds\)/);
+  assert.match(repository, /errorCode:\s*error\?\.code/);
+  assert.match(repository, /errorDetails:\s*error\?\.details/);
+  assert.match(repository, /errorHint:\s*error\?\.hint/);
+  assert.match(client, /\[Supabase HTTP error\]/);
+  assert.match(client, /status:\s*response\.status/);
+  assert.match(client, /responseBody:\s*await response\.clone\(\)\.text/);
+  assert.match(page, /async function retryTransactionsOnly\(\)/);
+  assert.match(page, /onlyTransactionsFailed[\s\S]*?retryTransactionsOnly\(\)\s*:\s*loadData\(\)/);
+  assert.match(page, /setTrades\(refreshed\)/);
 });

@@ -5,9 +5,29 @@ export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefin
 export const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
 
+const nativeFetch = globalThis.fetch.bind(globalThis);
+
+async function tracedSupabaseFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await nativeFetch(input, init);
+  if (import.meta.env.DEV && !response.ok) {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("/rest/v1/")) {
+      console.error("[Supabase HTTP error]", {
+        method: init?.method || "GET",
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: await response.clone().text().catch(() => "Response body unavailable"),
+      });
+    }
+  }
+  return response;
+}
+
 export const supabase = isSupabaseConfigured
   ? createClient<Database>(supabaseUrl!, supabasePublishableKey!, {
-      realtime: { params: { eventsPerSecond: 5 } }
+      realtime: { params: { eventsPerSecond: 5 } },
+      global: { fetch: tracedSupabaseFetch },
     })
   : undefined;
 
